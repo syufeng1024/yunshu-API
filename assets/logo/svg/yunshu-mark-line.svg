@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.9"
+     stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="云枢 API">
+  <title>云枢 API</title>
+  <path d="M12 3v7M12 14v7M5 12H3m18 0h-2M7 7l1.5 1.5M17 7l-1.5 1.5M7 17l1.5-1.5M17 17l-1.5-1.5"/>
+  <circle cx="12" cy="12" r="2.2"/>
+</svg>

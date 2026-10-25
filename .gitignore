@@ -1,0 +1,29 @@
+# 内部工作目录（本地记忆、会话状态，不入库）
+.workbuddy/
+.ardot/
+
+# 系统 / 编辑器垃圾文件
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+# 依赖与构建产物
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+dist/
+build/
+
+# 环境变量与密钥
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/extensions.json

@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 28"
+     width="100" height="28" role="img" aria-label="云枢 API">
+  <title>云枢 API</title>
+  <defs>
+    <linearGradient id="ysGrad" x1="0.1005" y1="-0.0705" x2="0.8995" y2="1.0705">
+      <stop offset="0" stop-color="#5B52F0"/>
+      <stop offset="1" stop-color="#3B32C9"/>
+    </linearGradient>
+  </defs>
+  <rect width="28" height="28" rx="9" fill="url(#ysGrad)"/>
+  <g transform="translate(6.5 6.5) scale(0.625)" fill="none" stroke="#FFFFFF"
+     stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 3v7M12 14v7M5 12H3m18 0h-2M7 7l1.5 1.5M17 7l-1.5 1.5M7 17l1.5-1.5M17 17l-1.5-1.5"/>
+    <circle cx="12" cy="12" r="2.2"/>
+  </g>
+  <text x="37" y="19.4" font-family="Inter, &quot;PingFang SC&quot;, &quot;HarmonyOS Sans SC&quot;, &quot;Microsoft YaHei&quot;, system-ui, sans-serif" font-size="15.5" font-weight="600"
+        letter-spacing="-0.31" fill="#0F1729">云枢 API</text>
+</svg>
