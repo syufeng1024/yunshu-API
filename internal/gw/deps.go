@@ -1,0 +1,163 @@
+package gw
+
+import (
+	"context"
+
+	"yunshu.dev/core/internal/billing"
+	"yunshu.dev/core/internal/breaker"
+	"yunshu.dev/core/internal/config"
+	"yunshu.dev/core/internal/idemstore"
+	"yunshu.dev/core/internal/jsonx"
+	"yunshu.dev/core/internal/ledger"
+	obslog "yunshu.dev/core/internal/obs/log"
+	"yunshu.dev/core/internal/ratelimit"
+	"yunshu.dev/core/internal/redisx"
+)
+
+// The stage dependencies are interfaces rather than concrete T04/T06 types so
+// every failure path can be unit-tested without MySQL or Redis. Production
+// wiring lives in cmd/gatewayd.
+type (
+	// AuthReader is K13. A miss must answer 401, never a database lookup.
+	AuthReader interface {
+		Lookup(ctx context.Context, hash16 string) (redisx.KeyAuthRecord, error)
+	}
+
+	// BalanceReader is K26.
+	BalanceReader interface {
+		Get(ctx context.Context, userID int64) (int64, error)
+	}
+
+	// PriceSource is K19.
+	PriceSource interface {
+		GetStandard(ctx context.Context, modelID int64) (jsonx.RawMessage, error)
+	}
+
+	// LedgerStore is the money kernel surface the inbound half uses.
+	LedgerStore interface {
+		Prehold(ctx context.Context, p ledger.PreholdParams) (ledger.PreholdResult, error)
+		Settle(ctx context.Context, p ledger.SettleParams) (ledger.SettleResult, error)
+	}
+
+	// Limiter is the four-dimension gate.
+	Limiter interface {
+		Acquire(ctx context.Context, in ratelimit.AcquireInput) (ratelimit.Verdict, error)
+		Release(ctx context.Context, in ratelimit.ReleaseInput) (ratelimit.ReleaseResult, error)
+		RecordDailyRejection(ctx context.Context, userID int64, day string) error
+	}
+
+	// IdemStore is the K6/K7 + t_idempotency_record surface.
+	IdemStore interface {
+		Begin(ctx context.Context, in idemstore.BeginInput) (idemstore.BeginResult, error)
+		Complete(ctx context.Context, rec idemstore.Record, state idemstore.State, body []byte) error
+	}
+
+	// BreakerReader is the read-only K16 surface used by P12. It never records
+	// an outcome: attempts belong to T08.
+	BreakerReader interface {
+		State(ctx context.Context, channelID int64) (breaker.State, int64, error)
+	}
+
+	// CounterReader supplies the counter values that fill both groups of
+	// rate-limit headers on a 429. It is best-effort: a Redis error yields
+	// zero, and the headers then describe the limit without a remaining value.
+	CounterReader interface {
+		UsedRPM(ctx context.Context, keyID, minEpoch int64) int64
+		UsedDaily(ctx context.Context, userID int64, day string) int64
+	}
+)
+
+// Deps is the assembled dependency set. A nil optional dependency disables the
+// feature it backs; the required ones are checked by Validate at startup so a
+// missing wire is a boot failure, not a 500 at the first request.
+type Deps struct {
+	Config  *config.Store
+	Catalog *Catalog
+
+	Auth    AuthReader
+	Balance BalanceReader
+	Prices  PriceSource
+	Ledger  LedgerStore
+	Limiter Limiter
+	Idem    IdemStore
+	Breaker BreakerReader
+
+	Tokens        billing.InputCounter
+	CounterReader CounterReader
+
+	Backpressure *Backpressure
+	ConnGuard    *ConnGuard
+
+	Logger *obslog.Logger
+	Clock  *redisx.Clock
+
+	// NodeID is written to t_prehold_hold.node_id.
+	NodeID string
+}
+
+// Validate reports the first missing required dependency. It is called before
+// the listener starts.
+func (d *Deps) Validate() error {
+	switch {
+	case d == nil:
+		return errDeps("deps")
+	case d.Catalog == nil:
+		return errDeps("catalog")
+	case d.Auth == nil:
+		return errDeps("auth")
+	case d.Prices == nil:
+		return errDeps("prices")
+	case d.Balance == nil:
+		return errDeps("balance")
+	case d.Ledger == nil:
+		return errDeps("ledger")
+	case d.Limiter == nil:
+		return errDeps("limiter")
+	case d.Tokens == nil:
+		return errDeps("tokenizer")
+	case d.Backpressure == nil:
+		return errDeps("backpressure")
+	}
+	return nil
+}
+
+type depsError string
+
+func (e depsError) Error() string { return "gw: missing dependency: " + string(e) }
+
+func errDeps(name string) error { return depsError(name) }
+
+// NewDefaultPipeline builds the six-slot execution order. The slice order is
+// the contract; see Pipeline.Run for why P12 precedes P11.
+func NewDefaultPipeline(d *Deps) *Pipeline {
+	return NewPipeline(d.Logger,
+		NewAdmissionStage(
+			NewAuthStage(d),
+			NewIPStage(d),
+			NewModelStage(d),
+			NewIdemStage(d),
+		),
+		NewBackpressureStage(d),
+		NewRouterStage(d),
+		NewEstimateStage(d),
+		NewRateLimitStage(d),
+		NewPreholdStage(d),
+	)
+}
+
+// NewAuthOnlyPipeline is the /v1/models path: authentication, IP rules and
+// the process-level backpressure gate. It has no idempotency, no four-dimension
+// rate limit and no prehold (TDS §6.1 "不消耗额度"). Backpressure is capacity
+// protection, not quota: at >90% a listing request is shed like any other
+// request (TDS §4.3), but it never consumes a rate-limit lease or a hold.
+func NewAuthOnlyPipeline(d *Deps) *Pipeline {
+	return NewPipeline(d.Logger, NewAuthStage(d), NewIPStage(d), NewBackpressureStage(d))
+}
+
+// ClockNowMS returns the corrected unix milliseconds.
+func (d *Deps) ClockNowMS() int64 {
+	if d.Clock != nil {
+		return d.Clock.NowMS()
+	}
+	return redisx.NewClock(nil, nil).NowMS()
+}
