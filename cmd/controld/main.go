@@ -61,7 +61,7 @@ func main() {
 	})
 
 	srv := httpsrv.New(httpsrv.Config{
-		Addr:              ":8081",
+		Addr:              cfg.ControlAddr,
 		Svc:               service,
 		Env:               cfg.Env,
 		Logger:            logger,

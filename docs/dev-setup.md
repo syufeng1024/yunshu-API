@@ -96,6 +96,8 @@ docker compose -f deploy/docker-compose.yml start redis
 | `GW_WRITE_DSN`          | `gatewayd`            | 网关唯一主库受限通道                        |
 | `REDIS_ADDR`            | 三进程                   | `host:port`                       |
 | `REDIS_PASSWORD`        | 可选                    | 空表示无密码                            |
+| `GATEWAY_HTTP_ADDR`     | 可选                    | 网关监听地址，默认 `:8080`；被占用时改（本机用 `:8082`） |
+| `CONTROL_HTTP_ADDR`     | 可选                    | 控制面监听地址，默认 `:8081`                 |
 | `GATEWAY_METRICS_ADDR`  | 可选                    | 默认 `:9090`                        |
 | `GATEWAY_METRICS_TOKEN` | 可选                    | 非空时 `/metrics` 要求 Bearer          |
 | `GATEWAY_DB_MAX_CONNS`  | 可选                    | 默认 `8`，必须 `>= 1`                  |
@@ -108,4 +110,22 @@ docker compose -f deploy/docker-compose.yml start redis
 go build ./... && go vet ./... && go test ./...
 make check          # vet + test + encoding/json、context.Background、许可字符串断言
 make down           # 停止依赖，保留数据卷
+```
+
+## 端口一览与本机冲突处理
+
+| 用途 | 默认 | 本机实际 | 说明 |
+| :--- | :--- | :--- | :--- |
+| MySQL | `3306` | **`13306`** | 3306 被本机 MySQL 8.4 占用，用 `deploy/docker-compose.portmap.yml` 换宿主端口 |
+| Redis | `6379` | **`16379`** | 6379 被其他项目容器占用 |
+| 网关 `gatewayd` | `:8080` | **`:8082`** | 8080 被其他项目容器占用，`.env` 里 `GATEWAY_HTTP_ADDR=:8082` |
+| 控制面 `controld` | `:8081` | `:8081` | 空闲 |
+| 网关 metrics | `:9090` | `:9090` | 空闲 |
+| 前端 dev | `5180` | `5180` | 5173 被其他项目容器占用，`VITE_DEV_PORT` 可改 |
+
+**规则**：容器内端口永远是 3306 / 6379，只有宿主侧可变；应用监听地址一律走环境变量，不要在代码里写死。
+
+```bash
+scripts/dev.sh ports        # 打印当前解析到的端口与是否套用覆盖文件
+scripts/dev.sh env          # 按解析结果重写 .env（DSN / REDIS_ADDR）
 ```

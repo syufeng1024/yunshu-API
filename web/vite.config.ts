@@ -88,7 +88,10 @@ export default defineConfig(({ mode }) => {
       },
     },
     server: {
-      port: 5173,
+      // 5173 is commonly taken on dev machines (other projects' containers).
+      // Pin a project-specific default so `npm run dev` matches the docs.
+      port: Number(process.env.VITE_DEV_PORT ?? 5180),
+      strictPort: false,
       proxy,
     },
     preview: {

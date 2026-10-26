@@ -31,6 +31,8 @@ type Config struct {
 	RedisPassword     string
 	MetricsAddr       string
 	MetricsToken      string
+	GatewayAddr       string
+	ControlAddr       string
 	GatewayDBMaxConns int
 	SessionSecret     string
 }
@@ -91,6 +93,8 @@ func Load(service string) (*Config, error) {
 		RedisPassword:     os.Getenv("REDIS_PASSWORD"),
 		MetricsAddr:       strings.TrimSpace(os.Getenv("GATEWAY_METRICS_ADDR")),
 		MetricsToken:      os.Getenv("GATEWAY_METRICS_TOKEN"),
+		GatewayAddr:       strings.TrimSpace(os.Getenv("GATEWAY_HTTP_ADDR")),
+		ControlAddr:       strings.TrimSpace(os.Getenv("CONTROL_HTTP_ADDR")),
 		GatewayDBMaxConns: DefaultGatewayDBMaxConns,
 		SessionSecret:     os.Getenv("SESSION_SECRET"),
 	}
@@ -117,6 +121,12 @@ func Load(service string) (*Config, error) {
 
 	if cfg.MetricsAddr == "" {
 		cfg.MetricsAddr = ":9090"
+	}
+	if cfg.GatewayAddr == "" {
+		cfg.GatewayAddr = ":8080"
+	}
+	if cfg.ControlAddr == "" {
+		cfg.ControlAddr = ":8081"
 	}
 
 	if len(missing) > 0 || len(invalid) > 0 {

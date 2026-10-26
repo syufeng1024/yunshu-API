@@ -6,8 +6,8 @@
 
 | 服务 | 镜像 | 宿主端口 | 数据卷 | 关键参数 |
 | :--- | :--- | :--- | :--- | :--- |
-| MySQL | `mysql:8.0` | `3306` | `mysql_data` | `--character-set-server=utf8mb4 --collation-server=utf8mb4_0900_as_cs` |
-| Redis | `redis:7` | `6379` | `redis_data` | `--appendonly yes --appendfsync everysec` |
+| MySQL | `mysql:8.0` | `3306`（本机覆盖为 `13306`） | `mysql_data` | `--character-set-server=utf8mb4 --collation-server=utf8mb4_0900_as_cs` |
+| Redis | `redis:7` | `6379`（本机覆盖为 `16379`） | `redis_data` | `--appendonly yes --appendfsync everysec` |
 
 MySQL 固定 8.0，不使用本机 MySQL 8.4（架构决策 GR-01）。初始化脚本 `mysql/init/00-grants.sql` 建 `yunshu` 与 `yunshu_log` 两个 schema，排序规则均为 `utf8mb4_0900_as_cs`。
 

@@ -62,7 +62,7 @@ func main() {
 	})
 
 	api := httpsrv.New(httpsrv.Config{
-		Addr:              ":8080",
+		Addr:              cfg.GatewayAddr,
 		Svc:               service,
 		Env:               cfg.Env,
 		Logger:            logger,
