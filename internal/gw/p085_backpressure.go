@@ -117,6 +117,20 @@ func (s *BackpressureStage) Name() string { return StageP085 }
 // Run implements Stage. The denominator is read from the snapshot on every
 // request so a runtime publish takes effect without a restart.
 func (s *BackpressureStage) Run(ctx context.Context, c *Ctx) error {
+	// GR-03: settlement backlog is checked before the in-flight slot is
+	// taken. The gate only sees requests that have not started yet, so a
+	// request already executing is never rejected by a backlog that grew
+	// after it entered.
+	if s.d.SettleBacklog != nil && s.d.SettleBacklog.Exceeded(ctx) {
+		apiErr := apierr.New(apierr.CodeBackpressureRejected)
+		if s.d.Logger != nil {
+			s.d.Logger.Warn(ctx, "settle_backlog_exceeded", obslog.Fields{
+				Stage: "P08.5", RequestID: c.RequestID, Status: apiErr.HTTPStatus,
+			})
+		}
+		return StageErr(StageP085, apiErr)
+	}
+
 	max := int64(DefaultMaxInflight)
 	if s.d.Config != nil {
 		if v, ok := s.d.Config.Int(config.KeyGwMaxInflight); ok && v > 0 {

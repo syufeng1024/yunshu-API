@@ -54,6 +54,7 @@ func (d *Dispatcher) streamAttempt(ctx context.Context, w http.ResponseWriter, c
 	}
 	out.tokenIn = result.Usage.TokensIn
 	out.tokenOut = result.Usage.TokensOut
+	out.usageSource = result.Usage.Source
 	out.attempt.TokensIn = result.Usage.TokensIn
 	out.attempt.TokensOut = result.Usage.TokensOut
 
@@ -92,6 +93,7 @@ func (d *Dispatcher) streamAttempt(ctx context.Context, w http.ResponseWriter, c
 			reason = "UPSTREAM_FAIL"
 		}
 	}
+	out.consumedMicro = consumed
 	if _, settleErr := d.settle(ctx, c, consumed, reason); settleErr != nil && d.opts.Logger != nil {
 		d.opts.Logger.Error(ctx, "stream_settle_failed: "+settleErr.Error(), obslog.Fields{
 			Stage: "P27", RequestID: c.RequestID,

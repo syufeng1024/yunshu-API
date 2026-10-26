@@ -31,6 +31,7 @@ import (
 	"yunshu.dev/core/internal/platform/httpsrv"
 	"yunshu.dev/core/internal/ratelimit"
 	"yunshu.dev/core/internal/redisx"
+	"yunshu.dev/core/internal/settle"
 )
 
 const service = env.ServiceGateway
@@ -125,6 +126,22 @@ func main() {
 	mirror := balance.New(rdb, gw.DBAccountSource{DB: gwDB}, 60*time.Second, logger)
 	brk := breaker.New(rdb, redisClock, logger)
 
+	// T09: P26 enqueue, GR-03 backlog gate, P28/P29 asynchronous rows and
+	// P30 metric accumulation. All of them use the existing restricted
+	// gateway channel; none of them is allowed to fail the request.
+	enqueuer := settle.NewEnqueuer(gwDB, clock.Real{})
+	backlog := settle.NewBacklog(gwDB, clock.Real{})
+	usageWriter := settle.NewUsageWriter(gwDB, logger, clock.Real{})
+	metricAcc := settle.NewMetrics(rdb, logger, clock.Real{})
+
+	// The writers outlive the HTTP drain: cancel() stops accepting work, and
+	// the final flush must still happen after the last request settles.
+	bgCtx, bgCancel := context.WithCancel(context.WithoutCancel(ctx))
+	writerDone := make(chan struct{})
+	metricDone := make(chan struct{})
+	go func() { defer close(writerDone); _ = usageWriter.Run(bgCtx) }()
+	go func() { defer close(metricDone); _ = metricAcc.Run(bgCtx) }()
+
 	deps := &gw.Deps{
 		Config:        store,
 		Catalog:       gw.NewCatalog(store),
@@ -139,6 +156,7 @@ func main() {
 		CounterReader: gw.RedisCounters{Client: rdb},
 		Backpressure:  gw.NewBackpressure(logger),
 		ConnGuard:     gw.NewConnGuard(logger),
+		SettleBacklog: backlog,
 		Logger:        logger,
 		Clock:         redisClock,
 		NodeID:        nodeID,
@@ -158,15 +176,21 @@ func main() {
 	}
 
 	dispatcher := dispatch.New(dispatch.Options{
-		Catalog:  deps.Catalog,
-		Tokens:   deps.Tokens,
-		Ledger:   deps.Ledger,
-		Balance:  deps.Balance,
-		Config:   deps.Config,
-		Logger:   logger,
-		Idem:     deps.Idem,
-		KEK:      box,
-		Cooldown: brk,
+		Catalog:        deps.Catalog,
+		Tokens:         deps.Tokens,
+		Ledger:         deps.Ledger,
+		Balance:        deps.Balance,
+		Config:         deps.Config,
+		Logger:         logger,
+		Idem:           deps.Idem,
+		KEK:            box,
+		Cooldown:       brk,
+		SettleEnqueuer: enqueuer,
+		UsageSink:      usageWriter.WriteUsage,
+		MetricSink:     metricAcc.Add,
+		AttemptSink: func(a dispatch.Attempt) {
+			usageWriter.WriteAttempt(a.SettleRecord(time.Now().UTC()))
+		},
 	})
 	handler := gw.NewHandler(deps, dispatcher)
 
@@ -232,6 +256,17 @@ func main() {
 		if err := <-errCh; err != nil && runErr == nil {
 			runErr = err
 			cancel()
+		}
+	}
+
+	// Final flush of P28/P29 rows and P30 deltas. A slow database must not
+	// hold the process open indefinitely; the rows are logs, not money.
+	bgCancel()
+	for _, done := range []chan struct{}{writerDone, metricDone} {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			logger.Warn(rootCtx, "async writer flush timeout", obslog.Fields{Stage: "shutdown"})
 		}
 	}
 

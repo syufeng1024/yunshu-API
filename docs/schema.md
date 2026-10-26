@@ -9,9 +9,10 @@
 | TDS §1.2 分层清单 | 46 | 只覆盖 §1.2 表格内列出的表，不含 `t_config_publish` |
 | T02 实际建表（0001–0006） | 47 | 0002 组按任务卡另含 `t_config_publish`（TDS §1.8 `2866` 行定义） |
 | T03 实际建表（0012 / 0014 / 0015 / 0016 / 0017） | 7 | `t_content_policy_hit`、`t_arrears`、`t_ticket`、`t_ticket_reply`、`t_review_task`、`t_upstream_bill`、`t_channel_dedicated_user` |
-| 当前业务表总量 | 54 | 47 + 7；0010 / 0011 / 0013 只改列，0017 另建 1 表（已计入 7） |
-| 当前 `information_schema.tables` | 55 | 54 张业务表 + `schema_migrations` |
-| 当前迁移条数 | 18 | 0001–0006（6）、0009（1）、0010–0019（10）、0020（1）；0007 / 0008 空缺不计 |
+| T09 实际建表（0021） | 2 | `t_job_lock`、`t_reconcile_diff` |
+| 当前业务表总量 | 56 | 47 + 7 + 2；0010 / 0011 / 0013 / 0020 只改列，0017 另建 1 表（已计入 7） |
+| 当前 `information_schema.tables` | 57 | 56 张业务表 + `schema_migrations` |
+| 当前迁移条数 | 19 | 0001–0006（6）、0009（1）、0010–0020（11）、0021（1）；0007 / 0008 空缺不计 |
 
 任务卡 §1 / §7 A2 写「46 张」，与卡内 §4 逐表清单（8 + 11 + 26 + 2 = 47）相差 1；差的是 `t_config_publish`。本表按逐表清单登记，未删表凑数。`information_schema` 计数含迁移记录表，因此比业务表多 1。
 
@@ -21,6 +22,7 @@
 | :--- | :--- | ---: |
 | T02 | `t_user`、`t_verify_record`、`t_device_fingerprint`、`t_verification_code`、`t_api_key`、`t_api_key_model`、`t_api_key_ip_rule`、`t_api_key_audit`、`t_protocol`、`t_channel`、`t_model`、`t_model_alias`、`t_model_capability`、`t_route`、`t_price_rule`、`t_plan`、`t_config_item`、`t_config_runtime`、`t_config_publish`、`t_price_group`、`t_price_group_scope`、`t_credit_account`、`t_credit_batch`、`t_ledger_entry`、`t_prehold_hold`、`t_settle_task`、`t_recharge_order`、`t_refund_order`、`t_redeem_batch`、`t_redeem_code`、`t_invoice_apply`、`t_quota_apply`、`t_usage_record`、`t_upstream_attempt`、`t_idempotency_record`、`t_rate_limit_policy`、`t_user_daily_quota`、`t_metric_minute`、`t_metric_daily`、`t_metric_model_daily`、`t_metric_channel_health`、`t_admin_audit_log`、`t_risk_rule`、`t_risk_hit_log`、`t_announcement`、`t_announcement_read`、`t_notification` | 47 |
 | T03 | `t_content_policy_hit`、`t_arrears`、`t_ticket`、`t_ticket_reply`、`t_review_task`、`t_upstream_bill`、`t_channel_dedicated_user` | 7 |
+| T09 | `t_job_lock`、`t_reconcile_diff` | 2 |
 
 ## 编号占用
 
@@ -45,9 +47,10 @@
 | 0017 | `t_model.recommend_weight` + `idx_model_recommend`；`t_channel` 专属两列；`t_channel_dedicated_user` 建表 | 已落盘（T03） |
 | 0018 | 34 配置键 + 3 价格分组 + 3 协议 + 5 档限流策略种子 | 已落盘（T03） |
 | 0019 | 本地联调种子（仅 `ENV=local`） | 已落盘（T03），其他环境跳过并打 WARN |
-| 0020 | 幂等租约 Expand：`t_idempotency_record` 加 `fence_token` / `lease_expires_at`（只加不删） | 待落盘（T06 遗留 #2，方案 A） |
+| 0020 | 幂等租约 Expand：`t_idempotency_record` 加 `fence_token` / `lease_expires_at`（只加不删） | 已落盘（T06 遗留 #2，方案 A） |
+| 0021 | `t_job_lock` / `t_reconcile_diff` 建表 | 已落盘（T09） |
 
-> **需回写 TDS §8.6**：0018 / 0019 / 0020 是 TDS §8.6 裁定表之外的新增占用，由交付总监统一改源文档；实现方未改 TDS。
+> **需回写 TDS §8.6**：0018 / 0019 / 0020 / 0021 是 TDS §8.6 裁定表之外的新增占用，由交付总监统一改源文档；实现方未改 TDS。
 
 ## 业务表
 
@@ -109,6 +112,8 @@
 | `t_review_task` | 0015 | 运营 | `uk_rt_biz (biz_type, biz_id)` |
 | `t_upstream_bill` | 0016 | 资金 | `uk_ub_channel_period_line (channel_id, bill_period, bill_no)` |
 | `t_channel_dedicated_user` | 0017 | 配置 | `uk_cdu_channel_user (channel_id, user_id)` |
+| `t_job_lock` | 0021 | 运维 | `uk_jl_job (job_name)` |
+| `t_reconcile_diff` | 0021 | 对账 | `uk_rd_key (diff_key)`；`diff_key = sha256(biz_date|diff_type|subject)`；`idx_rd_date_type (biz_date, diff_type, status)` |
 
 ## 持有字段的迁移
 

@@ -65,6 +65,13 @@ type (
 		UsedRPM(ctx context.Context, keyID, minEpoch int64) int64
 		UsedDaily(ctx context.Context, userID int64, day string) int64
 	}
+
+	// BacklogReader is the P08.5 async-settlement gate (GR-03). It reports
+	// whether t_settle_task's PENDING count is above 5000. The implementation
+	// caches the count for one second, so a request never costs a COUNT(*).
+	BacklogReader interface {
+		Exceeded(ctx context.Context) bool
+	}
 )
 
 // Deps is the assembled dependency set. A nil optional dependency disables the
@@ -87,6 +94,8 @@ type Deps struct {
 
 	Backpressure *Backpressure
 	ConnGuard    *ConnGuard
+	// SettleBacklog is optional: nil keeps T08 behaviour (no GR-03 gate).
+	SettleBacklog BacklogReader
 
 	Logger *obslog.Logger
 	Clock  *redisx.Clock

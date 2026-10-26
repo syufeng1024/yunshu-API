@@ -29,6 +29,7 @@ import (
 	"yunshu.dev/core/internal/cryptobox"
 	"yunshu.dev/core/internal/gw"
 	obslog "yunshu.dev/core/internal/obs/log"
+	"yunshu.dev/core/internal/settle"
 	"yunshu.dev/core/internal/stream"
 	"yunshu.dev/relaykit/anthropic"
 	"yunshu.dev/relaykit/bailian"
@@ -68,12 +69,28 @@ type Options struct {
 
 	KEK *cryptobox.Box
 
-	Cooldown        CooldownSetter
-	AttemptSink     func(Attempt)
+	Cooldown    CooldownSetter
+	AttemptSink func(Attempt)
+	// UsageSink receives exactly one request-level row per terminal call
+	// (P28). It must be non-blocking; the writer drops rows rather than block.
+	UsageSink func(settle.UsageRecord)
+	// MetricSink receives the K14/K15 contribution (P30). Two deltas are
+	// emitted: USER (carrying the channel id) and KEY (without it, so the
+	// channel counter is not incremented twice).
+	MetricSink func(settle.MetricDelta)
+	// SettleEnqueuer is P26. When nil, settlement stays synchronous (T08
+	// behaviour). When non-nil, an enqueue failure falls back to the
+	// synchronous ledger call rather than failing the request.
+	SettleEnqueuer  SettleEnqueuer
 	UsageModeWriter StreamUsageModeWriter
 	// AutoProbeStreamUsage defaults to true (TDS §4.2 / errata E-14).
 	AutoProbeStreamUsage *bool
 	MaxConnsPerChannel   int
+}
+
+// SettleEnqueuer is the P26 surface. settle.Enqueuer implements it.
+type SettleEnqueuer interface {
+	Enqueue(ctx context.Context, p settle.EnqueueParams) error
 }
 
 // Dispatcher is the gw.Terminal implementation.
@@ -117,10 +134,21 @@ type target struct {
 }
 
 // Serve implements gw.Terminal.
+//
+// It writes exactly one t_usage_record row per terminal call (P28), including
+// the paths that never reach an upstream. The row is emitted after the response
+// is written, so http_status and consumed_micro are the values the client saw.
 func (d *Dispatcher) Serve(w http.ResponseWriter, r *http.Request, c *gw.Ctx) {
+	var out outcome
+	started := time.Now()
+	defer func() { d.emitUsage(c, out, started) }()
+
 	if c == nil || c.IR == nil || c.Price == nil || c.Auth == nil {
 		d.settle(r.Context(), c, 0, "UPSTREAM_FAIL")
-		d.fail(w, r, c, apierr.New(apierr.CodeInternalError), ClassNone, 0)
+		api := apierr.New(apierr.CodeInternalError)
+		out.apiErr = api
+		out.result = "FAILED"
+		d.fail(w, r, c, api, ClassNone, 0)
 		return
 	}
 	targets, configMissing, problems := d.targets(c)
@@ -134,10 +162,13 @@ func (d *Dispatcher) Serve(w http.ResponseWriter, r *http.Request, c *gw.Ctx) {
 			code = apierr.CodeConfigUnavailable
 		}
 		d.settle(r.Context(), c, 0, "UPSTREAM_FAIL")
-		d.fail(w, r, c, apierr.New(code), ClassNone, 0)
+		api := apierr.New(code)
+		out.apiErr = api
+		out.result = "FAILED"
+		d.fail(w, r, c, api, ClassNone, 0)
 		return
 	}
-	d.dispatch(w, r, c, targets)
+	out = d.dispatch(w, r, c, targets)
 }
 
 func (d *Dispatcher) targets(c *gw.Ctx) ([]target, bool, []string) {
@@ -257,23 +288,36 @@ type outcome struct {
 	tokenIn  int64
 	tokenOut int64
 	result   string
+
+	// usageSource is UPSTREAM_API / UPSTREAM_STREAM / LOCAL_ESTIMATE / NONE.
+	usageSource string
+	// consumedMicro is the amount settlement charged (0 on failure). It is
+	// written to t_usage_record.consumed_micro.
+	consumedMicro int64
+	// attempts and upstreamMS aggregate every attempt made for this request.
+	attempts   int
+	upstreamMS int64
 }
 
-func (d *Dispatcher) dispatch(w http.ResponseWriter, r *http.Request, c *gw.Ctx, targets []target) {
+func (d *Dispatcher) dispatch(w http.ResponseWriter, r *http.Request, c *gw.Ctx, targets []target) outcome {
 	idx := 0
 	attempts := 0
+	var upstreamMS int64
 	for {
 		if r.Context().Err() != nil {
 			d.settle(r.Context(), c, 0, "CLIENT_ABORT")
-			return
+			return outcome{clientAborted: true, class: ClassClientAbort, result: "FAILED", attempts: attempts}
 		}
 		out := d.try(r.Context(), w, c, targets[idx], attempts+1)
 		attempts++
+		upstreamMS += out.attempt.TotalMS
 		out.attempt.AttemptIndex = attempts
 		out.attempt.IsRetryable = Retryable(out.class)
 		if out.result != "" {
 			out.attempt.Result = out.result
 		}
+		out.attempts = attempts
+		out.upstreamMS = upstreamMS
 		remaining := d.remaining(c)
 		hasNext := idx+1 < len(targets)
 		retry, decision := DecideRetry(RetryInput{
@@ -290,10 +334,12 @@ func (d *Dispatcher) dispatch(w http.ResponseWriter, r *http.Request, c *gw.Ctx,
 
 		if out.clientAborted {
 			d.settle(r.Context(), c, 0, "CLIENT_ABORT")
-			return
+			out.attempts = attempts
+			out.upstreamMS = upstreamMS
+			return out
 		}
 		if out.finished {
-			return
+			return out
 		}
 		if retry {
 			if decision == DecisionNextCandidate {
@@ -301,12 +347,16 @@ func (d *Dispatcher) dispatch(w http.ResponseWriter, r *http.Request, c *gw.Ctx,
 			}
 			if !backoff(r.Context()) {
 				d.failFrom(w, r, c, out, attempts)
-				return
+				out.attempts = attempts
+				out.upstreamMS = upstreamMS
+				return out
 			}
 			continue
 		}
 		d.failFrom(w, r, c, out, attempts)
-		return
+		out.attempts = attempts
+		out.upstreamMS = upstreamMS
+		return out
 	}
 }
 
@@ -786,6 +836,7 @@ func (d *Dispatcher) unaryAttempt(ctx context.Context, w http.ResponseWriter, c 
 	usage := d.unaryUsage(c, parsed)
 	out.tokenIn = usage.TokensIn
 	out.tokenOut = usage.TokensOut
+	out.usageSource = usage.Source
 	out.attempt.TokensIn = usage.TokensIn
 	out.attempt.TokensOut = usage.TokensOut
 
@@ -817,6 +868,7 @@ func (d *Dispatcher) unaryAttempt(ctx context.Context, w http.ResponseWriter, c 
 		out.result = "FAILED"
 		return out
 	}
+	out.consumedMicro = consumed
 	d.completeIdem(ctx, c, encoded)
 
 	preheld := c.HoldMicro

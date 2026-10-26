@@ -110,6 +110,23 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	// `go test ./...` runs package binaries in parallel and every package
+	// migrates this schema. GET_LOCK serialises the runners; without it two
+	// runners can both apply a pending file and one fails on the duplicate
+	// CREATE TABLE. The lock is connection-scoped, so keep the conn open.
+	lockConn, err := testDB.Conn(ctx)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ledger tests: open migration lock conn: %v\n", err)
+		os.Exit(1)
+	}
+	defer lockConn.Close()
+	var locked sql.NullInt64
+	if err := lockConn.QueryRowContext(ctx, `SELECT GET_LOCK('yunshu_test_migrate', 120)`).Scan(&locked); err != nil || !locked.Valid || locked.Int64 != 1 {
+		fmt.Fprintf(os.Stderr, "ledger tests: migration lock failed: %v %v\n", err, locked)
+		os.Exit(1)
+	}
+	defer func() { _, _ = lockConn.ExecContext(ctx, `SELECT RELEASE_LOCK('yunshu_test_migrate')`) }()
+
 	migrations, err := migrate.LoadEmbedded()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ledger tests: load migrations: %v\n", err)

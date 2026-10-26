@@ -19,6 +19,7 @@
 | E-12 | TDS §2.1 L1 失败分支 vs §3.7 键表 | 降级模式 `ratelimit.degrade.mode` 在多处被引用（L1 失败分支、§2.3 降级矩阵），但 §3.7 的 45 键表里**没有这个键** | 降级行为无法通过配置热更新，只能改代码重启 | **暂由构造参数注入**（`ratelimit.Mode`），T07 从启动参数读取。若后续要热更新，需把它加为第 46 个键并回写 §3.7 |
 | E-13 | PRD §3.3 / TDS §2.2 对 8 下标的解释 | TDS 只写 `[3]`–`[6]`「仅对应被拒维度有值」，未明确是「优先级首个触顶」还是「恢复最晚」 | 四维全满时两种解释给出不同 `reset_at`，相差可达 24 小时；选错会让客户端 3 秒后重试并再次被拒 | **描述恢复最晚者**（与 PRD「多维触顶取恢复最晚」一致）。`[2]code` 仍为优先级首个。T06 初版按「首个触顶」实现，需改 |
 | E-14 | TDS §4.2 自动降级段落 vs §3.7 键表 | 该段要求「此自动降级需运营可选关闭（配置项 `upstream.auto_probe_stream_usage`）」，但 §3.7 的 45 键表里**没有这个键**（同 E-12 的情况） | 运营无法关闭自动降级，而误判会**永久改变结算口径**（TDS 自己在 U-08 也标注了该风险） | **暂由构造参数 `upstream.ProbeAutoDowngrade` 注入**（默认 true，遵 TDS）；T08 的降级写回只允许走可注入接口，nil 时只打 WARN 不写库。若要热更新，需加为第 46 个键并回写 §3.7 |
+| E-15 | TDS §4.6（第 701 行）与 §5.4.1（第 3878 行）vs T02/T03 的 54 表清单 | TDS 明确需要 `t_job_lock(job_name, owner_id, lease_until, released_at)` 与 `t_reconcile_diff(diff_id, request_id/trade_no, diff_type, local_value, upstream_value, delta_micro, match_mode, detected_at, status)`，但**两张表既不在 §1.2 分层清单、也没有被 T02/T03 建出来** | 库里无此二表；T09 的选主与日对账无处落库，实现方只能造假或塞进别的表 | **表数实为 56**（不是 54）：新增迁移 `0021` 建两表。另：卡内原写 `t_recon_diff` 是**错的表名**，正确为 `t_reconcile_diff`（以 TDS 为准）。T09 卡已改 |
 
 ## 口径备忘（不是勘误，是实现约定）
 

@@ -8,12 +8,13 @@ import (
 	"testing"
 )
 
-// 交付物清单逐表相加的 54 张业务表（0001–0006、0009、0010–0017）。
+// 交付物清单逐表相加的 56 张业务表（0001–0006、0009、0010–0017、0021）。
 //
 // T02 建 47 张：任务卡 §1 写「46 张」，但卡内 §4 的 0002 组包含
 // t_config_publish（TDS 定义在 §1.8，§1.2 的分层清单未收录它），逐表相加是
 // 8 + 11 + 26 + 2 = 47。T03 再建 7 张（0012 / 0014 / 0015×3 / 0016 / 0017），
-// 合计 54。这里按逐表清单钉死，防止建表时漏建或多建；不靠删表凑数。
+// T09 再建 2 张（0021），合计 56。这里按逐表清单钉死，防止建表时漏建或多建；
+// 不靠删表凑数。
 var wantTables = []string{
 	// 0001 账号与凭据（8）
 	"t_api_key",
@@ -78,6 +79,9 @@ var wantTables = []string{
 	"t_upstream_bill",
 	// 0017 专属名单（1）
 	"t_channel_dedicated_user",
+	// 0021 选主租约 / 对账差异（2）
+	"t_job_lock",
+	"t_reconcile_diff",
 }
 
 var (
@@ -206,7 +210,7 @@ func TestEveryCreateTableDeclaresCollation(t *testing.T) {
 	}
 }
 
-// 建表集合必须与交付物清单逐表一致（47 张；0004–0006 的两张分组表在 0006）。
+// 建表集合必须与交付物清单逐表一致（56 张；0004–0006 的两张分组表在 0006）。
 func TestCreatedTableSetMatchesDeliveredGroups(t *testing.T) {
 	seen := make(map[string]string)
 	for _, name := range upFileNames(t) {

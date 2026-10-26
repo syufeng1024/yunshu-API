@@ -148,6 +148,21 @@ func setupDatabase() error {
 		return fmt.Errorf("ping test schema: %w", err)
 	}
 
+	// `go test ./...` runs package binaries in parallel and every package
+	// migrates this schema. GET_LOCK serialises the runners; without it two
+	// runners can both apply a pending file and one fails on the duplicate
+	// CREATE TABLE. The lock is connection-scoped, so keep the conn open.
+	lockConn, err := testDB.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("open migration lock conn: %w", err)
+	}
+	defer lockConn.Close()
+	var locked sql.NullInt64
+	if err := lockConn.QueryRowContext(ctx, `SELECT GET_LOCK('yunshu_test_migrate', 120)`).Scan(&locked); err != nil || !locked.Valid || locked.Int64 != 1 {
+		return fmt.Errorf("migration lock failed: %v %v", err, locked)
+	}
+	defer func() { _, _ = lockConn.ExecContext(ctx, `SELECT RELEASE_LOCK('yunshu_test_migrate')`) }()
+
 	migrations, err := migrate.LoadEmbedded()
 	if err != nil {
 		return fmt.Errorf("load migrations: %w", err)

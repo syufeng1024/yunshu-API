@@ -54,6 +54,8 @@
 | D-08 | 配置键共 **45** 个（TDS §3.7 正文写 34 是过期计数，见 errata E-07），命名空间归属按 TDS §3.7；`quota.overdraft_warn_days` 不归属任何命名空间、写入即 `config_value_invalid`；`/admin/config` 运行时可写白名单仅 12 个键 | TDS §3.7（2026-10-19 收口 + TA-1.1） | T05、T15 |
 | D-09 | **前端展示结构以 `ref-frontend-structure.md` 为「参考」，不是规范**（对标 kmitu.com/products/llm-api）。区块与功能点仍以 PRD §4.1–§4.5 为基线：区块一条不能少、**顺序与形态可自行取舍**、不为"像参考站"新增区块或组件。参考站中与 PRD 冲突的元素（送现金/折扣/资质墙/调用排行/配置助手/代理入口）属**禁写项**，已列在该文档 §4–§5 | 用户 2026-10-26：「参考，不用照抄照搬」；禁写项本身来自 PRD 合规与范围条款 | T18（参考）、T19/T20（版式可选） |
 | D-10 | **金额单位双轨**：账本与积分一律 `_micro`（微积分）；**支付金额用 `_fen`（分）**。T04 的「禁浮点/禁 decimal」检查不得把 `_fen` 判为违规 | `t_plan.price_fen` 按 TDS 定义即「分」；若统一写成微积分，"99 元"会变成 99000000，支付对账反而易错 | T02、T04、T13、T15 |
+| D-18 | **`settle.Worker` 不走选主，允许每副本运行**：以 `FOR UPDATE SKIP LOCKED` 领任务 + `ledger.Settle(request_id)` 幂等保证「一任务一结算」，正确性不依赖租约；若改为选主独占，主节点故障时结算停摆至租约接管（≤60s），用户资金多冻一段时间 | 硬约束 15「有副作用必须选主」的本意是防重复执行；这里已由 SKIP LOCKED + 幂等满足，选主只会换来可用性损失 | T09、T21（需补一条「 Worker 多副本不重复结算」的并发用例） |
+| D-17 | **补迁移 `0021`：建 `t_job_lock` 与 `t_reconcile_diff` 两张表**（纯 Expand）。表总数 **54 → 56**；迁移数 18 → 19。`t_reconcile_diff` 用 `uk_rd_key(diff_key)` 保证「同 `(biz_date, diff_type, subject)` 只落一条」——`diff_key = sha256(biz_date|diff_type|subject)`，避免在可空列上做唯一键；`t_job_lock` 以 `uk_jl_job(job_name)` 保证一任务一租约 | 两张表在 TDS §4.6 / §5.4.1 有定义却从未被建（见 errata E-15）。选主与日对账是 T09 的核心，不能靠内存假实现 | T09 |
 | D-16 | **网关上游 Transport 不继承环境代理**（`Proxy: nil`）。不做 `ProxyFromEnvironment`：V1 上游全部 `region=DOMESTIC`，继承运维环境里的 `HTTP_PROXY` 会让客户请求体多穿一跳第三方、per-channel 超时预算失效。验收时就是因为本机 `HTTP_PROXY=127.0.0.1:62934` 导致 `no-such-host.invalid` 被代理接管、A5 的 DNS 用例判错才发现 | 若将来需要按渠道走代理，必须是显式配置项，不得依赖环境变量 | T08 已实现、T22 部署需复核 |
 | D-14 | **ROUTING 快照的渠道载荷按 TDS §1.4 选路 SQL 补齐**：`base_url`、`upstream_key_enc`（base64，**始终密文**）、`timeout_connect_ms`/`timeout_first_byte_ms`/`timeout_total_ms`、`retry_max`、`stream_usage_mode`。T07 的 `ChannelEntry` 只取了路由判定所需子集，T08 必须按此扩字段 | TDS §1.4（1679–1692 行）的选路 SQL 原文就选了这 8 列；硬约束「渠道 Key 只从配置快照解密取用」也要求密文进快照 | T08 实现、T11/T15 发布 |
 | D-15 | **`relaykit/ir` 是全项目唯一的 IR 定义**：`internal/gw/ir.go` 的 `IRRequest` 等结构**删除**，`Ctx.IR` 改为 `*ir.IRRequest`，P04/P09 与相关测试随之调整。禁止保留两套 IR | T07 已经为了 P04 解析自建了一份 IR，T08 又要建 relaykit 的 IR。两套并存必然字段漂移——而本卡硬约束 3 恰恰是「未知字段必须保留」，两套结构下这条守不住 | T08 |
@@ -211,6 +213,7 @@ flowchart LR
 | T10 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 4 项非阻塞 | 65 码 + 写出口；84 turns / 633s / $6.74 |
 | T07 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 14 项（4 项需 T11/T08 联调） | 网关前置段；157 turns / 1045s / $20.27 |
 | T08 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 5 项（真实上游与 ROUTING 快照待 T11） | relaykit + dispatch + stream；149 turns / 833s / $9.97 |
+| T09 | 2026-10-26 | 2026-10-26 | 🟨 **第一段通过**（第二段未派） | 2 项偏差已裁定 | 0021 两表 + 结算闭环 + 选主；327 turns / 1408s / $18.99 |
 
 ### T01 验收记录（交付总监独立复核，2026-10-26）
 
