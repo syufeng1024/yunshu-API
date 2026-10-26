@@ -49,6 +49,34 @@
 | 15 | `internal/control/mw/*_test.go` | 越权矩阵（10 个角色 × 接口）、审计必落、限流、CSRF |
 | 16 | `docs/control-api.md` | 权限点总表 + 角色矩阵 + 错误码映射 |
 
+## 3.1 第一段：最小可跑通闭环（D-22）
+
+> 本卡按两段交付。**第一段的目标不是"做完 RBAC"，而是"让一次真实请求真的打到上游并扣钱"**——前 9 张卡（T01–T10）一直只能用单测证明自己是对的，缺的正是这条链路。范围刻意收窄，完整实现在第二段与 T12/T15 补齐。
+
+**第一段交付物**
+
+| # | 路径 | 职责 | 与后续卡的关系 |
+| :--- | :--- | :--- | :--- |
+| A | `internal/control/server.go` + `mw/{recover,errs,paging}` | 控制面骨架：路由装配、panic 恢复、错误映射、分页参数 | 第二段补齐（交付物 1/7/8/9 的最小版） |
+| B | `internal/control/auth/{login,register}.go` + `mw/session.go` | 邮箱/手机 + 密码登录，`sid` 会话（HttpOnly/Secure/SameSite=Lax，K20 2h） | 完整版归第二段（含锁定/设备指纹/体验积分领取） |
+| C | `internal/control/mw/authz.go`（**仅 3 个权限点**） | `key.write` / `model.read` / `admin.all`，接口级校验 | 完整 10 角色矩阵归第二段 |
+| D | `internal/boot/route_snapshot.go` | **ROUTING 快照的生产方**（D-14 载荷）：从 `t_model`/`t_route`/`t_channel`/`t_price_group`/`t_api_key_model` 生成并发布到 `cfg:snap:ROUTING` + `INCR cfg:ver` | 生产方本来该在 T15；此处只做**可复用的一次性构建 + 定时重建**，T15 接管为运维接口 |
+| E | `internal/boot/price_cache.go` | 写 K19 `price:{model_id}`（**只存标准价**，不乘分组倍率）与 K13 Key 缓存 | 同上，T15 接管 |
+| F | `cmd/seedctl/` | 本地最小种子：1 个用户 + 1 个资金账户（充值 100000 微积分）+ 1 个 API Key（明文只打印一次）+ 绑定 `standard` 分组 | **仅 ENV=local 可跑**，生产禁止 |
+
+**第一段验收（全部是"真跑"，不是单测）**
+
+| # | 判定 |
+| :--- | :--- |
+| B1 | `seedctl` 跑完后：`t_user`/`t_credit_account`/`t_api_key` 各 1 行，Key 明文只出现一次 |
+| B2 | `cfg:snap:ROUTING` 存在且 P07 能读到 `keyModels`（不再是空集拒绝） |
+| B3 | **真实 curl 打通**：`curl -N :8082/v1/chat/completions -H "Authorization: Bearer <key>" -d '{...}'`（对 `cmd/fakeupstream`）→ HTTP 200，响应体为上游内容 |
+| B4 | 该请求在 `t_usage_record` 落 1 行、`t_ledger_entry` 有 CONSUME、`t_credit_account.balance_micro` **减少** |
+| B5 | 流式版本同样打通，且响应头**无** `X-Credits-Consumed`、有 `X-Credits-Preheld` |
+| B6 | 无 Key / 错 Key → 401；Key 越权模型 → 403 `model_not_authorized`（证明 RBAC 骨架真的在拦） |
+
+**第一段明确不做**：10 角色完整矩阵、CSRF 双提交、登录限流、`t_admin_audit_log` 全量写入、`api/openapi.yaml` 全量契约、`docs/control-api.md`。这些全部留给第二段。
+
 ## 4. 硬约束（违反即驳回）
 
 1. **服务端逐接口鉴权**：每个接口必须显式声明所需权限点；**不得**只靠"前端不显示菜单"。测试必须覆盖：用 `PERSONAL` 账号请求每个 `/api/admin/*` 接口 → 403 `permission_denied`。
