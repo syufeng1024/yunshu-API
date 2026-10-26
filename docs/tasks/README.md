@@ -54,6 +54,9 @@
 | D-08 | 配置键共 **45** 个（TDS §3.7 正文写 34 是过期计数，见 errata E-07），命名空间归属按 TDS §3.7；`quota.overdraft_warn_days` 不归属任何命名空间、写入即 `config_value_invalid`；`/admin/config` 运行时可写白名单仅 12 个键 | TDS §3.7（2026-10-19 收口 + TA-1.1） | T05、T15 |
 | D-09 | **前端展示结构以 `ref-frontend-structure.md` 为「参考」，不是规范**（对标 kmitu.com/products/llm-api）。区块与功能点仍以 PRD §4.1–§4.5 为基线：区块一条不能少、**顺序与形态可自行取舍**、不为"像参考站"新增区块或组件。参考站中与 PRD 冲突的元素（送现金/折扣/资质墙/调用排行/配置助手/代理入口）属**禁写项**，已列在该文档 §4–§5 | 用户 2026-10-26：「参考，不用照抄照搬」；禁写项本身来自 PRD 合规与范围条款 | T18（参考）、T19/T20（版式可选） |
 | D-10 | **金额单位双轨**：账本与积分一律 `_micro`（微积分）；**支付金额用 `_fen`（分）**。T04 的「禁浮点/禁 decimal」检查不得把 `_fen` 判为违规 | `t_plan.price_fen` 按 TDS 定义即「分」；若统一写成微积分，"99 元"会变成 99000000，支付对账反而易错 | T02、T04、T13、T15 |
+| D-20 | **`t_request_body` 延期到 T22 建**（迁移 `0022`）：V1 先建单表（`id / request_id / user_id / ciphertext / body_key_id / created_at`），物理分片留到对象存储选型定稿。T09 的 `purge_log` 已按此表名实现，A11 用测试内建 fixture 表验证 | 该表在 TDS §5.7 有定义却从未被建（E-16）；但 `log.body_mode` 默认 `meta_only`，默认配置下不存在正文行，所以不阻塞 T09 的其余验收 | T22（建表）、T15（日志详情页读正文） |
+| D-21 | **悬挂恢复 C 态按 TDS §5.3 执行，不采用卡内「延长 `expires_at` 等下一轮」的写法**：C 态（attempt 为 `SUCCESS` 或 `phase='STREAM_BODY'` 且无结算记录）**立即**写 `t_settle_task` + `t_notification(RECONCILE_MANUAL)`，不静默释放、不延长等下一轮 | TDS 是权威且理由更强：C 态意味着上游可能已经计费，等下一轮只会让资金悬挂更久、且仍拿不到 token 数；立即入队 + 运营待核查能把「平台承担成本差额」这件事显式暴露出来。卡内 ③ 的「上游仍活」与 TDS 的 C 态并非同一条件，已按 TDS 收敛 | T09 已实现 |
+| D-19 | **内部一致性违例也落 `t_reconcile_diff`**，但用自己的命名空间：R-01~R-08 违例写 `diff_type` = `R01_BALANCE_MISMATCH` … `R08_COST_MARGIN_MISMATCH`，且 `match_mode` = `INTERNAL`；外部账单比对才用 TDS 的 4 个枚举（`TOKEN_MISMATCH` / `AMOUNT_MISMATCH` / `MISSING_LOCAL` / `MISSING_UPSTREAM`）配 `DAILY` / `HOURLY` / `APPROX` | TDS 第 692 行明确要求内部不一致也写入 `t_reconcile_diff` 并 P0 告警，但 §5.4.1 的 4 个 `diff_type` 只描述外部账单差异。若混用同一组枚举，统计外部差异时会把内部违例算进去 | T09 第二段、T15（后台差异列表按 `match_mode` 分栏） |
 | D-18 | **`settle.Worker` 不走选主，允许每副本运行**：以 `FOR UPDATE SKIP LOCKED` 领任务 + `ledger.Settle(request_id)` 幂等保证「一任务一结算」，正确性不依赖租约；若改为选主独占，主节点故障时结算停摆至租约接管（≤60s），用户资金多冻一段时间 | 硬约束 15「有副作用必须选主」的本意是防重复执行；这里已由 SKIP LOCKED + 幂等满足，选主只会换来可用性损失 | T09、T21（需补一条「 Worker 多副本不重复结算」的并发用例） |
 | D-17 | **补迁移 `0021`：建 `t_job_lock` 与 `t_reconcile_diff` 两张表**（纯 Expand）。表总数 **54 → 56**；迁移数 18 → 19。`t_reconcile_diff` 用 `uk_rd_key(diff_key)` 保证「同 `(biz_date, diff_type, subject)` 只落一条」——`diff_key = sha256(biz_date|diff_type|subject)`，避免在可空列上做唯一键；`t_job_lock` 以 `uk_jl_job(job_name)` 保证一任务一租约 | 两张表在 TDS §4.6 / §5.4.1 有定义却从未被建（见 errata E-15）。选主与日对账是 T09 的核心，不能靠内存假实现 | T09 |
 | D-16 | **网关上游 Transport 不继承环境代理**（`Proxy: nil`）。不做 `ProxyFromEnvironment`：V1 上游全部 `region=DOMESTIC`，继承运维环境里的 `HTTP_PROXY` 会让客户请求体多穿一跳第三方、per-channel 超时预算失效。验收时就是因为本机 `HTTP_PROXY=127.0.0.1:62934` 导致 `no-such-host.invalid` 被代理接管、A5 的 DNS 用例判错才发现 | 若将来需要按渠道走代理，必须是显式配置项，不得依赖环境变量 | T08 已实现、T22 部署需复核 |
@@ -213,7 +216,7 @@ flowchart LR
 | T10 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 4 项非阻塞 | 65 码 + 写出口；84 turns / 633s / $6.74 |
 | T07 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 14 项（4 项需 T11/T08 联调） | 网关前置段；157 turns / 1045s / $20.27 |
 | T08 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 5 项（真实上游与 ROUTING 快照待 T11） | relaykit + dispatch + stream；149 turns / 833s / $9.97 |
-| T09 | 2026-10-26 | 2026-10-26 | 🟨 **第一段通过**（第二段未派） | 2 项偏差已裁定 | 0021 两表 + 结算闭环 + 选主；327 turns / 1408s / $18.99 |
+| T09 | 2026-10-26 | 2026-10-26 | ✅ **通过**（两段） | 4 项（1 项须 T22 建表） | 0021 两表 + 结算闭环 + 对账内核；327+307 turns / 3158s / $40.75 |
 
 ### T01 验收记录（交付总监独立复核，2026-10-26）
 

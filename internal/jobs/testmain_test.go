@@ -18,7 +18,11 @@ import (
 	"yunshu.dev/core/internal/redisx/redistest"
 )
 
-const defaultTestDSN = "root:root@tcp(127.0.0.1:13306)/yunshu_test?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
+// The jobs tests own a dedicated schema. T09's tasks scan whole tables
+// (expired batches, retention cutoffs), so sharing yunshu_test with the settle
+// binary under `go test -p 2` would let another package's fixtures change the
+// counts these tests assert.
+const defaultTestDSN = "root:root@tcp(127.0.0.1:13306)/yunshu_jobs_test?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
 
 var (
 	testDB     *sql.DB
@@ -47,7 +51,7 @@ func setupDatabase() error {
 		return fmt.Errorf("parse TEST_DB_DSN: %w", err)
 	}
 	if cfg.DBName == "" {
-		cfg.DBName = "yunshu_test"
+		cfg.DBName = "yunshu_jobs_test"
 	}
 	if !safeDBName.MatchString(cfg.DBName) {
 		return fmt.Errorf("unsafe database name %q", cfg.DBName)
@@ -87,14 +91,14 @@ func setupDatabase() error {
 		return fmt.Errorf("ping schema: %w", err)
 	}
 
-	// settle and jobs both migrate the same schema. The advisory lock makes
-	// 0021 apply once even when the two packages start concurrently.
+	// Two `go test` invocations against the same schema must not race the
+	// migration table.
 	conn, err := testDB.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("lock conn: %w", err)
 	}
 	var locked sql.NullInt64
-	if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK('yunshu_test_migrate', 120)`).Scan(&locked); err != nil || !locked.Valid || locked.Int64 != 1 {
+	if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK('yunshu_jobs_test_migrate', 120)`).Scan(&locked); err != nil || !locked.Valid || locked.Int64 != 1 {
 		return fmt.Errorf("migration lock: %v %v", err, locked)
 	}
 
@@ -107,9 +111,14 @@ func setupDatabase() error {
 	if _, err := runner.Up(ctx); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
-	_, _ = conn.ExecContext(ctx, `SELECT RELEASE_LOCK('yunshu_test_migrate')`)
+	_, _ = conn.ExecContext(ctx, `SELECT RELEASE_LOCK('yunshu_jobs_test_migrate')`)
 	_ = conn.Close()
 	return nil
+}
+
+// jobRID builds a 36-character request_id. tag must be exactly 4 characters.
+func jobRID(tag string, i int) string {
+	return fmt.Sprintf("%s-%08d-0000-0000-%012d", tag, i, i)
 }
 
 func randomJob(t *testing.T) string {

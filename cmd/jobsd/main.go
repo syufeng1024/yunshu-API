@@ -1,10 +1,11 @@
 // Command jobsd is the background-task process.
 //
-// It exposes no HTTP port. T09's first segment delivers the task registry and
-// the t_job_lock lease + K25 heartbeat runtime. Task bodies (reconciliation,
-// expiry, retention) are the second segment; this process only registers and
-// lists them, then holds their leases so a second instance cannot execute the
-// same task concurrently.
+// It exposes no HTTP port. It runs the T09 task table: hanging-prehold
+// recovery, daily reconciliation, BONUS expiry, log retention and metric
+// rollup. Every task has a side effect and therefore runs only while this
+// process holds its t_job_lock lease. The settlement consumer remains on every
+// replica (D-18): FOR UPDATE SKIP LOCKED plus request_id idempotency makes that
+// safe and keeps settlement available when the leader is down.
 package main
 
 import (
@@ -19,27 +20,20 @@ import (
 
 	"yunshu.dev/core/internal/jobs"
 	"yunshu.dev/core/internal/ledger"
+	"yunshu.dev/core/internal/lock"
 	obslog "yunshu.dev/core/internal/obs/log"
 	"yunshu.dev/core/internal/platform/clock"
 	"yunshu.dev/core/internal/platform/db"
 	"yunshu.dev/core/internal/platform/env"
+	"yunshu.dev/core/internal/recon"
 	"yunshu.dev/core/internal/redisx"
 	"yunshu.dev/core/internal/settle"
 )
 
 const service = env.ServiceJobs
 
-// taskFailures mirrors the frozen job list in TDS §4.6. Every entry has a side
-// effect, so every entry requires the leader lease. The account daily-quota
-// reset is intentionally absent: it is date-keyed, not a job.
-var taskTable = []jobs.Task{
-	{Name: "prehold_release", Period: 60 * time.Second, RequiresLeader: true, Timeout: 5 * time.Minute},
-	{Name: "order_reconcile", Period: 5 * time.Minute, RequiresLeader: true, Timeout: 2 * time.Minute},
-	{Name: "daily_reconcile", Cron: "0 0 3 * * *", RequiresLeader: true, Timeout: 30 * time.Minute},
-	{Name: "grant_expiry", Cron: "0 5 0 * * *", RequiresLeader: true, Timeout: 10 * time.Minute},
-	{Name: "log_archive", Cron: "0 0 3 * * *", RequiresLeader: true, Timeout: 30 * time.Minute},
-	{Name: "refund_poll", Period: 10 * time.Minute, RequiresLeader: true, Timeout: 2 * time.Minute},
-}
+// cst is the business timezone used for job schedules and daily boundaries.
+var cst = time.FixedZone("CST", 8*3600)
 
 func main() {
 	rootCtx := context.Background()
@@ -67,7 +61,7 @@ func main() {
 	defer rdb.Close()
 
 	registry := jobs.NewRegistry()
-	for _, task := range taskTable {
+	for _, task := range jobs.TaskTable() {
 		if err := registry.Register(task); err != nil {
 			logger.Error(rootCtx, "task registration failed: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
 			os.Exit(1)
@@ -94,11 +88,13 @@ func main() {
 
 	var wg sync.WaitGroup
 
+	ledgerStore := ledger.NewStore(mainDB, clock.Real{})
+
 	// P26 consumer. Every jobsd replica runs one worker: the claim uses
 	// FOR UPDATE SKIP LOCKED and ledger.Settle is keyed by request_id, so two
 	// replicas can never charge twice. Holding a leader lease here would make
 	// settlement availability depend on the lease table.
-	settleWorker := settle.NewWorker(mainDB, ledger.NewStore(mainDB, clock.Real{}), clock.Real{}, logger, instanceID)
+	settleWorker := settle.NewWorker(mainDB, ledgerStore, clock.Real{}, logger, instanceID)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -107,18 +103,74 @@ func main() {
 		}
 	}()
 
-	for _, task := range registry.List() {
-		if !task.RequiresLeader {
-			// A read-only task may run on every instance. T09 has none; the
-			// branch exists so the invariant is explicit rather than implied.
-			continue
-		}
-		wg.Add(1)
-		go func(name string) {
-			defer wg.Done()
-			election.Keep(ctx, name)
-		}(task.Name)
+	locker := lock.New(rdb, nil)
+	hanging := recon.NewHanging(mainDB, rdb, ledgerStore,
+		settle.NewEnqueuer(mainDB, clock.Real{}), logger, clock.Real{})
+	daily := recon.NewDaily(mainDB, locker, logger, clock.Real{}, instanceID)
+	expire := jobs.NewExpireBatch(mainDB, locker, logger, clock.Real{}, instanceID)
+	purge := jobs.NewPurgeLog(mainDB, logger, clock.Real{})
+	rollup := jobs.NewRollup(mainDB, logger, clock.Real{})
+	rollup.Location = cst
+
+	runner := &jobs.Runner{
+		Registry: registry,
+		Election: election,
+		Logger:   logger,
+		Clock:    clock.Real{},
+		Location: cst,
+		Executors: map[string]jobs.TaskFunc{
+			"prehold_release": func(ctx context.Context, _ time.Time) error {
+				res, err := hanging.Round(ctx)
+				if err != nil {
+					return err
+				}
+				logger.Info(ctx, fmt.Sprintf(
+					"prehold_release scanned=%d processed=%d A=%d B=%d C=%d skipped=%d backlog=%t",
+					res.Scanned, res.Processed, res.TypeA, res.TypeB, res.TypeC,
+					res.Skipped, res.Backlog), obslog.Fields{Stage: "P29"})
+				return nil
+			},
+			"daily_reconcile": func(ctx context.Context, scheduled time.Time) error {
+				res, err := daily.Run(ctx, previousDay(scheduled))
+				if err != nil {
+					return err
+				}
+				logger.Info(ctx, fmt.Sprintf(
+					"daily_reconcile date=%s skipped=%t internal=%d external=%d p0=%t changed=%d",
+					res.BizDate, res.Skipped, res.Internal, res.External, res.P0, res.Changed),
+					obslog.Fields{Stage: "reconcile"})
+				return nil
+			},
+			"expire_batch": func(ctx context.Context, _ time.Time) error {
+				res, err := expire.Run(ctx)
+				if err != nil {
+					return err
+				}
+				logger.Info(ctx, fmt.Sprintf("expire_batch cleared=%d micro=%d",
+					res.Cleared, res.ClearedMicro), obslog.Fields{Stage: "expire_batch"})
+				return nil
+			},
+			"purge_log": func(ctx context.Context, _ time.Time) error {
+				_, err := purge.Run(ctx)
+				return err
+			},
+			"rollup": func(ctx context.Context, scheduled time.Time) error {
+				_, err := rollup.Run(ctx, previousDay(scheduled))
+				return err
+			},
+		},
 	}
+	if err := runner.Validate(); err != nil {
+		logger.Error(rootCtx, "job runner invalid: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
+		os.Exit(1)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := runner.Start(ctx); err != nil {
+			logger.Error(rootCtx, "job runner stopped: "+err.Error(), obslog.Fields{Stage: "jobs", Status: 1})
+		}
+	}()
 
 	<-ctx.Done()
 	logger.Warn(rootCtx, "drain started, timeout=120s", obslog.Fields{Stage: "drain"})
@@ -135,6 +187,15 @@ func main() {
 		logger.Error(rootCtx, "drain timeout; forcing exit", obslog.Fields{Stage: "drain", Status: 1})
 		os.Exit(1)
 	}
+}
+
+// previousDay returns the CST calendar day before the scheduled fire time.
+// A 00:20 rollup therefore covers the day that just ended, not the new one.
+func previousDay(scheduled time.Time) time.Time {
+	if scheduled.IsZero() {
+		scheduled = time.Now()
+	}
+	return scheduled.In(cst).AddDate(0, 0, -1)
 }
 
 func hostname() string {
