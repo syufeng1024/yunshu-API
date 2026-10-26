@@ -11,7 +11,7 @@
 | T03 实际建表（0012 / 0014 / 0015 / 0016 / 0017） | 7 | `t_content_policy_hit`、`t_arrears`、`t_ticket`、`t_ticket_reply`、`t_review_task`、`t_upstream_bill`、`t_channel_dedicated_user` |
 | 当前业务表总量 | 54 | 47 + 7；0010 / 0011 / 0013 只改列，0017 另建 1 表（已计入 7） |
 | 当前 `information_schema.tables` | 55 | 54 张业务表 + `schema_migrations` |
-| 当前迁移条数 | 17 | 0001–0006（6）、0009（1）、0010–0019（10）；0007 / 0008 空缺不计 |
+| 当前迁移条数 | 18 | 0001–0006（6）、0009（1）、0010–0019（10）、0020（1）；0007 / 0008 空缺不计 |
 
 任务卡 §1 / §7 A2 写「46 张」，与卡内 §4 逐表清单（8 + 11 + 26 + 2 = 47）相差 1；差的是 `t_config_publish`。本表按逐表清单登记，未删表凑数。`information_schema` 计数含迁移记录表，因此比业务表多 1。
 
@@ -45,8 +45,9 @@
 | 0017 | `t_model.recommend_weight` + `idx_model_recommend`；`t_channel` 专属两列；`t_channel_dedicated_user` 建表 | 已落盘（T03） |
 | 0018 | 34 配置键 + 3 价格分组 + 3 协议 + 5 档限流策略种子 | 已落盘（T03） |
 | 0019 | 本地联调种子（仅 `ENV=local`） | 已落盘（T03），其他环境跳过并打 WARN |
+| 0020 | 幂等租约 Expand：`t_idempotency_record` 加 `fence_token` / `lease_expires_at`（只加不删） | 待落盘（T06 遗留 #2，方案 A） |
 
-> **需回写 TDS §8.6**：0018 / 0019 是 TDS §8.6 裁定表之外的新增占用，由交付总监统一改源文档；实现方未改 TDS。
+> **需回写 TDS §8.6**：0018 / 0019 / 0020 是 TDS §8.6 裁定表之外的新增占用，由交付总监统一改源文档；实现方未改 TDS。
 
 ## 业务表
 

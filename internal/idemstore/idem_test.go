@@ -14,7 +14,20 @@ import (
 	"yunshu.dev/core/internal/redisx/redistest"
 )
 
-func TestMain(m *testing.M) { os.Exit(redistest.Setup(m)) }
+// TestMain opens the real MySQL schema for the durable-leg tests and the real
+// Redis database for the fast-path tests. The Redis fixture runs m and owns the
+// cross-binary lock, so the MySQL setup/teardown brackets it.
+func TestMain(m *testing.M) {
+	if err := setupMySQL(); err != nil {
+		fmt.Fprintf(os.Stderr, "idemstore tests: %v\n", err)
+		os.Exit(1)
+	}
+	code := redistest.Setup(m)
+	if testDB != nil {
+		_ = testDB.Close()
+	}
+	os.Exit(code)
+}
 
 var testNow = time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 

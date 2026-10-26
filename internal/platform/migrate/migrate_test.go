@@ -6,10 +6,10 @@ import (
 	"testing/fstest"
 )
 
-// wantMigrationCount is the delivered T02 + T03 set:
-// 0001-0006 (6) + 0009 (1) + 0010-0019 (10) = 17.
+// wantMigrationCount is the delivered T02 + T03 + 0020 set:
+// 0001-0006 (6) + 0009 (1) + 0010-0019 (10) + 0020 (1) = 18.
 // 0007 / 0008 are permanent gaps and must never be counted here.
-const wantMigrationCount = 17
+const wantMigrationCount = 18
 
 func loadEmbedded(t *testing.T) []Migration {
 	t.Helper()
@@ -127,7 +127,7 @@ func TestMigrationCountMatchesFiles(t *testing.T) {
 
 	want := []string{
 		"0001", "0002", "0003", "0004", "0005", "0006", "0009",
-		"0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019",
+		"0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020",
 	}
 	if len(migrations) != len(want) {
 		t.Fatalf("版本数量 = %d，期望 %d", len(migrations), len(want))

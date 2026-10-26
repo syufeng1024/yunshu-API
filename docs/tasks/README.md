@@ -54,6 +54,7 @@
 | D-08 | 配置键共 **45** 个（TDS §3.7 正文写 34 是过期计数，见 errata E-07），命名空间归属按 TDS §3.7；`quota.overdraft_warn_days` 不归属任何命名空间、写入即 `config_value_invalid`；`/admin/config` 运行时可写白名单仅 12 个键 | TDS §3.7（2026-10-19 收口 + TA-1.1） | T05、T15 |
 | D-09 | **前端展示结构以 `ref-frontend-structure.md` 为「参考」，不是规范**（对标 kmitu.com/products/llm-api）。区块与功能点仍以 PRD §4.1–§4.5 为基线：区块一条不能少、**顺序与形态可自行取舍**、不为"像参考站"新增区块或组件。参考站中与 PRD 冲突的元素（送现金/折扣/资质墙/调用排行/配置助手/代理入口）属**禁写项**，已列在该文档 §4–§5 | 用户 2026-10-26：「参考，不用照抄照搬」；禁写项本身来自 PRD 合规与范围条款 | T18（参考）、T19/T20（版式可选） |
 | D-10 | **金额单位双轨**：账本与积分一律 `_micro`（微积分）；**支付金额用 `_fen`（分）**。T04 的「禁浮点/禁 decimal」检查不得把 `_fen` 判为违规 | `t_plan.price_fen` 按 TDS 定义即「分」；若统一写成微积分，"99 元"会变成 99000000，支付对账反而易错 | T02、T04、T13、T15 |
+| D-12 | **幂等租约补列走方案 A**：新增迁移 `0020` 给 `t_idempotency_record` 加 `fence_token char(36)` + `lease_expires_at datetime(3)`（纯 Expand，只加不删，可回滚为 `DROP COLUMN`）；不做「用 `request_id` 当 fence」的凑合方案 | 幂等 fencing 的语义一旦凑合，后续排查「谁抢了租约」时无从下手；现在只是一条 DDL。编号超出 TDS §8.6 裁定表，已在 `docs/schema.md` 登记待回写 | T06（补正）、T07 |
 | D-11 | **套餐发票/SLA 口径**（原 Q-06）：`invoice_supported` 付费三档（STANDARD / PRO / ENTERPRISE）= `1`，`TRIAL` / `FREE_DEFAULT` = `0`；`sla_text` 付费三档填「7×24 工单受理，不承诺可用性百分比」，其余为空串 | 开票是 PRD G-07 功能点，若五档全 0，定价页会渲染成"全部不支持发票"，与产品事实相反；但开票需实名且需实际支付，体验版与默认档无可开票金额 | T03（0018 种子）、T18（定价页展示） |
 
 ## 三、待确认事项（不阻塞派单，默认按右列执行）
@@ -435,7 +436,7 @@ flowchart LR
 | # | 项 | 处置 |
 | :--- | :--- | :--- |
 | 1 | L1 的 ARGV 由 10 个扩到 14 个 | 8 下标返回不变，可接受 |
-| 2 | **幂等 DB 适配器缺列**：`t_idempotency_record` 无 `fence_token` / `lease_expires_at` | **T07 前必须决**：加 0020 Expand 迁移补两列，或改用 `request_id` 作 fence + `created_at+15s` 作租约锚点 |
+| 2 | **幂等 DB 适配器缺列**：`t_idempotency_record` 无 `fence_token` / `lease_expires_at` | ✅ **已解决（D-12 方案 A）**：`0020` 补两列 + `internal/idemstore/mysql.go` 适配器。库内 18 条迁移；并发抢锁/租约过期换 fence/同键异体复用/完成回放/DB 写失败不放行 五条用例全绿。另把租约过期判定从 `NOW(3)` 改为 `UTC_TIMESTAMP(3)`，不再依赖会话时区 |
 | 3 | `ratelimit.degrade.mode` 不是 45 键之一（E-12） | 暂由构造参数注入，T07 读启动参数 |
 | 4 | 限流与配置测试共用 Redis DB 15 | CI 需 `-p 1` 或分库 |
 | 5 | 指标 `dim` 取 `[2]` 而非对外维度 | 四维全满时指标与响应体不一致，**T10/T22 裁定** |

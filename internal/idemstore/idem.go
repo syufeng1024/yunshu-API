@@ -12,7 +12,6 @@ import (
 	"context"
 	"crypto/rand"
 	_ "embed"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	mathrand "math/rand/v2"
@@ -443,12 +442,28 @@ func (s *Store) cacheTTL() time.Duration {
 	return 24*time.Hour + time.Duration(mathrand.IntN(300))*time.Second
 }
 
+// generateFence returns a UUIDv7-shaped token (36 characters) so it fits
+// t_idempotency_record.fence_token char(36) without padding. The 48-bit prefix
+// keeps tokens roughly ordered by acquisition time; the remaining bits are
+// random, so a fence is never reused across acquisitions.
 func generateFence() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand failure is unrecoverable for a fence; falling back to
-		// the clock keeps the value unique enough for a single process.
-		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	ms := uint64(time.Now().UnixMilli())
+	b[0] = byte(ms >> 40)
+	b[1] = byte(ms >> 32)
+	b[2] = byte(ms >> 24)
+	b[3] = byte(ms >> 16)
+	b[4] = byte(ms >> 8)
+	b[5] = byte(ms)
+	if _, err := rand.Read(b[6:]); err != nil {
+		// crypto/rand failure is unrecoverable for a fence; the clock keeps the
+		// value unique enough for a single process.
+		ns := uint64(time.Now().UnixNano())
+		for i := 6; i < 16; i++ {
+			b[i] = byte(ns >> (8 * uint(i-6)))
+		}
 	}
-	return hex.EncodeToString(b[:])
+	b[6] = (b[6] & 0x0f) | 0x70 // version 7
+	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
