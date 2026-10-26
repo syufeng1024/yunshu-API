@@ -1,0 +1,41 @@
+#
+# 前端镜像：vite 构建产物 + nginx 静态托管。
+#
+# 站点与控制面同源：nginx 把 /api、/console、/admin 以及 /healthz、/readyz
+# 反代到 controld:8081，浏览器只看到一个 origin，因此构建时不需要
+# VITE_API_BASE_URL。
+#
+# 构建上下文是仓库根目录（package.json 在 web/ 下）。
+
+ARG NODE_IMAGE=node:22-alpine
+ARG NGINX_IMAGE=nginx:1.27-alpine
+
+# ---------------------------------------------------------------- build stage
+FROM ${NODE_IMAGE} AS build
+
+WORKDIR /app
+
+# 国内网络下拉包慢，允许覆盖。
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
+# 只拷依赖清单，让 npm ci 这层可被缓存。
+COPY web/package.json web/package-lock.json ./
+RUN npm config set registry "${NPM_REGISTRY}" \
+ && npm ci --no-audit --no-fund
+
+COPY web/ ./
+
+# npm run build = tsc --noEmit && vite build。
+# vite.config.ts 里两条 closeBundle 断言会在这里生效：产物中一旦出现硬编码
+# 价格/额度字面量或 dev fixture 标记，构建直接失败。
+RUN npm run build
+
+# -------------------------------------------------------------- runtime stage
+FROM ${NGINX_IMAGE}
+
+COPY deploy/nginx/default.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+# nginx 官方镜像自带 /docker-entrypoint.sh 与 80 端口前台运行，无需覆盖 CMD。

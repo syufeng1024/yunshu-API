@@ -1,0 +1,211 @@
+name: yunshu-stack
+
+# 全栈部署编排：MySQL + Redis + 三进程 + 前端。
+#
+# 与 deploy/docker-compose.yml 的分工：
+#   docker-compose.yml       只跑 MySQL / Redis，应用进程在本机 `make run-*`
+#   docker-compose.stack.yml 全容器化，一条命令起完整站点
+# 两者 project name 不同（yunshu / yunshu-stack），互不干扰，可并存。
+#
+# 用法（在仓库根目录执行）：
+#   docker compose --env-file deploy/.env.stack -f deploy/docker-compose.stack.yml up -d --build
+#
+# 端口边界：
+#   对外的只有 web / gatewayd / controld；MySQL 与 Redis 不发布宿主端口，
+#   只在内网 network 上可见——这条比开发用的 compose 更严，开发 compose 发布
+#   13306/16379 是为了让宿主上的 go run 能连。
+
+x-app-env: &app-env
+  ENV: ${ENV:-prod}
+  TZ: ${TZ:-Asia/Shanghai}
+  # 容器内用服务名寻址，不能用 127.0.0.1。
+  DB_DSN: ${DB_DSN:-root:${MYSQL_ROOT_PASSWORD:-root}@tcp(mysql:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4}
+  LOG_SQL_DSN: ${LOG_SQL_DSN:-root:${MYSQL_ROOT_PASSWORD:-root}@tcp(mysql:3306)/yunshu_log?parseTime=true&loc=UTC&charset=utf8mb4}
+  GW_WRITE_DSN: ${GW_WRITE_DSN:-root:${MYSQL_ROOT_PASSWORD:-root}@tcp(mysql:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4}
+  REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+  REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+  SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET 缺失，请用 openssl rand -base64 32 生成后写入 deploy/.env.stack}
+  CHANNEL_KEY_KEK: ${CHANNEL_KEY_KEK:-}
+
+x-app-image: &app-image
+  image: yunshu-app:${IMAGE_TAG:-local}
+  build:
+    context: ..
+    dockerfile: deploy/Dockerfile.app
+
+services:
+  # ------------------------------------------------------------------ 存储层
+  mysql:
+    image: mysql:8.0
+    container_name: yunshu-stack-mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_as_cs
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_ROOT_HOST: "%"
+      TZ: UTC
+    volumes:
+      - mysql_data:/var/lib/mysql
+      # 只在空卷首次启动时执行：建 yunshu / yunshu_log 两个 schema。
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p\"$$MYSQL_ROOT_PASSWORD\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    restart: unless-stopped
+    networks: [backend]
+
+  redis:
+    image: redis:7
+    container_name: yunshu-stack-redis
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    networks: [backend]
+
+  # ---------------------------------------------------------------- 迁移任务
+  # 一次性任务：把 0001-0021 全部应用完再退出。三个进程都等它 status=0。
+  # 没有待应用迁移时同样退出 0，可以反复执行。
+  migrate:
+    <<: *app-image
+    container_name: yunshu-stack-migrate
+    command: ["/usr/local/bin/migrate", "up"]
+    environment:
+      <<: *app-env
+    depends_on:
+      mysql:
+        condition: service_healthy
+    restart: "no"
+    networks: [backend]
+
+  # ------------------------------------------------------------------ 进程层
+  gatewayd:
+    <<: *app-image
+    container_name: yunshu-stack-gatewayd
+    command: ["/usr/local/bin/gatewayd"]
+    environment:
+      <<: *app-env
+      # 对外路由是 /v1/，监听容器内 8080。
+      GATEWAY_HTTP_ADDR: ":8080"
+      GATEWAY_METRICS_ADDR: ":9090"
+      GATEWAY_METRICS_TOKEN: ${GATEWAY_METRICS_TOKEN:-}
+      GATEWAY_DB_MAX_CONNS: ${GATEWAY_DB_MAX_CONNS:-8}
+    ports:
+      - "${GATEWAY_PORT:-18080}:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    # gatewayd 收到 SIGTERM 后会走 120s 排水（TDS §4.4），
+    # stop_grace_period 必须大于排水时间，否则容器会被 SIGKILL 打断在途请求。
+    stop_grace_period: 130s
+    restart: unless-stopped
+    networks: [backend, edge]
+
+  controld:
+    <<: *app-image
+    container_name: yunshu-stack-controld
+    command: ["/usr/local/bin/controld"]
+    environment:
+      <<: *app-env
+      CONTROL_HTTP_ADDR: ":8081"
+    ports:
+      - "${CONTROL_PORT:-18081}:8081"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+    networks: [backend, edge]
+
+  jobsd:
+    <<: *app-image
+    container_name: yunshu-stack-jobsd
+    command: ["/usr/local/bin/jobsd"]
+    environment:
+      <<: *app-env
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    # jobsd 不开 HTTP 端口，没有可探的 endpoint，只能确认进程还活着。
+    # 真正的健康信号是它持有的 t_job_lock 租约与日志。
+    # 注意用 `pgrep jobsd` 而不是 `pgrep -x jobsd`：alpine 的 busybox pgrep
+    # 对 -x 的匹配口径与 procps 不同，实测 -x 永远返回 1，会把健康容器判死。
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep jobsd >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    stop_grace_period: 60s
+    restart: unless-stopped
+    networks: [backend]
+
+  # ------------------------------------------------------------------ 接入层
+  web:
+    image: yunshu-web:${IMAGE_TAG:-local}
+    container_name: yunshu-stack-web
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
+    ports:
+      - "${WEB_PORT:-8088}:80"
+    depends_on:
+      controld:
+        condition: service_started
+    healthcheck:
+      # 只验证 nginx 自己能吐出 index.html，不把控制面的可用性绑到站点上：
+      # 控制面挂掉时站点还应该能展示页面，而不是被判死重启。
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/index.html || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks: [edge]
+
+networks:
+  # backend：存储层与进程层的私网。MySQL / Redis 只挂这个网络、且不发布端口，
+  # 因此宿主和公网都够不到它们——这是与开发 compose 的关键差别。
+  # 不要设成 internal: true：jobsd 后续要出网拉上游账单，进程层需要出口。
+  backend:
+  # edge：唯一对宿主发布端口的网络。
+  edge:
+
+volumes:
+  mysql_data:
+  redis_data:

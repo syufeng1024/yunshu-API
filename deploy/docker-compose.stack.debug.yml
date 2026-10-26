@@ -1,0 +1,28 @@
+# 调试覆盖：把 MySQL / Redis 绑到宿主回环，仅供排障。
+#
+# 默认编排里存储层不发布端口，这是对的——容器内的进程用服务名直连，没有
+# 任何理由让宿主或公网够到数据库。但排查数据问题时需要从宿主连进去看看，
+# 这个覆盖文件就是那把钥匙。
+#
+# 用 `!override` 而不是普通写法：compose 对 ports 序列默认是追加，普通写法
+# 会在发布 127.0.0.1 的同时保留原端口，语义不明确。
+#
+# 用法：
+#   docker compose --env-file deploy/.env.stack \
+#     -f deploy/docker-compose.stack.yml \
+#     -f deploy/docker-compose.stack.debug.yml up -d
+#
+# 注意：
+#   1. 只绑 127.0.0.1，不绑 0.0.0.0。绑 0.0.0.0 等于把 root 口令暴露到局域网。
+#   2. 端口刻意选 13306 / 16379，与开发编排的覆盖文件保持一致，避免和宿主
+#      已装的 MySQL 8.4 / Redis 撞车。
+#   3. 不要把这个文件放进长期运行的部署里。
+
+services:
+  mysql:
+    ports: !override
+      - "127.0.0.1:13306:3306"
+
+  redis:
+    ports: !override
+      - "127.0.0.1:16379:6379"

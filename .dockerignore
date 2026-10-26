@@ -1,0 +1,31 @@
+# 镜像构建上下文 = 仓库根目录，这里排除掉与构建无关的东西。
+# 只影响 docker build 传给守护进程的 tar 包，不影响本地开发。
+
+.git
+.gitignore
+.workbuddy/
+.ardot/
+
+# 前端依赖与产物都在镜像里重装/重建，本机的不要带进去
+web/node_modules/
+web/dist/
+node_modules/
+dist/
+build/
+
+# 密钥：绝不能进构建上下文，否则会被 COPY 进镜像层
+.env
+.env.stack
+.env.local
+.env.*.local
+
+# 文档与素材不参与编译
+docs/
+deploy/mysql/
+deploy/README.md
+
+# 编辑器与系统垃圾
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
