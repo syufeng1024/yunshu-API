@@ -54,6 +54,7 @@
 | D-08 | 配置键共 **45** 个（TDS §3.7 正文写 34 是过期计数，见 errata E-07），命名空间归属按 TDS §3.7；`quota.overdraft_warn_days` 不归属任何命名空间、写入即 `config_value_invalid`；`/admin/config` 运行时可写白名单仅 12 个键 | TDS §3.7（2026-10-19 收口 + TA-1.1） | T05、T15 |
 | D-09 | **前端展示结构以 `ref-frontend-structure.md` 为「参考」，不是规范**（对标 kmitu.com/products/llm-api）。区块与功能点仍以 PRD §4.1–§4.5 为基线：区块一条不能少、**顺序与形态可自行取舍**、不为"像参考站"新增区块或组件。参考站中与 PRD 冲突的元素（送现金/折扣/资质墙/调用排行/配置助手/代理入口）属**禁写项**，已列在该文档 §4–§5 | 用户 2026-10-26：「参考，不用照抄照搬」；禁写项本身来自 PRD 合规与范围条款 | T18（参考）、T19/T20（版式可选） |
 | D-10 | **金额单位双轨**：账本与积分一律 `_micro`（微积分）；**支付金额用 `_fen`（分）**。T04 的「禁浮点/禁 decimal」检查不得把 `_fen` 判为违规 | `t_plan.price_fen` 按 TDS 定义即「分」；若统一写成微积分，"99 元"会变成 99000000，支付对账反而易错 | T02、T04、T13、T15 |
+| D-13 | **执行顺序调整：T10 提到 T07 之前**。T10 是纯库（65 码 + 写出口 + 响应头 + SSE 错误帧），不依赖流水线；而 T07 的每个失败分支都要产出这些码。若按原图先做 T07，错误处理会先写一套临时实现、T10 再返工 | 依赖图原标 T10 依赖 T07，是把它当成"流水线的错误出口"；实际它是被流水线**消费**的库 | T10、T07 |
 | D-12 | **幂等租约补列走方案 A**：新增迁移 `0020` 给 `t_idempotency_record` 加 `fence_token char(36)` + `lease_expires_at datetime(3)`（纯 Expand，只加不删，可回滚为 `DROP COLUMN`）；不做「用 `request_id` 当 fence」的凑合方案 | 幂等 fencing 的语义一旦凑合，后续排查「谁抢了租约」时无从下手；现在只是一条 DDL。编号超出 TDS §8.6 裁定表，已在 `docs/schema.md` 登记待回写 | T06（补正）、T07 |
 | D-11 | **套餐发票/SLA 口径**（原 Q-06）：`invoice_supported` 付费三档（STANDARD / PRO / ENTERPRISE）= `1`，`TRIAL` / `FREE_DEFAULT` = `0`；`sla_text` 付费三档填「7×24 工单受理，不承诺可用性百分比」，其余为空串 | 开票是 PRD G-07 功能点，若五档全 0，定价页会渲染成"全部不支持发票"，与产品事实相反；但开票需实名且需实际支付，体验版与默认档无可开票金额 | T03（0018 种子）、T18（定价页展示） |
 
@@ -109,7 +110,7 @@
 | [T07](T07-网关流水线P01-P14.md) | 网关流水线 P01–P14 | T04,T05,T06 | `cmd/gatewayd/`、`internal/gw/` | ⬜ |
 | [T08](T08-上游分发与SSE转发.md) | 上游分发·协议转换·SSE（P15–P25） | T07 | `relaykit/`、`internal/dispatch/` | ⬜ |
 | [T09](T09-结算清算与对账.md) | 结算清算与对账（P26–P31 + jobsd） | T08 | `internal/settle/`、`cmd/jobsd/` | ⬜ |
-| [T10](T10-错误码与响应契约.md) | 错误码与响应契约（65 码） | T07 | `internal/apierr/` | ⬜ |
+| [T10](T10-错误码与响应契约.md) | 错误码与响应契约（65 码） | —（**已前移到 T07 之前**） | `internal/apierr/` | ✅ |
 
 ### 阶段 4 · 控制面
 
@@ -203,6 +204,8 @@ flowchart LR
 | T04 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 4 项非阻塞 | 账本与计费内核；169 turns / 1392s / $25.24 |
 | T05 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 3 项非阻塞 | 配置快照与策略注册表；115 turns / 1093s / $12.92 |
 | T06 | 2026-10-26 | 2026-10-26 | ✅ **通过**（两轮补正） | 5 项（1 项须 T07 前决） | 26 键 + 四维限流；103+32+16 turns / 1117s / $12.59 |
+| — | 2026-10-26 | 2026-10-26 | ✅ 0020 幂等租约（D-12） | — | 补 fence_token/lease_expires_at；18 条迁移 |
+| T10 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 4 项非阻塞 | 65 码 + 写出口；84 turns / 633s / $6.74 |
 
 ### T01 验收记录（交付总监独立复核，2026-10-26）
 
@@ -440,6 +443,25 @@ flowchart LR
 | 3 | `ratelimit.degrade.mode` 不是 45 键之一（E-12） | 暂由构造参数注入，T07 读启动参数 |
 | 4 | 限流与配置测试共用 Redis DB 15 | CI 需 `-p 1` 或分库 |
 | 5 | 指标 `dim` 取 `[2]` 而非对外维度 | 四维全满时指标与响应体不一致，**T10/T22 裁定** |
+
+### T10 验收记录（交付总监独立复核，2026-10-26）
+
+按 D-13 前移到 T07 之前执行：T10 是纯库，T07 的每个失败分支都要消费它。
+
+| 复核项 | 结果 | 证据 |
+| :--- | :--- | :--- |
+| 码数 | ✅ **65** | 临时用例打印 `specs=65 codes=65` |
+| 关键码状态 | ✅ | `invalid_api_key`/`key_expired` 均 401 但是两个码；`model_not_available`/`upstream_capacity_exceeded` 均 **503**；`insufficient_credits`/`account_frozen_due_to_overdraft` 均 402 |
+| 402 头体一致 | ✅ | 头 `X-Credits-Remaining: -12.34` = 体 `remaining: -12.34` |
+| 429 语义 | ✅ | 四维全满 → `code=daily_quota_exceeded`、`limit/remaining/reset_at` 同维度、`message` 列出其余三维 |
+| SSE 错误帧 | ✅ | `event: error` + `credits_consumed`；流式头无 `X-Credits-Consumed` |
+| `request_id` 兜底 | ✅ | 头体同值、UUIDv7 形态、写回结构体；注入 CR/LF 或超长值会重新生成 |
+| 泄露 | ✅ | 上游 URL/Key/SQL/堆栈在体、日志、`Error()` 中均不出现 |
+| 覆盖率 | ✅ | 91.2% |
+
+**一处必须交接的接线项**：`Verdict` 只描述了主维度，而 PRD §6.3 要求「即使触顶 RPM 也要回日额度头」。所以 **T07 必须调 `apierr.WithRateLimitSnapshot(...)`** 补齐 RPM 与日额度两组头，否则 429 响应头不完整。
+
+**四项遗留**：① `docs/error-codes.md` 已由我从 `MarkdownTable()` 生成（65 行，标注不得手改）；② 429 完整头依赖 T07 接线；③ `-race` 未跑（本包无并发，CI 统一补）；④ 唯一写出口 grep 命中 2 条，是 `obs/health` 的探针输出，建议加白名单。
 
 ---
 
