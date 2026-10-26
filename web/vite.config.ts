@@ -37,6 +37,36 @@ function assertNoPricingLiterals(): Plugin {
   }
 }
 
+/**
+ * Hard constraint 10/23: fixture data is a dev-only preview. The dynamic
+ * import is kept out of production by the constant branch in client.ts; this
+ * assertion is the backstop that fails the build if it ever slips through.
+ */
+function assertNoFixtures(): Plugin {
+  return {
+    name: 'yunshu-assert-no-fixtures',
+    apply: 'build',
+    closeBundle() {
+      const assetsDir = fileURLToPath(new URL('./dist/assets', import.meta.url))
+      let files: string[] = []
+      try {
+        files = readdirSync(assetsDir, { withFileTypes: true })
+          .filter((entry) => entry.isFile())
+          .map((entry) => entry.name)
+      } catch {
+        return
+      }
+      const marker = '__YUNSHU_T18_FIXTURE__'
+      const hits = files.filter((file) => readFileSync(join(assetsDir, file), 'utf8').includes(marker))
+      if (hits.length > 0) {
+        throw new Error(
+          `Build contains dev fixture data. Keep it behind import.meta.env.DEV:\n${hits.join('\n')}`,
+        )
+      }
+    },
+  }
+}
+
 // The control plane owns :8081. /api, /healthz and /readyz are proxied in dev
 // so the browser always talks to a same-origin URL. Deployed builds either sit
 // behind the same reverse proxy or set VITE_API_BASE_URL to the control origin.
@@ -51,7 +81,7 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
-    plugins: [react(), assertNoPricingLiterals()],
+    plugins: [react(), assertNoPricingLiterals(), assertNoFixtures()],
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),

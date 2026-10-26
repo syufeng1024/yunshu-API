@@ -3,8 +3,12 @@ import {
   creditsFromMicro,
   formatCreditsFromMicro,
   formatPercent,
+  formatPlanPrice,
   formatPricePerK,
+  formatQuotaCredits,
+  formatTokens,
   formatYuanFromCredits,
+  formatYuanFromFen,
   yuanFromCredits,
 } from './format'
 
@@ -34,5 +38,14 @@ describe('credit conversions', () => {
 
   it('formats ratios as percentages', () => {
     expect(formatPercent(0.152)).toBe('15.2%')
+  })
+
+  it('formats fen, plan prices, quotas and token counts', () => {
+    expect(formatYuanFromFen(9900)).toBe('99.00')
+    expect(formatPlanPrice(9900)).toBe('99 元')
+    expect(formatPlanPrice(0)).toBe('免费')
+    expect(formatQuotaCredits(50000000)).toBe('5,000 积分')
+    expect(formatQuotaCredits(null)).toBe('无上限')
+    expect(formatTokens(32768)).toBe('32,768 tokens')
   })
 })

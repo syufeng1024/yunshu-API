@@ -8,6 +8,7 @@
 
 export const MICRO_PER_CREDIT = 10_000
 export const CREDITS_PER_YUAN = 100
+export const FEN_PER_YUAN = 100
 
 const INVALID = '—'
 
@@ -30,6 +31,36 @@ export function yuanFromCredits(credits: number): number {
 export function formatYuanFromCredits(credits: number): string {
   const yuan = yuanFromCredits(credits)
   return Number.isFinite(yuan) ? yuan.toFixed(2) : INVALID
+}
+
+/** Fen -> yuan, rounded to 2 decimal places. 9900 -> "99.00". */
+export function formatYuanFromFen(fen: number): string {
+  if (!Number.isFinite(fen)) return INVALID
+  return (roundHalfAwayFromZero(fen) / FEN_PER_YUAN).toFixed(2)
+}
+
+/** Plan price: 0 -> "免费", otherwise "<yuan> 元" with trailing zeros trimmed. */
+export function formatPlanPrice(fen: number): string {
+  if (!Number.isFinite(fen)) return INVALID
+  return fen === 0 ? '免费' : `${trimFraction(fen / FEN_PER_YUAN, 2)} 元`
+}
+
+/** Integer credits get zh-CN grouping; fractional values keep up to 4 decimals. */
+export function formatCreditAmount(micro: number): string {
+  const credits = creditsFromMicro(micro)
+  if (!Number.isFinite(credits)) return INVALID
+  return Number.isInteger(credits) ? formatInteger(credits) : formatCredits(credits, 4)
+}
+
+/** Daily quota in micro-credits; null means the plan has no daily cap. */
+export function formatQuotaCredits(micro: number | null): string {
+  if (micro === null) return '无上限'
+  return `${formatCreditAmount(micro)} 积分`
+}
+
+/** Context window in tokens. */
+export function formatTokens(tokens: number): string {
+  return Number.isFinite(tokens) ? `${formatInteger(tokens)} tokens` : INVALID
 }
 
 /** Micro-credits -> credits, rounded to at most 4 decimal places. */

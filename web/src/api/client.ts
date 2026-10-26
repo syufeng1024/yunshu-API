@@ -83,11 +83,29 @@ function serializeBody(body: unknown): BodyInit | undefined {
 }
 
 /**
+ * Dev-only preview branch. Vite replaces import.meta.env.DEV with false in a
+ * production build, so the dynamic import below is unreachable and removed;
+ * vite.config.ts additionally asserts the fixture marker is absent from dist.
+ */
+async function readDevFixture<T>(path: string, method: string): Promise<T | undefined> {
+  if (!import.meta.env.DEV || import.meta.env.VITE_USE_FIXTURES !== '1') return undefined
+  if (method.toUpperCase() !== 'GET') return undefined
+  const cleanPath = path.split('?')[0] ?? path
+  const { fixtureResponses } = await import('@/fixtures/public')
+  const fixture = (fixtureResponses as Record<string, unknown>)[cleanPath]
+  return fixture as T | undefined
+}
+
+/**
  * Single fetch wrapper. Every non-2xx response is normalised into ApiError so
  * callers can render message + hint instead of an empty table or a zero value.
  */
 async function request<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const { body, redirectOn401 = true, headers: rawHeaders, ...rest } = options
+
+  const fixture = await readDevFixture<T>(path, options.method ?? 'GET')
+  if (fixture !== undefined) return fixture
+
   const headers = new Headers(rawHeaders)
   headers.set('Accept', 'application/json')
   const serialized = serializeBody(body)

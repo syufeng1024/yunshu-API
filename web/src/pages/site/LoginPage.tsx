@@ -1,65 +1,477 @@
-// TODO(T18): implement login/register forms, verification code, agreement
-// checkbox and post-login routing by the server-returned role.
-import { Badge, EmptyState, PageHeader, Tabs } from '@/components'
+import { useState } from 'react'
+import type { FormEvent } from 'react'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
+import { api, errorHint, errorMessage } from '@/api/client'
+import { usePublicPlans } from '@/api/public'
+import { Badge, Button, ErrorState, Icon, Input, Skeleton, Tabs } from '@/components'
+import { safeNextPath } from '@/lib/authRoutes'
+import { ROUTES } from '@/lib/constants'
+import { formatCreditAmount } from '@/lib/format'
 import { usePageTitle } from '@/lib/usePageTitle'
+import { useAuthStore } from '@/stores/auth'
+import type { CurrentUser } from '@/stores/auth'
 
-const PANEL_CLASS = 'rounded-lg border border-dashed border-border-strong bg-surface-muted p-4'
+type LoginMode = 'password' | 'code'
+
+interface AuthResponse {
+  user: CurrentUser
+}
 
 export default function LoginPage() {
   usePageTitle('登录 / 注册')
 
-  return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-10 sm:px-6">
-      <PageHeader
-        title="登录 / 注册"
-        description="页内双 Tab 切换，登录后按账号真实角色跳转。"
-        actions={<Badge variant="primary">页面骨架</Badge>}
+  const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const plansQuery = usePublicPlans()
+  const authStatus = useAuthStore((state) => state.status)
+
+  const tab = searchParams.get('tab') === 'register' ? 'register' : 'login'
+  const planCode = searchParams.get('plan')
+  const intent = searchParams.get('intent')
+  const next = searchParams.get('next')
+
+  const trialPlan = plansQuery.data?.data.find((plan) => plan.code === 'TRIAL')
+  const selectedPlan = planCode
+    ? plansQuery.data?.data.find((plan) => plan.code === planCode)
+    : undefined
+
+  const [loginMode, setLoginMode] = useState<LoginMode>('password')
+  const [identifier, setIdentifier] = useState('')
+  const [password, setPassword] = useState('')
+  const [code, setCode] = useState('')
+  const [agreed, setAgreed] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [hint, setHint] = useState<string | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [sendingCode, setSendingCode] = useState(false)
+  const [codeSent, setCodeSent] = useState(false)
+  const [resetOpen, setResetOpen] = useState(false)
+  const [resetSent, setResetSent] = useState(false)
+  const [claimNotice, setClaimNotice] = useState(false)
+
+  const clearFeedback = () => {
+    setError(null)
+    setHint(null)
+  }
+
+  const selectTab = (nextTab: string) => {
+    clearFeedback()
+    const params = new URLSearchParams(searchParams)
+    params.set('tab', nextTab)
+    setSearchParams(params, { replace: true })
+  }
+
+  const finishAuth = (user: CurrentUser) => {
+    useAuthStore.setState({ status: 'authenticated', user, error: null, hint: null })
+    navigate(safeNextPath(next, user.role), { replace: true })
+  }
+
+  const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    clearFeedback()
+    const account = identifier.trim()
+    if (!account) {
+      setError('请输入邮箱或手机号。')
+      return
+    }
+    if (loginMode === 'password' && !password) {
+      setError('请输入密码。')
+      return
+    }
+    if (loginMode === 'code' && !code.trim()) {
+      setError('请输入验证码。')
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      const payload =
+        loginMode === 'password'
+          ? { identifier: account, password }
+          : { identifier: account, code: code.trim() }
+      const response = await api.post<AuthResponse>('/api/v1/auth/login', payload)
+      finishAuth(response.user)
+    } catch (err) {
+      setError(errorMessage(err))
+      setHint(errorHint(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleRegister = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    clearFeedback()
+    const account = identifier.trim()
+    if (!account) {
+      setError('请输入邮箱或手机号。')
+      return
+    }
+    if (!code.trim()) {
+      setError('请输入验证码。')
+      return
+    }
+    if (!password) {
+      setError('请设置密码。')
+      return
+    }
+    if (!agreed) {
+      setError('请先勾选并同意用户协议与隐私政策。')
+      return
+    }
+
+    setSubmitting(true)
+    try {
+      const response = await api.post<AuthResponse>('/api/v1/auth/register', {
+        identifier: account,
+        code: code.trim(),
+        password,
+      })
+      finishAuth(response.user)
+    } catch (err) {
+      setError(errorMessage(err))
+      setHint(errorHint(err))
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const handleSendCode = async (purpose: 'login' | 'register') => {
+    clearFeedback()
+    const account = identifier.trim()
+    if (!account) {
+      setError('请先填写邮箱或手机号。')
+      return
+    }
+    setSendingCode(true)
+    try {
+      await api.post<void>('/api/v1/auth/verification-codes', { identifier: account, purpose })
+      setCodeSent(true)
+    } catch (err) {
+      setError(errorMessage(err))
+      setHint(errorHint(err))
+    } finally {
+      setSendingCode(false)
+    }
+  }
+
+  const handleReset = async () => {
+    clearFeedback()
+    const account = identifier.trim()
+    if (!account) {
+      setError('请先填写邮箱或手机号。')
+      return
+    }
+    try {
+      await api.post<void>('/api/v1/auth/password-reset', { identifier: account })
+      setResetSent(true)
+    } catch (err) {
+      setError(errorMessage(err))
+      setHint(errorHint(err))
+    }
+  }
+
+  const handleClaim = () => {
+    if (authStatus === 'authenticated') {
+      navigate(`${ROUTES.consoleRecharge}?claim=trial`)
+      return
+    }
+    setClaimNotice(true)
+    selectTab('register')
+  }
+
+  const feedback =
+    error !== null ? (
+      <div role="alert" className="rounded-lg border border-danger bg-danger-soft p-3 text-xs">
+        <p className="font-medium text-danger">{error}</p>
+        {hint ? <p className="mt-1 text-ink-secondary">{hint}</p> : null}
+      </div>
+    ) : null
+
+  const loginForm = (
+    <form className="space-y-4" onSubmit={handleLogin} noValidate>
+      <div className="flex items-center gap-3 text-xs">
+        <button
+          type="button"
+          aria-pressed={loginMode === 'password'}
+          onClick={() => setLoginMode('password')}
+          className={loginMode === 'password' ? 'font-medium text-primary' : 'text-ink-muted'}
+        >
+          密码登录
+        </button>
+        <span className="text-ink-muted">/</span>
+        <button
+          type="button"
+          aria-pressed={loginMode === 'code'}
+          onClick={() => setLoginMode('code')}
+          className={loginMode === 'code' ? 'font-medium text-primary' : 'text-ink-muted'}
+        >
+          验证码登录
+        </button>
+      </div>
+
+      <Input
+        label="邮箱或手机号"
+        value={identifier}
+        onChange={(event) => setIdentifier(event.target.value)}
+        autoComplete="username"
+        placeholder="you@example.com"
+        required
       />
 
-      <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <section className="rounded-xl border border-border bg-surface p-6 shadow-card">
+      {loginMode === 'password' ? (
+        <Input
+          label="密码"
+          type="password"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          autoComplete="current-password"
+          required
+        />
+      ) : (
+        <div className="flex items-end gap-2">
+          <Input
+            label="验证码"
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            autoComplete="one-time-code"
+            inputMode="numeric"
+            required
+          />
+          <Button
+            variant="secondary"
+            size="md"
+            type="button"
+            className="shrink-0 whitespace-nowrap"
+            loading={sendingCode}
+            onClick={() => {
+              void handleSendCode('login')
+            }}
+          >
+            {codeSent ? '重新获取' : '获取验证码'}
+          </Button>
+        </div>
+      )}
+
+      {feedback}
+
+      <Button type="submit" className="w-full" loading={submitting}>
+        登录
+      </Button>
+
+      <div className="flex items-center justify-between gap-3 text-xs">
+        <button
+          type="button"
+          onClick={() => {
+            setResetOpen((open) => !open)
+            setResetSent(false)
+          }}
+          className="text-ink-secondary hover:text-ink"
+        >
+          忘记密码
+        </button>
+        <span className="text-ink-muted">登录后按账号角色进入控制台或运营后台</span>
+      </div>
+
+      {resetOpen ? (
+        <div className="space-y-3 rounded-lg border border-border bg-surface-muted p-3">
+          <p className="text-xs text-ink-secondary">
+            填写注册邮箱或手机号，重置链接会发送到账号绑定的联系方式。
+          </p>
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              void handleReset()
+            }}
+          >
+            发送重置链接
+          </Button>
+          {resetSent ? (
+            <p role="status" className="text-xs text-success">
+              如果账号存在，重置邮件已发送。
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </form>
+  )
+
+  const registerForm = (
+    <form className="space-y-4" onSubmit={handleRegister} noValidate>
+      {claimNotice ? (
+        <div className="rounded-lg border border-info bg-info-soft p-3 text-xs text-ink-secondary">
+          完成注册后，请在控制台主动领取体验积分；注册不会自动发放。
+        </div>
+      ) : null}
+
+      <Input
+        label="邮箱或手机号"
+        value={identifier}
+        onChange={(event) => setIdentifier(event.target.value)}
+        autoComplete="username"
+        placeholder="you@example.com"
+        required
+      />
+
+      <div className="flex items-end gap-2">
+        <Input
+          label="验证码"
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+          autoComplete="one-time-code"
+          inputMode="numeric"
+          required
+        />
+        <Button
+          variant="secondary"
+          size="md"
+          type="button"
+          className="shrink-0 whitespace-nowrap"
+          loading={sendingCode}
+          onClick={() => {
+            void handleSendCode('register')
+          }}
+        >
+          {codeSent ? '重新获取' : '获取验证码'}
+        </Button>
+      </div>
+
+      <Input
+        label="密码"
+        type="password"
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+        autoComplete="new-password"
+        required
+      />
+
+      <label className="flex items-start gap-2 text-xs text-ink-secondary">
+        <input
+          type="checkbox"
+          checked={agreed}
+          onChange={(event) => setAgreed(event.target.checked)}
+          className="mt-0.5 h-4 w-4 rounded border-border-strong text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        />
+        <span>我已阅读并同意用户协议与隐私政策。</span>
+      </label>
+
+      {feedback}
+
+      <Button type="submit" className="w-full" loading={submitting}>
+        注册
+      </Button>
+
+      <p className="text-xs text-ink-muted">
+        注册环节不做实名；领取体验积分与申请开票时再按要求核验。
+      </p>
+    </form>
+  )
+
+  return (
+    <div className="mx-auto w-full max-w-5xl px-4 py-12 sm:px-6">
+      <header className="text-center">
+        <Badge variant="primary" dot>
+          {planCode ? `已选择套餐：${selectedPlan?.name ?? planCode}` : '登录 / 注册'}
+        </Badge>
+        <h1 className="mt-4 text-3xl font-semibold tracking-tight text-ink">进入云枢 API 控制台</h1>
+        <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-ink-secondary">
+          登录后管理密钥、查看用量与账单；运营账号由服务端返回角色后进入运营后台。
+        </p>
+      </header>
+
+      <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <section className="rounded-2xl border border-border bg-surface p-5 shadow-card sm:p-6">
           <Tabs
             ariaLabel="登录或注册"
+            value={tab}
+            onChange={selectTab}
             items={[
-              {
-                id: 'login',
-                label: '登录',
-                content: (
-                  <div className={PANEL_CLASS}>
-                    <EmptyState
-                      compact
-                      title="登录表单待接入"
-                      description="账号 + 密码 / 验证码、忘记密码与第三方登录在 T18 实现。"
-                    />
-                  </div>
-                ),
-              },
-              {
-                id: 'register',
-                label: '注册',
-                content: (
-                  <div className={PANEL_CLASS}>
-                    <EmptyState
-                      compact
-                      title="注册表单待接入"
-                      description="邮箱 / 手机号、验证码、密码与协议勾选在 T18 实现；注册后按服务端规则开通体验版。"
-                    />
-                  </div>
-                ),
-              },
+              { id: 'login', label: '登录', content: loginForm },
+              { id: 'register', label: '注册', content: registerForm },
             ]}
           />
         </section>
 
-        <aside className="h-fit space-y-4 rounded-xl border border-border bg-surface-muted p-6">
-          <h2 className="text-sm font-semibold text-ink">登录后跳转</h2>
-          <ul className="list-disc space-y-1 pl-5 text-sm text-ink-secondary">
-            <li>个人账号进入控制台。</li>
-            <li>运营、财务与超级管理员进入运营后台。</li>
-          </ul>
-          <p className="text-xs text-ink-muted">
-            TODO(T18)：登录接口返回角色，前端不提供任何角色切换入口。
-          </p>
+        <aside className="space-y-4">
+          <section className="rounded-xl border border-border bg-surface p-5 shadow-card">
+            <Badge variant="primary">体验版</Badge>
+            <h2 className="mt-3 text-sm font-semibold text-ink">主动领取体验积分</h2>
+            {plansQuery.isLoading ? (
+              <div className="mt-3 space-y-2">
+                <Skeleton className="h-4 w-full" />
+                <Skeleton className="h-4 w-2/3" />
+              </div>
+            ) : plansQuery.isError ? (
+              <div className="mt-3">
+                <ErrorState
+                  compact
+                  message={errorMessage(plansQuery.error)}
+                  onRetry={() => {
+                    void plansQuery.refetch()
+                  }}
+                />
+              </div>
+            ) : trialPlan ? (
+              <p className="mt-2 text-xs leading-relaxed text-ink-secondary">
+                体验积分需主动领取：
+                <span className="font-medium tabular-nums text-ink">
+                  {formatCreditAmount(trialPlan.grant_bonus_micro)}
+                </span>{' '}
+                积分（7 天体验版）。注册不会自动发放，领取入口在控制台。
+              </p>
+            ) : (
+              <p className="mt-2 text-xs leading-relaxed text-ink-secondary">
+                体验积分需主动领取，额度以控制台展示为准；注册不会自动发放。
+              </p>
+            )}
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="mt-4 w-full"
+              onClick={handleClaim}
+            >
+              主动领取体验积分
+            </Button>
+          </section>
+
+          <section className="rounded-xl border border-border bg-surface-muted p-5">
+            <h2 className="text-sm font-semibold text-ink">登录后跳转</h2>
+            <ul className="mt-2 space-y-1 text-xs text-ink-secondary">
+              <li>个人账号 → 控制台</li>
+              <li>运营、财务与超级管理员 → 运营后台</li>
+            </ul>
+            <p className="mt-2 text-xs text-ink-muted">
+              角色由服务端返回，前端不提供角色切换入口。
+            </p>
+          </section>
+
+          <section className="rounded-xl border border-border bg-surface p-5">
+            <h2 className="text-sm font-semibold text-ink">接入前先看文档</h2>
+            <p className="mt-2 text-xs leading-relaxed text-ink-secondary">
+              Base URL 是否带 /v1、模型名从哪里取，文档页与工具集成页都给了最小请求。
+            </p>
+            <div className="mt-3 flex flex-wrap gap-3 text-xs">
+              <Link to={ROUTES.docs} className="font-medium text-primary hover:text-primary-hover">
+                开发者文档
+              </Link>
+              <Link
+                to={ROUTES.integrations}
+                className="font-medium text-primary hover:text-primary-hover"
+              >
+                工具集成
+              </Link>
+            </div>
+          </section>
+
+          {intent === 'sales' ? (
+            <div className="flex gap-2 rounded-xl border border-info bg-info-soft p-4 text-xs text-ink-secondary">
+              <Icon name="ticket" className="mt-0.5 h-4 w-4 shrink-0 text-info" />
+              企业采购咨询：完成注册后可在控制台工单中心提交需求。
+            </div>
+          ) : null}
         </aside>
       </div>
     </div>
