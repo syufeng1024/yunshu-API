@@ -193,6 +193,7 @@ flowchart LR
 | T18 | 2026-10-26 | 2026-10-26 | ⚠️ **有条件通过** | 4 项（均非阻塞） | 官网 5 页 + 预览数据层；213 turns / 1365s / $18.13 |
 | T03 | 2026-10-26 | 2026-10-26 | ✅ **通过**（含一次返工） | 3 项非阻塞 | 17 迁移 / 54 业务表 / 45 键；107+33 turns / 567s / $8.77 |
 | T04 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 4 项非阻塞 | 账本与计费内核；169 turns / 1392s / $25.24 |
+| T05 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 3 项非阻塞 | 配置快照与策略注册表；115 turns / 1093s / $12.92 |
 
 ### T01 验收记录（交付总监独立复核，2026-10-26）
 
@@ -365,6 +366,36 @@ flowchart LR
 **四项遗留（非阻塞）**：① 真实 tokenizer 未绑定，`billing.InputCounter` 留了注入缝，T07 提供实现；② `long_ctx_prehold_guard_bp` 的取阶梯价策略属 T07 编排；③ 冻结退款与透支并存的批次不变量边界未覆盖，T13 补；④ `t_recharge_order` 的 `REFUNDED/PARTIAL_REFUNDED` 流转属 T13（T04 只把退款单置 `PAID`）。
 
 **环境事项**：本机缺 C 编译器 → `go test -race` 不可用。已用容器验证通过，并据此在 T21/T22 要求 **CI 与发布构建必须在 Linux 环境跑 `-race`**。
+
+### T05 验收记录（交付总监独立复核，2026-10-26）
+
+| 复核项 | 结果 | 证据 |
+| :--- | :--- | :--- |
+| 键数 | ✅ **45** | `KeyCount=45`，测试与 `t_config_item` 种子逐键比对通过 |
+| 运行时白名单 | ✅ 12 | `RuntimeKeyCount=12`；`quota.overdraft_warn_days`、`pricing.cache_billing_enabled`、`gw.retry_max`、`pricing.min_margin_bp` 写入均被拒 |
+| 架构方向 | ✅ | `go list -deps ./internal/config` 中无 `internal/{gw,ledger,control,redisx}` —— 注册方向未倒转 |
+| 键字面量 | ✅ | 除 `key.go` 外全仓无 `"billing./pricing./quota./gw./..."` 字面量 |
+| 单测 | ✅ | 79.7% 覆盖，全 PASS |
+| **竞态** | ✅ | 容器内 `-race` 跑 `config` + `ledger` 两包均 PASS |
+| 版本偏斜 | ✅ | 「新 `cfg:ver` + 旧快照」→ 重拉 3 次后回退旧指针、打 WARN、不崩 |
+| 30s 兜底 | ✅ | 订阅失败 / 收不到消息时，轮询仍使版本生效 |
+| 快照不可变 | ✅ | 全私有字段 + `atomic.Pointer`；读路径 bench `22.66 ns/op`、**0 allocs** |
+| 体积上限 | ✅ | 256 KB 恰好拒绝、少 1 字节接受；超限时在碰 DB/Redis 前就报错 |
+| K19 只存标准价 | ✅ | `TestPriceCacheStoresStandardPriceOnly` |
+| 税率默认锁定 | ✅ | 改 `pricing.tax_rate_multiplier` 默认值测试即失败（`TODO(Finance)` 在位） |
+| Redis 隔离 | ✅ | 测试用 DB 15 并 `FLUSHDB`，本地开发态 DB 0 的 `cfg:*` 未被污染 |
+
+**实现方额外加的两道防护（超出卡片要求，我认可）**：① 发布时用 MySQL `GET_LOCK('yunshu:config_publish')` 串行化多副本发布；② 首次发布时若 `cfg:ver` 低于种子行版本，先把基线修到 DB 最大版本再 `INCR`——否则「首次发布版本号 1 == 已装载版本 1」会让节点跳过新快照。
+
+**三项遗留**：
+
+| # | 项 | 处置 |
+| :--- | :--- | :--- |
+| 1 | `StartupCheck` / `Watcher.Run` **未接入 `cmd/*/main.go`** | 是我划的边界（本卡只做 `internal/config`）。启动期门禁已在库层验证；**T07 必须在监听器启动前调用 `config.StartupCheck` 并起 `Watcher`**，已写入 T07 待办 |
+| 2 | 8 个策略族的内置实现未接入 T04 账本 | 行为等价（V1 各只有一档），T04 未改动。若后续要真正切换实现，由业务包 `init()` 注册 |
+| 3 | 只装载 `scope='GLOBAL'`，`CHANNEL`/`USER` 覆盖行留待后续 | 与 TDS §1.8 的 Expand-Contract 顺序一致，非缺陷 |
+
+**一个口径提醒**：TDS 把 `pricing.tier_chain` / `pricing.group_switch_mode` 标为 C3，卡内要求纳入 C2 注册表。按卡执行（两者 V1 均单一取值，行为等价），不另开例外。
 
 ---
 
