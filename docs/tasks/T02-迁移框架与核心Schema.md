@@ -12,7 +12,9 @@
 
 ## 1. 目标
 
-交付**可审计、可回滚、防重号**的迁移引擎，以及 54 张表中的 **46 张核心表**（0001–0006），外加 `t_plan` 种子数据（0009）。本卡完成后，"库能建起来、编号不会撞、回滚有脚本、checksum 有守卫"，后续所有卡只做增量。
+交付**可审计、可回滚、防重号**的迁移引擎，以及 54 张表中的 **47 张核心表**（0001–0006），外加 `t_plan` 种子数据（0009）。本卡完成后，"库能建起来、编号不会撞、回滚有脚本、checksum 有守卫"，后续所有卡只做增量。
+
+> **勘误（2026-10-26 交付总监，验收时修正）**：本节与 §7 A2 原写「46 张」，系我按 `8+11+26+2` 心算时漏掉 `t_config_publish`（TDS §1.8 有定义、§1.2 分层清单未收录）。按 §4 逐表清单实际为 **47 张**；54 = 47（本卡）+ 7（T03 的 0012/0014/0015/0016/0017）。实现方发现差异后**未删表凑数**、原样交付并报回，处置正确。
 
 ## 2. 必读
 
@@ -93,7 +95,7 @@
 | # | 判定 | 方式 |
 | :--- | :--- | :--- |
 | A1 | `make migrate` 全绿，`schema_migrations` 有 7 行（0001–0006、0009） | 复跑 + SQL |
-| A2 | `SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='yunshu'` == **46** | SQL |
+| A2 | 业务表 **47** 张（`information_schema` 计数含 `schema_migrations` 共 48） | SQL |
 | A3 | `SHOW VARIABLES LIKE 'collation_database'` == `utf8mb4_0900_as_cs`；`SHOW TABLE STATUS` 中 46 张表 collation 全为 `utf8mb4_0900_as_cs` | SQL |
 | A4 | `grep -c "timestamp" sql/mysql/*.sql` == 0 | grep |
 | A5 | `grep -nE "decimal|float|double" sql/mysql/*.sql` 仅命中 `success_rate` 一处 | grep |
