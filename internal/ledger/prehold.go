@@ -1,0 +1,241 @@
+package ledger
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"time"
+
+	"yunshu.dev/core/internal/billing"
+)
+
+// TxnTimeout is the hard budget for one prehold transaction (card §4.17).
+// It is deliberately short: prehold runs on the gateway's critical path.
+const TxnTimeout = 200 * time.Millisecond
+
+// DefaultPreholdTTL covers the non-stream legal request lifetime; the caller
+// must pass 600s for streaming requests.
+const DefaultPreholdTTL = 125 * time.Second
+
+// PreholdParams carries every number the prehold needs. No threshold is read
+// from t_config_item: T05 has not delivered the configuration snapshot yet,
+// and the ledger must be independently testable.
+type PreholdParams struct {
+	RequestID string
+	UserID    int64
+	APIKeyID  int64
+	ModelID   int64
+	RouteID   *int64
+	NodeID    string
+
+	// RawEstMicro is the admission estimate: tokenizer input + max_tokens
+	// output, with no margin. Admission uses this value (G-02).
+	RawEstMicro int64
+	// EstMicro is the prehold estimate: safety margin applied at the token
+	// stage, prehold ratio applied at the amount stage.
+	EstMicro int64
+	// MaxHoldRatioBP is billing.prehold_max_ratio in basis points (5000 = 50%).
+	MaxHoldRatioBP int64
+	// ExpiresAt is the hold's recovery deadline.
+	ExpiresAt time.Time
+}
+
+// PreholdResult describes what happened. Idempotent is true when the request
+// already had a hold; no second deduction occurred.
+type PreholdResult struct {
+	RequestID            string
+	HoldMicro            int64
+	EstimatedMicro       int64
+	AvailableBeforeMicro int64
+	State                string
+	Idempotent           bool
+}
+
+// Admit is the 402 admission predicate. It compares the RAW estimate with the
+// available balance. It never uses est and never adds the overdraft limit.
+func Admit(rawEstMicro, availableMicro int64) bool {
+	return rawEstMicro <= availableMicro
+}
+
+// HoldMicro computes MIN(est, available × max_ratio), floored. A non-positive
+// available balance yields zero: the overdraft limit is not spendable here.
+func HoldMicro(estMicro, availableMicro, maxRatioBP int64) int64 {
+	if estMicro <= 0 || availableMicro <= 0 || maxRatioBP <= 0 {
+		return 0
+	}
+	if maxRatioBP > billing.BasisPoints {
+		maxRatioBP = billing.BasisPoints
+	}
+	capMicro := availableMicro * maxRatioBP / billing.BasisPoints
+	if capMicro < estMicro {
+		return capMicro
+	}
+	return estMicro
+}
+
+// Prehold locks the account, admits the request on raw_est, computes the hold
+// from est and available×ratio, and writes the prehold ledger row, the hold
+// row and the balance CAS in one transaction.
+func (s *Store) Prehold(ctx context.Context, p PreholdParams) (PreholdResult, error) {
+	var result PreholdResult
+	err := s.withTx(ctx, s.PreholdTimeout, func(ctx context.Context, tx *sql.Tx) error {
+		var err error
+		result, err = s.preholdTx(ctx, tx, p)
+		return err
+	})
+	if err != nil {
+		if errors.Is(err, ErrPreholdExists) || errors.Is(err, ErrDuplicateIdem) {
+			return s.getPrehold(ctx, p.RequestID)
+		}
+		return PreholdResult{}, err
+	}
+	return result, nil
+}
+
+func (s *Store) preholdTx(ctx context.Context, tx *sql.Tx, p PreholdParams) (PreholdResult, error) {
+	now := s.now()
+	if err := validatePrehold(p); err != nil {
+		return PreholdResult{}, err
+	}
+
+	// Idempotency: the unique key on request_id is the final guard, but this
+	// SELECT ... FOR UPDATE makes the common replay path cheap and also takes
+	// a gap lock that serialises a concurrent first insert.
+	if existing, err := s.readHoldTx(ctx, tx, p.RequestID); err == nil {
+		return existing, nil
+	} else if !errors.Is(err, sql.ErrNoRows) {
+		return PreholdResult{}, err
+	}
+
+	if !p.ExpiresAt.IsZero() && !p.ExpiresAt.After(now) {
+		return PreholdResult{}, fmt.Errorf("%w: expires_at must be in the future", ErrInvalidParam)
+	}
+
+	acct, err := LockAccount(ctx, tx, p.UserID)
+	if err != nil {
+		return PreholdResult{}, err
+	}
+	available := acct.AvailableMicro()
+	if !Admit(p.RawEstMicro, available) {
+		return PreholdResult{}, fmt.Errorf("%w: available=%d raw_est=%d",
+			ErrInsufficientCredits, available, p.RawEstMicro)
+	}
+
+	hold := HoldMicro(p.EstMicro, available, p.MaxHoldRatioBP)
+	bonusPart := int64(0)
+	if hold > 0 && acct.BalanceBonusMicro > 0 {
+		bonusPart = min64(hold, acct.BalanceBonusMicro)
+	}
+	rechargePart := hold - bonusPart
+	if rechargePart > 0 && rechargePart > acct.BalanceRechargeMicro {
+		return PreholdResult{}, fmt.Errorf("%w: hold=%d recharge_part=%d balance_recharge=%d",
+			ErrInvalidParam, hold, rechargePart, acct.BalanceRechargeMicro)
+	}
+
+	expiresAt := p.ExpiresAt
+	if expiresAt.IsZero() {
+		expiresAt = now.Add(DefaultPreholdTTL)
+	}
+
+	// The hold row is inserted before the ledger row so a concurrent duplicate
+	// is caught before any balance movement is recorded.
+	const holdSQL = `INSERT INTO t_prehold_hold (
+		request_id, user_id, api_key_id, hold_micro, estimated_micro, model_id,
+		route_id, state, expires_at, node_id, created_at
+	) VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+	if _, err := tx.ExecContext(ctx, holdSQL,
+		p.RequestID, p.UserID, p.APIKeyID, hold, p.EstMicro, p.ModelID,
+		p.RouteID, HoldStateHeld, expiresAt.UTC(), p.NodeID, now,
+	); err != nil {
+		if isDuplicate(err) {
+			return PreholdResult{}, fmt.Errorf("%w: %s", ErrPreholdExists, p.RequestID)
+		}
+		return PreholdResult{}, fmt.Errorf("ledger: insert prehold: %w", err)
+	}
+
+	before := acct.TotalMicro()
+	entryID, err := AppendEntry(ctx, tx, s.Entries, now, Entry{
+		UserID:              p.UserID,
+		Direction:           DirectionDebit,
+		BizType:             BizTypeConsumePrehold,
+		AmountBonusMicro:    -bonusPart,
+		AmountRechargeMicro: -rechargePart,
+		AmountTotalMicro:    -hold,
+		BalanceBeforeMicro:  before,
+		BalanceAfterMicro:   before - hold,
+		RequestID:           &p.RequestID,
+		IdemKey:             "prehold:" + p.RequestID,
+		CreatedAt:           now,
+	})
+	if err != nil {
+		return PreholdResult{}, err
+	}
+
+	if err := acct.Apply(ctx, tx, BalanceDelta{
+		BonusMicro:    -bonusPart,
+		RechargeMicro: -rechargePart,
+	}, entryID, nil, now); err != nil {
+		return PreholdResult{}, err
+	}
+
+	return PreholdResult{
+		RequestID:            p.RequestID,
+		HoldMicro:            hold,
+		EstimatedMicro:       p.EstMicro,
+		AvailableBeforeMicro: available,
+		State:                HoldStateHeld,
+	}, nil
+}
+
+func validatePrehold(p PreholdParams) error {
+	switch {
+	case p.RequestID == "":
+		return fmt.Errorf("%w: request_id is required", ErrInvalidParam)
+	case p.UserID <= 0, p.APIKeyID <= 0, p.ModelID <= 0:
+		return fmt.Errorf("%w: user_id/api_key_id/model_id must be positive", ErrInvalidParam)
+	case p.NodeID == "":
+		return fmt.Errorf("%w: node_id is required", ErrInvalidParam)
+	case p.RawEstMicro < 0, p.EstMicro < 0:
+		return fmt.Errorf("%w: estimates must not be negative", ErrInvalidParam)
+	case p.MaxHoldRatioBP < 0 || p.MaxHoldRatioBP > billing.BasisPoints:
+		return fmt.Errorf("%w: max hold ratio %d bp", ErrInvalidParam, p.MaxHoldRatioBP)
+	}
+	return nil
+}
+
+func (s *Store) readHoldTx(ctx context.Context, tx *sql.Tx, requestID string) (PreholdResult, error) {
+	const q = `SELECT request_id, hold_micro, estimated_micro, state
+	             FROM t_prehold_hold WHERE request_id = ? FOR UPDATE`
+	var r PreholdResult
+	err := tx.QueryRowContext(ctx, q, requestID).Scan(
+		&r.RequestID, &r.HoldMicro, &r.EstimatedMicro, &r.State,
+	)
+	if err != nil {
+		return PreholdResult{}, err
+	}
+	r.Idempotent = true
+	return r, nil
+}
+
+// getPrehold reads a hold after a concurrent-insert race. It is intentionally
+// outside the failed transaction so the caller sees the winner's row.
+func (s *Store) getPrehold(ctx context.Context, requestID string) (PreholdResult, error) {
+	var r PreholdResult
+	err := s.withTx(ctx, s.PreholdTimeout, func(ctx context.Context, tx *sql.Tx) error {
+		var err error
+		r, err = s.readHoldTx(ctx, tx, requestID)
+		return err
+	})
+	if err != nil {
+		return PreholdResult{}, err
+	}
+	return r, nil
+}
+
+func min64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
+}
