@@ -5,6 +5,7 @@ go 1.24.0
 require (
 	github.com/go-sql-driver/mysql v1.10.1
 	github.com/redis/go-redis/v9 v9.22.0
+	golang.org/x/crypto v0.33.0
 	yunshu.dev/relaykit v0.0.0
 )
 

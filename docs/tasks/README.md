@@ -102,30 +102,30 @@
 | 卡 | 标题 | 依赖 | 交付根 | 状态 |
 | :--- | :--- | :--- | :--- | :--- |
 | [T02](T02-迁移框架与核心Schema.md) | 迁移框架与核心 Schema（0001–0006、0009） | T01 | `internal/platform/migrate/` | ✅ |
-| [T03](T03-幂等与增量迁移.md) | 幂等与增量迁移（0010–0017）+ 配置种子 | T02 | `internal/platform/migrate/sql/mysql/` | ⬜ |
+| [T03](T03-幂等与增量迁移.md) | 幂等与增量迁移（0010–0017）+ 配置种子 | T02 | `internal/platform/migrate/sql/mysql/` | ✅ |
 
 ### 阶段 2 · 核心域
 
 | 卡 | 标题 | 依赖 | 交付根 | 状态 |
 | :--- | :--- | :--- | :--- | :--- |
-| [T04](T04-账本与计费内核.md) | 账本与计费内核 | T03 | `internal/ledger/`、`internal/billing/` | ⬜ |
-| [T05](T05-配置快照与策略注册表.md) | 配置快照与策略注册表 | T03 | `internal/config/` | ⬜ |
-| [T06](T06-Redis键空间与四维限流.md) | Redis 键空间与四维限流 | T03 | `internal/redisx/`、`internal/ratelimit/` | ⬜ |
+| [T04](T04-账本与计费内核.md) | 账本与计费内核 | T03 | `internal/ledger/`、`internal/billing/` | ✅ |
+| [T05](T05-配置快照与策略注册表.md) | 配置快照与策略注册表 | T03 | `internal/config/` | ✅ |
+| [T06](T06-Redis键空间与四维限流.md) | Redis 键空间与四维限流 | T03 | `internal/redisx/`、`internal/ratelimit/` | ✅ |
 
 ### 阶段 3 · 网关数据面
 
 | 卡 | 标题 | 依赖 | 交付根 | 状态 |
 | :--- | :--- | :--- | :--- | :--- |
 | [T07](T07-网关流水线P01-P14.md) | 网关流水线 P01–P14 | T04,T05,T06 | `cmd/gatewayd/`、`internal/gw/` | ✅ |
-| [T08](T08-上游分发与SSE转发.md) | 上游分发·协议转换·SSE（P15–P25） | T07 | `relaykit/`、`internal/dispatch/` | ⬜ |
-| [T09](T09-结算清算与对账.md) | 结算清算与对账（P26–P31 + jobsd） | T08 | `internal/settle/`、`cmd/jobsd/` | ⬜ |
+| [T08](T08-上游分发与SSE转发.md) | 上游分发·协议转换·SSE（P15–P25） | T07 | `relaykit/`、`internal/dispatch/` | ✅ |
+| [T09](T09-结算清算与对账.md) | 结算清算与对账（P26–P31 + jobsd） | T08 | `internal/settle/`、`cmd/jobsd/` | ✅ |
 | [T10](T10-错误码与响应契约.md) | 错误码与响应契约（65 码） | —（**已前移到 T07 之前**） | `internal/apierr/` | ✅ |
 
 ### 阶段 4 · 控制面
 
 | 卡 | 标题 | 依赖 | 交付根 | 状态 |
 | :--- | :--- | :--- | :--- | :--- |
-| [T11](T11-控制面骨架与RBAC.md) | 控制面骨架·会话鉴权·RBAC | T03,T05 | `cmd/controld/`、`internal/control/` | ⬜ |
+| [T11](T11-控制面骨架与RBAC.md) | 控制面骨架·会话鉴权·RBAC | T03,T05 | `cmd/controld/`、`internal/control/` | 🟨 第一段 ✅ |
 | [T12](T12-用户密钥与模型域API.md) | 用户 / 密钥 / 模型域 API | T11 | `internal/control/user/`、`.../key/`、`.../model/` | ⬜ |
 | [T13](T13-资金域API.md) | 资金域 API（订单/退款/发票/提额/套餐） | T11,T04 | `internal/control/fund/` | ⬜ |
 | [T14](T14-用量账单与日志API.md) | 用量·账单·请求日志 API | T11 | `internal/control/usage/` | ⬜ |
@@ -137,7 +137,7 @@
 | 卡 | 标题 | 依赖 | 交付根 | 状态 |
 | :--- | :--- | :--- | :--- | :--- |
 | [T17](T17-前端基线与设计系统.md) | 前端基线·设计系统·品牌资产 | T01 | `web/` | ✅ |
-| [T18](T18-官网5页.md) | 官网 5 页 | T17,T12,T15 | `web/src/pages/site/` | ⬜ |
+| [T18](T18-官网5页.md) | 官网 5 页 | T17,T12,T15 | `web/src/pages/site/` | ✅ |
 | [T19](T19-控制台9页.md) | 控制台 9 页 | T17,T12,T13,T14,T16 | `web/src/pages/console/` | ⬜ |
 | [T20](T20-运营后台8页.md) | 运营后台 8 页 | T17,T15,T16 | `web/src/pages/admin/` | ⬜ |
 
@@ -218,6 +218,7 @@ flowchart LR
 | T07 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 14 项（4 项需 T11/T08 联调） | 网关前置段；157 turns / 1045s / $20.27 |
 | T08 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 5 项（真实上游与 ROUTING 快照待 T11） | relaykit + dispatch + stream；149 turns / 833s / $9.97 |
 | T09 | 2026-10-26 | 2026-10-26 | ✅ **通过**（两段） | 4 项（1 项须 T22 建表） | 0021 两表 + 结算闭环 + 对账内核；327+307 turns / 3158s / $40.75 |
+| T11 第一段 | 2026-10-27 | 2026-10-27 | ✅ **通过**（D-22 最小闭环） | 6 项 R-07 待回写源文档；第二段未派 | 控制面骨架 + 快照/K19/K13 生产方 + seedctl；**首次真实 curl 打通并扣钱**；248 turns / 1983s / $20.94 |
 
 ### T01 验收记录（交付总监独立复核，2026-10-26）
 

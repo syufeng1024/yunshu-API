@@ -8,7 +8,7 @@
 | 依赖 | T03、T05、**T10**（错误码与写出口，本卡所有失败分支都消费它） |
 | 可并行 | 与 T07 / T08 并行 |
 | 交付根 | `cmd/controld/`、`internal/control/` |
-| 状态 | ⬜ 未开始 |
+| 状态 | 🟨 第一段 ✅（2026-10-27 验收通过）· 第二段待派 |
 
 ## 1. 目标
 
@@ -138,3 +138,40 @@ SoD: A5 输出
 openapi: lint 输出
 遗留:
 ```
+
+---
+
+## 9. 第一段完成回执（2026-10-27 验收通过）
+
+**交付**：248 轮 / 1983s / $20.94。改动 `cmd/controld/main.go`、`go.mod`、`go.sum` + 新增四目录
+`internal/control/`（server + mw/{recover,errs,paging,session,authz} + auth/{login,register,handler,normalize} + audit）、
+`internal/boot/`（route_snapshot / price_cache）、`internal/apikey/`、`cmd/seedctl/`。共 22 个 .go 文件。
+
+**验收方式**：交付总监独立复跑，不采信自述。清空开发库与 Redis 后从空库重来。
+
+| 项 | 结果 |
+| :--- | :--- |
+| `go build ./...` / `go vet ./...` | exit 0 |
+| `gofmt -l` 交付路径 | 无输出（另 200 个既有文件被标记，实测为 `core.autocrlf=true` 的检出 CRLF，非本卡引入） |
+| `go test ./internal/{control/...,boot/...,apikey/...}` | 全绿 |
+| `bash scripts/lint.sh` | 8 项全 ok |
+| B1 seedctl | t_user / t_credit_account / t_api_key 各 1；余额 100000；无明文列；`key_hash` 不含明文 Key |
+| B2 快照 | `cfg:ver=3`，2068B，models 2 / routes 2 / channels 1 / groups 3，`keyModels={"1":{"mode":"SELECTED","model_ids":[1]}}` |
+| B3 非流式 | 200，body 为 fakeupstream 内容，`X-Credits-Consumed: 116`，剩余 99884 |
+| B4 落库 | usage 1 行 SUCCESS 7/3/116；ledger PREHOLD -1742 / RELEASE +1742 / SETTLE -116；余额 100000→99884 |
+| B5 流式 | 200，有 `X-Credits-Preheld: 1742`、无 `X-Credits-Consumed`；usage is_stream=1 计 7/4/136；余额→99748 |
+| B6 鉴权 | 无 Key 401 `invalid_api_key`；错 Key 401；未勾选模型 403 `model_not_authorized` |
+| 控制面 | 登录 200（大写标识符归一化）；PERSONAL→`/api/admin/whoami` 403 `permission_denied`；未登录 401；`page_size=1000` 400；登出 204 后旧 sid 401、K20 清空 |
+| 硬约束抽样 | ①`role ==` 在 authz 外 0 处 ②`account_disabled` 仅出现在「不使用」的注释 ③`MaxPageSize=100` ④K20 只存 uid、角色每次查库 ⑤`internal/apierr/` 零 diff（未新增第 66 码） |
+
+**R-07 上报的 6 处卡片/文档缺陷**（均已由实现方按实测处理，待人回写源文档）：
+
+1. **D-14 `upstream_key_enc`**：dispatch 要的是 `v1:` 信封**字符串本身**，不是「信封再 base64 一层」。照卡实现首轮 503。
+2. **`upstream_model_name_map` 为 NULL 被拒**：快照必须序列化为 `{}`，不得输出 `null`。
+3. **Key 长度算术不成立**：`sk-`+48 字符 Crockford ≠ 20 字节熵（应为 32 字符），二选一改。
+4. **`t_user.user_no char(12)`** 容不下「U+yyyymmdd+4位序号」=13 字符。
+5. **65 码表无会话/凭证/重复注册/查询参数类码**：建议新增 `session_expired`、`invalid_credentials`、`account_exists`、`invalid_query_parameter`。
+6. **路径口径**：TDS §1 写 `/console/*`，T11 §3 与 web 实际用 `/api/console/*`，需统一。
+
+**遗留（第二段 / T12 / T15 / T21）**：10 角色矩阵、CSRF、登录限流与锁定、验证码/找回、设备指纹、体验积分领取、审计全量前后值、`api/openapi.yaml`、`docs/control-api.md`、`GET /api/admin/audit-logs`；`-race` 留待 T21 的 Linux CI。
+**生产化缺口**：审计 IP 不信任 `X-Forwarded-For`（需可信代理列表）、CORS 白名单、改密即踢出所有 sid。
