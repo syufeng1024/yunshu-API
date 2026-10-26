@@ -1,0 +1,26 @@
+# Host port overlay for machines where 3306 / 6379 are already taken
+# (e.g. a local MySQL 8.4 install or another project's Redis).
+#
+# The base deploy/docker-compose.yml stays canonical at 3306 / 6379 — cards and
+# docs refer to those ports. This overlay only moves the HOST side; container
+# ports are unchanged, so the schema and collation guarantees are identical.
+#
+# `!override` is required: compose APPENDS sequence values by default, so a
+# plain `ports:` here would publish 3306 as well and still collide.
+#
+# Usage:
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.portmap.yml up -d --wait
+# or simply:
+#   scripts/dev.sh up
+#
+# The local MySQL 8.4 install must NOT be used as a substitute: GR-01 pins the
+# project to MySQL 8.0.
+
+services:
+  mysql:
+    ports: !override
+      - "13306:3306"
+
+  redis:
+    ports: !override
+      - "16379:6379"
