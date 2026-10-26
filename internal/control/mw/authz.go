@@ -9,23 +9,27 @@ import (
 // hiding a menu item is never a substitute (T11 hard constraint 1).
 type Permission string
 
-// The first segment ships three permissions only. The full role matrix
-// (user.read / fund.approve / price.write / model.write / ticket.reply ...)
-// belongs to the second segment.
+// T11 shipped three permissions. T12 adds the two read capabilities its
+// console routes need; the rest of the role matrix (fund.approve /
+// price.write / model.write / ticket.reply ...) remains T15's.
 const (
+	PermUserRead  Permission = "user.read"
+	PermKeyRead   Permission = "key.read"
 	PermKeyWrite  Permission = "key.write"
 	PermModelRead Permission = "model.read"
 	PermAdminAll  Permission = "admin.all"
 )
 
-// rolePermissions is the minimal first-segment projection. FINANCE and OPS
-// both receive admin.all because the three-permission vocabulary has no finer
-// admin split yet; the second segment replaces this table with the 10-role
-// matrix. Keeping the table here means a handler can never decide on its own.
+// rolePermissions is the current projection. FINANCE and OPS both receive
+// admin.all because the permission vocabulary has no finer admin split yet;
+// T15 replaces this table with the 10-role matrix. Keeping the table here
+// means a handler can never decide on its own.
 var rolePermissions = map[string]map[Permission]bool{
 	"PERSONAL": {
-		PermModelRead: true,
+		PermUserRead:  true,
+		PermKeyRead:   true,
 		PermKeyWrite:  true,
+		PermModelRead: true,
 	},
 	"OPS": {
 		PermModelRead: true,
@@ -36,8 +40,10 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermAdminAll:  true,
 	},
 	"SUPER_ADMIN": {
-		PermModelRead: true,
+		PermUserRead:  true,
+		PermKeyRead:   true,
 		PermKeyWrite:  true,
+		PermModelRead: true,
 		PermAdminAll:  true,
 	},
 }

@@ -39,20 +39,24 @@ func WriteJSON(w http.ResponseWriter, status int, body any) error {
 // SessionMissing is the 401 used when the sid cookie is absent, malformed or
 // no longer present in K20.
 //
-// E.1 has no session-specific code. invalid_api_key is the only 401
-// authentication_error available, so it is reused rather than inventing a
-// 66th code; the receipt records a proposed `session_expired` code for the
-// next PRD/TDS revision. account_disabled is deliberately not used: that is
-// "the platform disabled this account", which is a different condition.
-func SessionMissing() *apierr.APIError { return apierr.New(apierr.CodeInvalidAPIKey) }
+// Erratum E-21 added `session_expired` for exactly this condition. Using
+// invalid_api_key (the T11 transitional mapping) told a console user their API
+// key was wrong when the correct action is "log in again".
+func SessionMissing() *apierr.APIError { return apierr.New(apierr.CodeSessionExpired) }
 
 // PermissionDenied is the 403 for an authenticated principal whose role lacks
 // the route's declared permission.
 func PermissionDenied() *apierr.APIError { return apierr.New(apierr.CodePermissionDenied) }
 
-// InvalidField maps a bad query/body field to the closest existing 400 code.
-// E.1 has no invalid_query_parameter; invalid_request_body is the nearest
-// invalid_request_error and carries the field path in its message.
+// InvalidField maps a bad body field to invalid_request_body. The field path
+// travels in the message so the client can point at the exact member.
 func InvalidField(path string) *apierr.APIError {
 	return apierr.Newf(apierr.CodeInvalidRequestBody, path)
+}
+
+// InvalidQueryField maps a bad query parameter to invalid_query_parameter
+// (errata E-21). Body validation and URL validation are separate codes so a
+// client can tell "fix the JSON" from "fix the URL".
+func InvalidQueryField(name string) *apierr.APIError {
+	return apierr.Newf(apierr.CodeInvalidQueryParameter, name)
 }

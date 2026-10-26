@@ -24,8 +24,10 @@ type fixtureRow struct {
 }
 
 var prdE1Fixture = []fixtureRow{
-	// E.1.1 鉴权与账号 (7)
+	// E.1.1 鉴权与账号 (9; E-21 added invalid_credentials + session_expired)
 	{CodeInvalidAPIKey, TypeAuthentication, 401, 0, RetryNo, OwnerBusiness},
+	{CodeInvalidCredentials, TypeAuthentication, 401, 0, RetryNo, OwnerBusiness},
+	{CodeSessionExpired, TypeAuthentication, 401, 0, RetryNo, OwnerBusiness},
 	{CodeKeyExpired, TypeAuthentication, 401, 0, RetryNo, OwnerBusiness},
 	{CodeKeyDisabled, TypeAuthorization, 403, 0, RetryNo, OwnerBusiness},
 	{CodeAccountDisabled, TypeAuthorization, 403, 0, RetryNo, OwnerBusiness},
@@ -39,8 +41,9 @@ var prdE1Fixture = []fixtureRow{
 	{CodeModelNotInGroup, TypeAuthorization, 403, 0, RetryNo, OwnerBusiness},
 	{CodeModelNotAuthorized, TypeAuthorization, 403, 0, RetryNo, OwnerBusiness},
 
-	// E.1.3 请求校验 (11)
+	// E.1.3 请求校验 (12; E-21 added invalid_query_parameter)
 	{CodeInvalidRequestBody, TypeInvalidRequest, 400, 0, RetryNo, OwnerBusiness},
+	{CodeInvalidQueryParameter, TypeInvalidRequest, 400, 0, RetryNo, OwnerBusiness},
 	{CodeInvalidMessages, TypeInvalidRequest, 400, 0, RetryNo, OwnerBusiness},
 	{CodeInvalidTemperature, TypeInvalidRequest, 400, 0, RetryNo, OwnerBusiness},
 	{CodeMaxTokensExceeded, TypeInvalidRequest, 400, 0, RetryNo, OwnerBusiness},
@@ -96,8 +99,9 @@ var prdE1Fixture = []fixtureRow{
 	{CodeAuthUnavailable, TypeServiceUnavailable, 503, 5, RetryYes, OwnerPlatform},
 	{CodeInternalError, TypeInternal, 500, 0, RetryNo, OwnerPlatform},
 
-	// E.1.9 控制面 (7)
+	// E.1.9 控制面 (8; E-21 added account_exists)
 	{CodeKeyNotFound, TypeInvalidRequest, 404, 0, RetryNo, OwnerBusiness},
+	{CodeAccountExists, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
 	{CodeAccountNotVerified, TypeAuthorization, 403, 0, RetryNo, OwnerBusiness},
 	{CodePermissionDenied, TypeAuthorization, 403, 0, RetryNo, OwnerBusiness},
 	{CodeChannelNotFound, TypeInvalidRequest, 404, 0, RetryNo, OwnerBusiness},
@@ -112,25 +116,25 @@ var prdE1Fixture = []fixtureRow{
 	{CodeContentPolicyViolation, TypeInvalidRequest, 403, 0, RetryNo, OwnerBusiness},
 }
 
-func TestCodeCountIs65(t *testing.T) {
-	if got := len(Codes()); got != 65 {
-		t.Fatalf("len(Codes()) = %d, want 65", got)
+func TestCodeCountIs69(t *testing.T) {
+	if got := len(Codes()); got != 69 {
+		t.Fatalf("len(Codes()) = %d, want 69", got)
 	}
-	if got := len(Specs()); got != 65 {
-		t.Fatalf("len(Specs()) = %d, want 65", got)
+	if got := len(Specs()); got != 69 {
+		t.Fatalf("len(Specs()) = %d, want 69", got)
 	}
-	if got := len(prdE1Fixture); got != 65 {
-		t.Fatalf("fixture rows = %d, want 65", got)
+	if got := len(prdE1Fixture); got != 69 {
+		t.Fatalf("fixture rows = %d, want 69", got)
 	}
 	rows := strings.Split(strings.TrimSpace(MarkdownTable()), "\n")
-	if len(rows) != 2+65 {
-		t.Fatalf("markdown rows = %d, want 2 header + 65 = 67", len(rows))
+	if len(rows) != 2+69 {
+		t.Fatalf("markdown rows = %d, want 2 header + 69 = 71", len(rows))
 	}
 }
 
 // counting the constants from source, not from the registry, catches a code
 // that was added as a constant but never entered specs (or vice versa).
-func TestCodeConstantsCountIs65(t *testing.T) {
+func TestCodeConstantsCountIs69(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -158,8 +162,8 @@ func TestCodeConstantsCountIs65(t *testing.T) {
 			}
 		}
 	}
-	if count != 65 {
-		t.Fatalf("Code* constants = %d, want 65", count)
+	if count != 69 {
+		t.Fatalf("Code* constants = %d, want 69", count)
 	}
 }
 

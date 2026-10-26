@@ -1,8 +1,17 @@
 // Package apierr is the only writer of error responses for the API data plane.
 //
-// The 65 codes, their HTTP statuses and retry semantics are copied from PRD
-// V1.2 appendix E.1 (the single source of truth). TDS §6.2 still carries older
-// values for seven rows; those rows are deliberately not followed:
+// The 69 codes, their HTTP statuses and retry semantics are copied from PRD
+// V1.2 appendix E.1 (the single source of truth). Four codes were added by
+// errata E-21 because the console's session, credential, duplicate-account and
+// query-parameter conditions had no semantically correct row:
+//
+//	session_expired         401  console session gone; "log in again"
+//	invalid_credentials     401  wrong identifier/password (not a bad API key)
+//	account_exists          409  registration collision
+//	invalid_query_parameter 400  bad page / page_size / sort / order
+//
+// TDS §6.2 still carries older values for seven rows; those rows are
+// deliberately not followed:
 //
 //	model_not_available             30 (not 0)
 //	request_read_timeout             5 (not 0)
@@ -64,11 +73,13 @@ const (
 	OptionalBilling
 )
 
-// The 65 codes. One constant per code; Codes() returns the same set in the
+// The 69 codes. One constant per code; Codes() returns the same set in the
 // order below. Adding or removing one requires updating codes_test.go's
 // fixture and the generated markdown table in the same change.
 const (
 	CodeInvalidAPIKey          = "invalid_api_key"
+	CodeInvalidCredentials     = "invalid_credentials"
+	CodeSessionExpired         = "session_expired"
 	CodeKeyExpired             = "key_expired"
 	CodeKeyDisabled            = "key_disabled"
 	CodeAccountDisabled        = "account_disabled"
@@ -81,17 +92,18 @@ const (
 	CodeModelNotInGroup    = "model_not_in_group"
 	CodeModelNotAuthorized = "model_not_authorized"
 
-	CodeInvalidRequestBody = "invalid_request_body"
-	CodeInvalidMessages    = "invalid_messages"
-	CodeInvalidTemperature = "invalid_temperature"
-	CodeMaxTokensExceeded  = "max_tokens_exceeded"
-	CodeInvalidTools       = "invalid_tools"
-	CodeInvalidImageCount  = "invalid_image_count"
-	CodeInvalidImageSize   = "invalid_image_size"
-	CodeInvalidImageURL    = "invalid_image_url"
-	CodeRequestTooLarge    = "request_too_large"
-	CodeRequestReadTimeout = "request_read_timeout"
-	CodeUnknownEndpoint    = "unknown_endpoint"
+	CodeInvalidRequestBody    = "invalid_request_body"
+	CodeInvalidQueryParameter = "invalid_query_parameter"
+	CodeInvalidMessages       = "invalid_messages"
+	CodeInvalidTemperature    = "invalid_temperature"
+	CodeMaxTokensExceeded     = "max_tokens_exceeded"
+	CodeInvalidTools          = "invalid_tools"
+	CodeInvalidImageCount     = "invalid_image_count"
+	CodeInvalidImageSize      = "invalid_image_size"
+	CodeInvalidImageURL       = "invalid_image_url"
+	CodeRequestTooLarge       = "request_too_large"
+	CodeRequestReadTimeout    = "request_read_timeout"
+	CodeUnknownEndpoint       = "unknown_endpoint"
 
 	CodeInsufficientCredits         = "insufficient_credits"
 	CodeAccountFrozenDueToOverdraft = "account_frozen_due_to_overdraft"
@@ -134,6 +146,7 @@ const (
 	CodeInternalError              = "internal_error"
 
 	CodeKeyNotFound        = "key_not_found"
+	CodeAccountExists      = "account_exists"
 	CodeAccountNotVerified = "account_not_verified"
 	CodePermissionDenied   = "permission_denied"
 	CodeChannelNotFound    = "channel_not_found"
@@ -160,14 +173,26 @@ type Spec struct {
 	Optional          OptionalFields
 }
 
-// specs is the metadata table: exactly 65 rows.
+// specs is the metadata table: exactly 69 rows.
 var specs = []Spec{
-	// E.1.1 鉴权与账号 (7)
+	// E.1.1 鉴权与账号 (9)
 	{
 		Code: CodeInvalidAPIKey, Type: TypeAuthentication, HTTPStatus: 401,
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "P05",
 		Message: "密钥无效",
 		Hint:    "控制台 → 密钥管理页核对或重新生成",
+	},
+	{
+		Code: CodeInvalidCredentials, Type: TypeAuthentication, HTTPStatus: 401,
+		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台登录",
+		Message: "账号或密码不正确",
+		Hint:    "核对账号与密码后重新登录；忘记密码走找回流程",
+	},
+	{
+		Code: CodeSessionExpired, Type: TypeAuthentication, HTTPStatus: 401,
+		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台会话",
+		Message: "登录状态已失效，请重新登录",
+		Hint:    "重新登录控制台",
 	},
 	{
 		Code: CodeKeyExpired, Type: TypeAuthentication, HTTPStatus: 401,
@@ -232,12 +257,18 @@ var specs = []Spec{
 		Hint:    "控制台 → 密钥设置页勾选模型",
 	},
 
-	// E.1.3 请求校验 (11)
+	// E.1.3 请求校验 (12)
 	{
 		Code: CodeInvalidRequestBody, Type: TypeInvalidRequest, HTTPStatus: 400,
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "P04",
 		Message: "请求体不是合法 JSON：%s",
 		Hint:    "按 message 中的字段路径修正请求体",
+	},
+	{
+		Code: CodeInvalidQueryParameter, Type: TypeInvalidRequest, HTTPStatus: 400,
+		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台接口",
+		Message: "查询参数 %s 不合法",
+		Hint:    "按 message 中的参数名修正查询条件",
 	},
 	{
 		Code: CodeInvalidMessages, Type: TypeInvalidRequest, HTTPStatus: 400,
@@ -519,12 +550,18 @@ var specs = []Spec{
 		Hint:    "携 request_id 联系客服",
 	},
 
-	// E.1.9 控制面 (7)
+	// E.1.9 控制面 (8)
 	{
 		Code: CodeKeyNotFound, Type: TypeInvalidRequest, HTTPStatus: 404,
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台接口",
 		Message: "密钥不存在",
 		Hint:    "控制台 → 密钥管理页刷新列表",
+	},
+	{
+		Code: CodeAccountExists, Type: TypeConflict, HTTPStatus: 409,
+		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台注册",
+		Message: "该账号已注册",
+		Hint:    "直接登录，或通过找回密码重置",
 	},
 	{
 		Code: CodeAccountNotVerified, Type: TypeAuthorization, HTTPStatus: 403,
@@ -590,7 +627,7 @@ var codeIndex = func() map[string]Spec {
 	return idx
 }()
 
-// Codes returns the 65 code strings in E.1 order.
+// Codes returns the 69 code strings in E.1 order.
 func Codes() []string {
 	out := make([]string, len(specs))
 	for i, s := range specs {

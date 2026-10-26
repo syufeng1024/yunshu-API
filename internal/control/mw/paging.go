@@ -38,17 +38,17 @@ func ParsePage(r *http.Request, allowedSort ...string) (Page, *apierr.APIError) 
 	if raw := strings.TrimSpace(q.Get("page")); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
-			return Page{}, InvalidField("page")
+			return Page{}, InvalidQueryField("page")
 		}
 		p.Number = n
 	}
 	if raw := strings.TrimSpace(q.Get("page_size")); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
-			return Page{}, InvalidField("page_size")
+			return Page{}, InvalidQueryField("page_size")
 		}
 		if n > MaxPageSize {
-			return Page{}, InvalidField("page_size")
+			return Page{}, InvalidQueryField("page_size")
 		}
 		p.Size = n
 	}
@@ -61,13 +61,13 @@ func ParsePage(r *http.Request, allowedSort ...string) (Page, *apierr.APIError) 
 			}
 		}
 		if !ok {
-			return Page{}, InvalidField("sort")
+			return Page{}, InvalidQueryField("sort")
 		}
 		p.Sort = raw
 	}
 	if raw := strings.ToLower(strings.TrimSpace(q.Get("order"))); raw != "" {
 		if raw != "asc" && raw != "desc" {
-			return Page{}, InvalidField("order")
+			return Page{}, InvalidQueryField("order")
 		}
 		p.Order = raw
 	}

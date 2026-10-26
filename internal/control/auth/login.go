@@ -41,7 +41,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	ident, err := NormalizeIdentifier(req.Identifier)
 	if err != nil || strings.TrimSpace(req.Password) == "" {
 		s.auditLogin(r.Context(), r, 0, "ANONYMOUS", "-", "REJECTED_BY_GUARD")
-		mw.WriteError(w, r, apierr.New(apierr.CodeInvalidAPIKey))
+		mw.WriteError(w, r, apierr.New(apierr.CodeInvalidCredentials))
 		return
 	}
 
@@ -52,7 +52,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 			// time does not reveal whether the account exists.
 			_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(req.Password))
 			s.auditLogin(r.Context(), r, 0, "ANONYMOUS", "-", "REJECTED_BY_GUARD")
-			mw.WriteError(w, r, apierr.New(apierr.CodeInvalidAPIKey))
+			mw.WriteError(w, r, apierr.New(apierr.CodeInvalidCredentials))
 			return
 		}
 		s.errorLog(r.Context(), "login_lookup_failed: "+findErr.Error())
@@ -70,7 +70,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(row.hash), []byte(req.Password)); err != nil {
 		s.auditLogin(r.Context(), r, row.uid, row.role, strconv.FormatInt(row.uid, 10), "REJECTED_BY_GUARD")
-		mw.WriteError(w, r, apierr.New(apierr.CodeInvalidAPIKey))
+		mw.WriteError(w, r, apierr.New(apierr.CodeInvalidCredentials))
 		return
 	}
 

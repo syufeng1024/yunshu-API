@@ -120,9 +120,9 @@ func (s *Service) insertUser(ctx context.Context, r *http.Request, ident Identif
 	uid, err := insertUserRow(ctx, tx, ident, nickname, agreement, passwordHash, now)
 	if err != nil {
 		if isDuplicate(err) {
-			// E.1 has no account_exists code. invalid_request_body is the
-			// nearest 400; the receipt records the proposed new code.
-			return 0, mw.InvalidField("identifier")
+			// Erratum E-21 added account_exists (409): a duplicate registration
+			// is a state conflict, not a malformed body.
+			return 0, apierr.New(apierr.CodeAccountExists)
 		}
 		s.errorLog(ctx, "register_insert_user_failed: "+err.Error())
 		return 0, apierr.New(apierr.CodeInternalError)

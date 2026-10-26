@@ -4,9 +4,10 @@ info:
   version: 0.1.0
   description: |
     T17 前端类型生成的最小骨架。只登记已验证存在的控制面路由与统一错误体；
-    其余业务接口按任务卡 T11 扩充后重新生成，禁止在 web/src 手写响应类型。
+    其余业务接口按任务卡扩充后重新生成，禁止在 web/src 手写响应类型。
 
-    TODO(T11 扩充): 补齐控制台、运营后台与官网公开数据接口，并登记所有响应 schema。
+    T12 已登记：/api/console/overview、/api/console/keys（列表/创建/详情/更新/删除/
+    操作日志/轮换）、/api/console/models。运营后台与官网公开数据接口待 T15/T18。
 servers:
   - url: /
 paths:
@@ -82,12 +83,313 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/overview:
+    get:
+      operationId: getConsoleOverview
+      tags: [console]
+      summary: 账户概览（余额、今日用量、24h 曲线、四维额度、触顶预测）
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 概览
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Overview'
+        '401':
+          description: 会话失效（session_expired）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 user.read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/keys:
+    get:
+      operationId: listConsoleKeys
+      tags: [console, keys]
+      summary: 密钥列表（名称搜索 + 状态筛选取交集，分页）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 64}
+        - name: status
+          in: query
+          schema: {type: string, enum: [enabled, disabled]}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, last_used_at, key_name]}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 密钥列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KeyList'
+        '400':
+          description: 查询参数非法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: createConsoleKeys
+      tags: [console, keys]
+      summary: 创建密钥（单条或批量 1–10；明文只在本次响应出现）
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateKeyRequest'
+      responses:
+        '201':
+          description: 创建成功；items[].key 是唯一一次明文
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedKeys'
+        '400':
+          description: 字段非法、group_code 出现、免费档已达 3 个活跃 Key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/keys/{id}:
+    parameters:
+      - $ref: '#/components/parameters/KeyID'
+    get:
+      operationId: getConsoleKey
+      tags: [console, keys]
+      summary: 密钥详情（只返回掩码；越权与不存在同为 404 key_not_found）
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KeyDetail'
+        '404':
+          description: 密钥不存在或不属于当前账号（key_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    patch:
+      operationId: updateConsoleKey
+      tags: [console, keys]
+      summary: 更新密钥（只更新传入字段；空数组与不传必须区分）
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateKeyRequest'
+      responses:
+        '200':
+          description: 更新结果
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UpdateKeyResponse'
+        '400':
+          description: 字段非法、group_code 出现、DISABLED 未带 confirm、model_ids 为空
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 密钥不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    delete:
+      operationId: deleteConsoleKey
+      tags: [console, keys]
+      summary: 软删除密钥（confirm=true；key_hash 改写为哨兵，K13 即时删除）
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm: {type: boolean}
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: {type: integer, format: int64}
+                  deleted: {type: boolean}
+        '400':
+          description: 缺少 confirm 或出现 group_code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 密钥不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/keys/{id}/audit:
+    parameters:
+      - $ref: '#/components/parameters/KeyID'
+    get:
+      operationId: listConsoleKeyAudit
+      tags: [console, keys]
+      summary: 密钥操作日志（含前后值）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+      responses:
+        '200':
+          description: 操作日志
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KeyAuditList'
+        '404':
+          description: 密钥不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/keys/{id}/rotate:
+    parameters:
+      - $ref: '#/components/parameters/KeyID'
+    post:
+      operationId: rotateConsoleKey
+      tags: [console, keys]
+      summary: 重新生成密钥（旧 Key 立即失效，无宽限期）
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                expire_at: {type: string, format: date-time}
+      responses:
+        '201':
+          description: 新密钥；key 是唯一一次明文
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RotatedKey'
+        '400':
+          description: 旧 Key 已过期且未提供新的 expire_at、或出现 group_code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 密钥不存在
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/models:
+    get:
+      operationId: listConsoleModels
+      tags: [console, models]
+      summary: 模型广场（LISTED + DOMESTIC；固定推荐排序；标准价不乘分组倍率）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: model_type
+          in: query
+          schema: {type: string, enum: [TEXT, IMAGE, EMBEDDING]}
+        - name: protocol
+          in: query
+          schema: {type: string}
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 128}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+      responses:
+        '200':
+          description: 模型列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ModelCatalog'
+        '400':
+          description: 查询参数非法
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 components:
   securitySchemes:
     sessionCookie:
       type: apiKey
       in: cookie
-      name: yunshu_session
+      name: sid
+      description: mw.SessionCookieName；服务端 K20 sess:admin:{sid}
+  parameters:
+    KeyID:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, format: int64}
+      description: t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found
   schemas:
     HealthStatus:
       type: object
@@ -165,3 +467,332 @@ components:
       type: string
       description: 与后端 t_user.status 同名。
       enum: [NORMAL, DISABLED, FROZEN_OVERDRAFT]
+    Overview:
+      type: object
+      required: [balance, today, hourly, plan, quota, eta]
+      properties:
+        balance:
+          type: object
+          required: [micro, credits, cny, recharge_micro, bonus_micro]
+          properties:
+            micro: {type: integer, format: int64, description: 微积分；账本唯一存储单位}
+            credits: {type: string, description: 积分字符串（micro ÷ 10000），避免浮点}
+            cny: {type: string, description: 人民币参考字符串（1 元 = 100 积分）}
+            recharge_micro: {type: integer, format: int64}
+            bonus_micro: {type: integer, format: int64}
+        today:
+          type: object
+          required: [requests, consumed_micro, consumed_credits, success_rate_bp]
+          properties:
+            requests: {type: integer, format: int64}
+            consumed_micro: {type: integer, format: int64}
+            consumed_credits: {type: string}
+            success_rate_bp:
+              type: [integer, "null"]
+              minimum: 0
+              maximum: 10000
+              description: 对内口径；分母排除 402/429，无分母时为 null
+        hourly:
+          type: array
+          description: 固定 24 个点，按 UTC+8 小时对齐，空小时补 0
+          items:
+            type: object
+            required: [hour, requests, consumed_micro]
+            properties:
+              hour: {type: string, format: date-time}
+              requests: {type: integer, format: int64}
+              consumed_micro: {type: integer, format: int64}
+        plan:
+          type: object
+          required: [code, name, policy_source]
+          properties:
+            code: {type: string, description: TRIAL / STANDARD / PRO / ENTERPRISE / FREE_DEFAULT}
+            name: {type: string}
+            policy_source:
+              type: string
+              enum: [PLAN, TRIAL, QUOTA_APPLY, OPS_OVERRIDE, FREE_DEFAULT]
+            trial_expire_at: {type: [string, "null"], format: date-time}
+        quota:
+          type: object
+          required: [rpm, tpm, concurrency, daily_quota_micro, used_today_micro, remaining_micro]
+          properties:
+            rpm: {type: integer, format: int64}
+            tpm: {type: integer, format: int64}
+            concurrency: {type: integer, format: int64}
+            daily_quota_micro:
+              type: [integer, "null"]
+              format: int64
+              description: null = 无上限（FREE_DEFAULT），不得写成 0
+            used_today_micro: {type: integer, format: int64}
+            remaining_micro: {type: [integer, "null"], format: int64}
+        eta:
+          type: object
+          required: [reachable, reason, eta_at, seconds_left, burn_micro_per_hour]
+          properties:
+            reachable: {type: boolean}
+            reason:
+              type: string
+              enum: [OK, NO_DAILY_QUOTA, NO_RECENT_USAGE, QUOTA_REACHED]
+            eta_at: {type: [string, "null"], format: date-time}
+            seconds_left: {type: [integer, "null"], format: int64}
+            burn_micro_per_hour: {type: integer, format: int64, description: 近 1 小时消耗}
+    KeyList:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/KeyListItem'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    KeyListItem:
+      type: object
+      required: [id, key_name, key_masked, status, expired, group_ratio_bp, model_scope_mode]
+      properties:
+        id: {type: integer, format: int64}
+        key_name: {type: string}
+        key_masked: {type: string, description: 前 8 位 + **** + 后 4 位}
+        status: {type: string, enum: [ENABLED, DISABLED]}
+        expired: {type: boolean}
+        group_code: {type: string, description: internal 分组不返回该字段}
+        group_ratio_bp: {type: [integer, "null"]}
+        model_scope_mode: {type: string, enum: [SELECTED, ALL]}
+        model_count: {type: integer}
+        ip_whitelist_mode: {type: string, enum: [ON, OFF]}
+        ip_rule_count: {type: integer}
+        expire_at: {type: [string, "null"], format: date-time}
+        today_consumed_micro: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: [string, "null"], format: date-time}
+    CreateKeyRequest:
+      type: object
+      required: [name, expire_at]
+      description: |
+        四步向导参数：名称 / 模型范围 / 有效期 / IP 白名单。
+        请求体出现 group_code（含 null）一律 400 invalid_request_body。
+      properties:
+        name: {type: string, minLength: 1, maxLength: 64}
+        model_scope_mode: {type: string, enum: [SELECTED, ALL], default: SELECTED}
+        model_ids:
+          type: array
+          description: SELECTED 时必填且非空；ALL 时必须为空
+          items: {type: integer, format: int64}
+        expire_at:
+          type: string
+          format: date-time
+          description: 必须晚于当前时间；用户侧不可设永久（PRD §5.2）
+        ip_allowlist:
+          type: array
+          description: 单 IP 或 CIDR；空数组 = ip_whitelist_mode OFF
+          items: {type: string}
+        count:
+          type: integer
+          minimum: 1
+          maximum: 10
+          default: 1
+          description: PRD F6-5 上限 10；免费档按整批计数，活跃数 + count 超过 quota.free_max_active_keys 整批拒绝
+    CreatedKeys:
+      type: object
+      required: [items, count, warning]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/CreatedKey'}
+        count: {type: integer}
+        warning: {type: string}
+    CreatedKey:
+      type: object
+      required: [id, key_name, key, key_prefix, key_last4, key_masked, model_scope_mode, group_code, expire_at]
+      properties:
+        id: {type: integer, format: int64}
+        key_name: {type: string}
+        key: {type: string, description: 完整明文，仅创建响应出现一次；t_api_key 只存 SHA256}
+        key_prefix: {type: string, description: 明文前 8 位}
+        key_last4: {type: string}
+        key_masked: {type: string}
+        model_scope_mode: {type: string, enum: [SELECTED, ALL]}
+        model_ids:
+          type: array
+          items: {type: integer, format: int64}
+        group_code: {type: string, description: 新建恒为 standard}
+        expire_at: {type: string, format: date-time}
+        ip_allowlist:
+          type: array
+          items: {type: string}
+    UpdateKeyRequest:
+      type: object
+      description: |
+        只更新出现的字段。model_ids 传 [] 返回 400（SELECTED 不允许空白名单）；
+        ip_allowlist 传 [] 表示清空并置 OFF；不传则保持原值。
+        任何情况下出现 group_code 即 400。
+      properties:
+        key_name: {type: string, minLength: 1, maxLength: 64}
+        model_ids:
+          type: array
+          items: {type: integer, format: int64}
+        model_scope_mode: {type: string, enum: [SELECTED, ALL]}
+        expire_at: {type: string, format: date-time, description: null 不被接受；永久仅运营可设}
+        ip_allowlist:
+          type: array
+          items: {type: string}
+        status: {type: string, enum: [ENABLED, DISABLED]}
+        confirm: {type: boolean, description: status=DISABLED 时必填 true；转入 ENABLED 不需要}
+    UpdateKeyResponse:
+      type: object
+      required: [changed, key_name, status, model_scope_mode, expire_at, ip_whitelist_mode, ip_allowlist]
+      properties:
+        changed: {type: boolean}
+        key_name: {type: string}
+        status: {type: string, enum: [ENABLED, DISABLED]}
+        model_scope_mode: {type: string, enum: [SELECTED, ALL]}
+        expire_at: {type: [string, "null"], format: date-time}
+        ip_whitelist_mode: {type: string, enum: [ON, OFF]}
+        ip_allowlist:
+          type: array
+          items: {type: string}
+    KeyDetail:
+      type: object
+      required: [id, key_name, key_masked, key_prefix, status, expired, group_ratio_bp, model_scope_mode, models, ip_whitelist_mode, ip_allowlist, realtime, account_quota]
+      properties:
+        id: {type: integer, format: int64}
+        key_name: {type: string}
+        key_masked: {type: string}
+        key_prefix: {type: string}
+        status: {type: string, enum: [ENABLED, DISABLED]}
+        expired: {type: boolean}
+        group_code: {type: string, description: internal 分组不返回}
+        group_ratio_bp: {type: [integer, "null"]}
+        group_note: {type: string}
+        model_scope_mode: {type: string, enum: [SELECTED, ALL]}
+        models:
+          type: array
+          items:
+            type: object
+            properties:
+              id: {type: integer, format: int64}
+              model_name: {type: string}
+              display_name: {type: string}
+        ip_whitelist_mode: {type: string, enum: [ON, OFF]}
+        ip_allowlist:
+          type: array
+          items:
+            type: object
+            properties:
+              cidr: {type: string}
+              ip_family: {type: integer, enum: [4, 6]}
+              note: {type: string}
+        expire_at: {type: [string, "null"], format: date-time}
+        remaining_days: {type: [integer, "null"], format: int64}
+        created_at: {type: string, format: date-time}
+        last_used_at: {type: [string, "null"], format: date-time}
+        realtime:
+          type: object
+          required: [as_of, available, rpm_used, rpm_limit, tpm_used, tpm_limit, concurrency_used, concurrency_limit]
+          properties:
+            as_of: {type: string, format: date-time}
+            available: {type: boolean, description: false 时三个 used 均为 null}
+            rpm_used: {type: [integer, "null"], format: int64}
+            rpm_limit: {type: integer, format: int64}
+            tpm_used: {type: [integer, "null"], format: int64}
+            tpm_limit: {type: integer, format: int64}
+            concurrency_used: {type: [integer, "null"], format: int64}
+            concurrency_limit: {type: integer, format: int64}
+        account_quota:
+          type: object
+          required: [used_today_micro, daily_quota_micro, remaining_micro, plan_code, plan_name, policy_source]
+          properties:
+            used_today_micro: {type: integer, format: int64}
+            daily_quota_micro: {type: [integer, "null"], format: int64}
+            remaining_micro: {type: [integer, "null"], format: int64}
+            plan_code: {type: string}
+            plan_name: {type: string}
+            policy_source: {type: string}
+    KeyAuditList:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [action, before, after, operator_id, created_at]
+            properties:
+              action:
+                type: string
+                description: CREATE / ROTATE / DISABLE / ENABLE / DELETE / MODEL_SCOPE_CHANGE / IP_RULE_CHANGE / RENAME / EXPIRE_CHANGE
+              before: {description: 变更前（脱敏 JSON），CREATE 时为 null}
+              after: {description: 变更后（脱敏 JSON）}
+              operator_id: {type: string}
+              created_at: {type: string, format: date-time}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    RotatedKey:
+      type: object
+      required: [id, rotated_from_id, key_name, key, key_prefix, key_last4, key_masked, group_code, revocation]
+      properties:
+        id: {type: integer, format: int64}
+        rotated_from_id: {type: integer, format: int64}
+        key_name: {type: string}
+        key: {type: string, description: 完整明文，仅本次响应出现}
+        key_prefix: {type: string}
+        key_last4: {type: string}
+        key_masked: {type: string}
+        group_code: {type: string, description: 继承旧 Key 分组；internal 不返回}
+        expire_at: {type: [string, "null"], format: date-time}
+        warning: {type: string}
+        revocation: {type: string, enum: [immediate], description: T12 选择立即失效，无 5 分钟宽限}
+    ModelCatalog:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/ModelCatalogItem'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    ModelCatalogItem:
+      type: object
+      required: [id, model_name, display_name, model_type, context_length, protocol, aliases, capabilities, recommend_weight, published_at, pricing]
+      properties:
+        id: {type: integer, format: int64}
+        model_name: {type: string}
+        display_name: {type: string}
+        model_type: {type: string, enum: [TEXT, IMAGE, EMBEDDING]}
+        context_length: {type: integer, format: int64}
+        protocol: {type: string}
+        aliases:
+          type: array
+          items: {type: string}
+        capabilities: {$ref: '#/components/schemas/ModelCapabilities'}
+        recommend_weight: {type: integer, format: int64}
+        published_at: {type: [string, "null"], format: date-time}
+        pricing: {anyOf: [{$ref: '#/components/schemas/ModelPricing'}, {type: "null"}]}
+    ModelCapabilities:
+      type: object
+      properties:
+        stream: {type: [boolean, "null"], description: null = 未配置（B-53 显示「—」）}
+        tool_call: {type: [boolean, "null"]}
+        vision: {type: [boolean, "null"]}
+        json_mode: {type: [boolean, "null"]}
+    ModelPricing:
+      type: object
+      required: [in_price_micro_per_k, out_price_micro_per_k, per_call_price_micro, in_price_credits_per_k, out_price_credits_per_k, per_call_credits_per_call, in_price_cny_per_k, out_price_cny_per_k, per_call_cny_per_call, cache_billing_enabled]
+      description: 标准单价（t_price_rule），不乘任何分组倍率
+      properties:
+        in_price_micro_per_k: {type: integer, format: int64}
+        out_price_micro_per_k: {type: integer, format: int64}
+        per_call_price_micro: {type: integer, format: int64}
+        in_price_credits_per_k: {type: string}
+        out_price_credits_per_k: {type: string}
+        per_call_credits_per_call: {type: string}
+        in_price_cny_per_k: {type: string}
+        out_price_cny_per_k: {type: string}
+        per_call_cny_per_call: {type: string}
+        cache_billing_enabled: {type: boolean}
+        cache_hit_ratio_bp: {type: [integer, "null"], description: pricing.cache_billing_enabled=false 时不返回}
+        cache_write_ratio_bp: {type: [integer, "null"]}
+        cache_hit_price_credits_per_k: {type: [string, "null"]}
+        cache_write_price_credits_per_k: {type: [string, "null"]}

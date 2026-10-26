@@ -69,6 +69,21 @@ func main() {
 		logger.Error(rootCtx, "session manager: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
 		os.Exit(1)
 	}
+	// The first-segment producer. T15 replaces the timer with an operator
+	// endpoint; T12 also calls it synchronously after an IP-rule change so a
+	// new whitelist is visible to P06 before its K13 ipm is published.
+	cfgRedis := config.NewGoRedis(rdb.Raw())
+	publisher := &config.Publisher{DB: mainDB, Redis: cfgRedis, Now: clock.Real{}.Now}
+	routeBuilder := &boot.RouteSnapshot{
+		DB: mainDB, Publisher: publisher, Now: clock.Real{}, Logger: logger,
+	}
+	caches := &boot.CacheWriter{
+		DB:     mainDB,
+		Prices: &config.PriceCache{Redis: cfgRedis},
+		Keys:   redisx.NewKeyAuthCache(rdb),
+		Now:    clock.Real{},
+	}
+
 	auditWriter := &audit.Writer{DB: mainDB, Now: clock.Real{}}
 	ctl, err := control.New(control.Deps{
 		DB:       mainDB,
@@ -77,6 +92,10 @@ func main() {
 		Audit:    auditWriter,
 		Logger:   logger,
 		Now:      clock.Real{},
+		PublishRoutes: func(ctx context.Context) error {
+			_, _, err := routeBuilder.Publish(ctx)
+			return err
+		},
 	})
 	if err != nil {
 		logger.Error(rootCtx, "control server: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
@@ -104,20 +123,8 @@ func main() {
 	ctx, cancel := context.WithCancel(rootCtx)
 	defer cancel()
 
-	// The first-segment producer. T15 replaces this loop with an operator
-	// endpoint; until then the caches must be rebuilt before their TTLs expire.
-	cfgRedis := config.NewGoRedis(rdb.Raw())
-	publisher := &config.Publisher{DB: mainDB, Redis: cfgRedis, Now: clock.Real{}.Now}
-	caches := &boot.CacheWriter{
-		DB:     mainDB,
-		Prices: &config.PriceCache{Redis: cfgRedis},
-		Keys:   redisx.NewKeyAuthCache(rdb),
-		Now:    clock.Real{},
-	}
 	refresher := &boot.Refresher{
-		Routes: &boot.RouteSnapshot{
-			DB: mainDB, Publisher: publisher, Now: clock.Real{}, Logger: logger,
-		},
+		Routes: routeBuilder,
 		Caches: caches,
 		Logger: logger,
 	}

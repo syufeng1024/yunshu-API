@@ -1,4 +1,4 @@
-# 错误码台账（65 条）
+# 错误码台账（69 条）
 
 > 本文件由 `apierr.MarkdownTable()` 生成，**不得手工编辑**。真相源是 PRD 附录 E.1 与 `internal/apierr/codes.go`。
 > 重新生成：写一段 10 行的临时程序打印 `apierr.MarkdownTable()` 到本文件（临时程序不入库），或等 T15 的后台「错误码导出」接口。
@@ -6,13 +6,16 @@
 ## 与 PRD E.1 的关系
 
 - HTTP 状态、`type`、可重试性、`hint` 规则、触发阶段 逐条对齐附录 E.1
-- 码总数固定 **65**，`codes_test.go` 断言 `len(Specs()) == 65`
+- 码总数固定 **69**，`codes_test.go` 断言 `len(Specs()) == 69`
+- 新增四码来自勘误 **E-21**（PRD E.1 尚未回写）：`session_expired`、`invalid_credentials`、`account_exists`、`invalid_query_parameter`；总数 65 → 69
 
 ## 全量清单
 
 | `code` | `type` | HTTP | `retry_after_seconds` | 可重试 | 归属 | 触发阶段 |
 | --- | --- | --- | --- | --- | --- | --- |
 | `invalid_api_key` | `authentication_error` | 401 | 0 | no | BUSINESS | P05 |
+| `invalid_credentials` | `authentication_error` | 401 | 0 | no | BUSINESS | 控制台登录 |
+| `session_expired` | `authentication_error` | 401 | 0 | no | BUSINESS | 控制台会话 |
 | `key_expired` | `authentication_error` | 401 | 0 | no | BUSINESS | P05 |
 | `key_disabled` | `authorization_error` | 403 | 0 | no | BUSINESS | P05 |
 | `account_disabled` | `authorization_error` | 403 | 0 | no | BUSINESS | P05 |
@@ -24,6 +27,7 @@
 | `model_not_in_group` | `authorization_error` | 403 | 0 | no | BUSINESS | P07 |
 | `model_not_authorized` | `authorization_error` | 403 | 0 | no | BUSINESS | P07 |
 | `invalid_request_body` | `invalid_request_error` | 400 | 0 | no | BUSINESS | P04 |
+| `invalid_query_parameter` | `invalid_request_error` | 400 | 0 | no | BUSINESS | 控制台接口 |
 | `invalid_messages` | `invalid_request_error` | 400 | 0 | no | BUSINESS | P04 |
 | `invalid_temperature` | `invalid_request_error` | 400 | 0 | no | BUSINESS | P04 |
 | `max_tokens_exceeded` | `invalid_request_error` | 400 | 0 | no | BUSINESS | P04 |
@@ -69,6 +73,7 @@
 | `auth_unavailable` | `service_unavailable_error` | 503 | 5 | yes | PLATFORM | P05 |
 | `internal_error` | `internal_error` | 500 | 0 | no | PLATFORM | 全局兜底 |
 | `key_not_found` | `invalid_request_error` | 404 | 0 | no | BUSINESS | 控制台接口 |
+| `account_exists` | `conflict_error` | 409 | 0 | no | BUSINESS | 控制台注册 |
 | `account_not_verified` | `authorization_error` | 403 | 0 | no | BUSINESS | 控制台接口 |
 | `permission_denied` | `authorization_error` | 403 | 0 | no | BUSINESS | 运营后台 |
 | `channel_not_found` | `invalid_request_error` | 404 | 0 | no | BUSINESS | 运营后台 |

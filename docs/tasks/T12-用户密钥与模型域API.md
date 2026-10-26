@@ -8,7 +8,7 @@
 | 依赖 | T11（+ T03 表结构、T06 `KeyAuthWriter`、**T10** 错误码） |
 | 可并行 | 与 T13 / T14 / T15 并行 |
 | 交付根 | `internal/control/user/`、`internal/control/key/`、`internal/control/model/` |
-| 状态 | ⬜ 未开始 |
+| 状态 | 🟨 有条件通过（2026-10-27）· 1 项必修 |
 
 ## 1. 目标
 
@@ -113,3 +113,72 @@ group_code 拒绝: A5 输出
 排序: A8 输出
 遗留:
 ```
+
+---
+
+## 9. 完成回执与验收记录（2026-10-27）
+
+**交付**：277 轮 / 2204s / $29.43。新增 `internal/control/{user,key,model}` + 三个辅助包
+（`plan` / `units` / `ctltest`）；改 `internal/apierr/{codes,codes_test}`、`internal/control/{server,mw/*,auth/*}`、
+`cmd/controld/main.go`、`api/openapi.yaml`，重生成 `docs/error-codes.md`。未 commit。
+
+**验收方式**：交付总监独立复跑。清空开发库与 Redis、从空库重来、自起四进程。
+
+| 项 | 结果 |
+| :--- | :--- |
+| `go build` / `go vet` / `gofmt`(交付路径) / `lint.sh`(8 条) | 全过 |
+| `go test ./internal/control/... ./internal/apikey/... ./internal/apierr/...` | 全绿 |
+| **E-21 码表** | `TestCodeCountIs69` 通过；`docs/error-codes.md` 69 数据行；新码已在线上生效（`page_size=1000` → 400 `invalid_query_parameter`，未登录 → 401 `session_expired`） |
+| A2 脱敏 | 详情无 `key` 字段，只有 `key_masked`；`t_api_key` 明文列扫描 **0** |
+| A3 免费档 | 1 → 建到 3（201）→ 第 4 个 **400**；停用 1 个后（活跃 2）再建 **201** |
+| A4 越权 | 他人 GET/PATCH/audit/rotate/delete key 1 → 全部 **404 `key_not_found`**，key 未被改动 |
+| A5 group_code | 创建/PATCH 带 `group_code` → **400**，DB 仍 `standard` |
+| A8 排序 | 造权重 deepseek=100 / qwen=50 → 顺序正确；加 `model_type=TEXT` 筛选后顺序不变 |
+| A10 价格 | 2000 微积分/千 → `0.2` 积分 / `0.002` 元（1 积分=10000 微积分，1 元=100 积分） |
+| A12 K13 写穿 | 停用后 `ak:*` 出现 `st=DISABLED` |
+| A13 审计 | 动作覆盖 CREATE 5 / DISABLE 1 / MODEL_SCOPE_CHANGE 1 / DELETE 1 / ROTATE 1，且均带前后 JSON |
+| A14 分页 | `page_size=1000` → 400 `invalid_query_parameter` |
+| 软删 | `key_name` 变 `xxx (已删除)`，`deleted_at` 置位，活跃计数口径 `deleted_at IS NULL` 使槽位释放（3 活跃 + 6 行 = 槽位确实释放） |
+| 轮换 | 旧 Key `DISABLED`、新 Key `ENABLED`、明文只返回一次 |
+| 回归 B1–B6 | seedctl 3 表各 1；`cfg:snap:ROUTING` 含 keyModels；非流式 200 + `X-Credits-Consumed: 116`；usage/ledger（PREHOLD→RELEASE→SETTLE）落库、余额 100000→99748；流式有 `X-Credits-Preheld` 无 `X-Credits-Consumed`；无 Key/错 Key 401、越权模型 403 |
+
+### 必修 1 项（P0，派 T13 前完成）
+
+**免费档超限与状态类拒绝复用了 `invalid_request_body`，文案是错的。**
+
+实测：
+```
+第 4 个 Key → 400 {"code":"invalid_request_body",
+                  "message":"请求体不是合法 JSON：count",
+                  "hint":"按 message 中的字段路径修正请求体"}
+对已停用 Key 轮换 → 同一文案，字段路径 "count"
+```
+
+问题有两层：
+1. 违反本卡**硬约束 2** 明文要求——拒绝时须提示「免费档最多 3 个 Key，升级套餐可扩容」，当前没有这句话。
+2. 请求体本身完全合法，却被告知「不是合法 JSON」。用户按 hint 去改 `count` 字段永远改不好，这是误导性诊断，比不给提示更差。
+
+根因是 `mw.InvalidField()` 被当成了通用拒绝出口。修正方向：为「配额/状态不足」增加专用错误码
+（实现方建议 `key_limit_reached` 409，可采纳）与不带「JSON」字样的 message/hint；`confirm` 缺失这类真·body 问题才走 `invalid_request_body`。
+
+**A7（批量 10）与 A11（触顶预测）未做线上验证**：免费档上限 3 挡住批量、FREE_DEFAULT 无日额度使 ETA 返回
+`NO_DAILY_QUOTA`（这本身是对的）。两项只有单测证据，记录在案。
+
+### 实现方上报的偏离（12 条，均已复核成立）
+
+| # | 内容 | 处置 |
+| :--- | :--- | :--- |
+| 1 | 批量 `count` 卡写 1–20，PRD 写 1–10 | **按 PRD 取 1–10**，卡待改 |
+| 2 | PRD 要求用户不可自选「永不过期」，T12 卡未写；实现为创建必须给未来 `expire_at` | 采纳，卡待补 |
+| 3 | 免费档拒绝无专用码 | **升级为本卡必修项**（见上） |
+| 4 | 审计新增 `RENAME` / `EXPIRE_CHANGE` 两个动作值 | TDS 注释待回写 |
+| 5 | TDS 软删 `CONCAT(key_name,' (已删除)')` 会撑破 `varchar(64)`，实现截断到 58 字符 | 采纳，TDS 待回写 |
+| 6 | `POST /api/console/keys` 响应形状改为 `{items,count,warning}` | T17/T18 必须按新形状生成类型 |
+| 7 | OpenAPI `sessionCookie.name` 原写 `yunshu_session`，实际是 `sid` | 已修正 |
+| 8 | `gofmt -l` 列出的 11 个 apierr 文件是 CRLF 检出遗留 | 属实，非本卡引入 |
+| 9 | IP 白名单与 ROUTING 快照有最长 4 分钟传播缺口，已在 `Deps` 加 `PublishRoutes` 回调、先发快照再写 K13 | **采纳，这条不做就是越权级缺口** |
+| 10 | 免费档 `used_today_micro` 显示 0 但 `consumed_micro` 有真实值 | 前端按「无上限」渲染 |
+| 11 | ROUTING 快照保留已软删 Key 的 IP 规则 | 待 T15/T11 重构发布器时过滤 |
+| 12 | A1 未跑 `-race`（本机无 gcc） | 留 T21 Linux CI |
+
+**遗留**：T13 充值/订单/体验积分领取；T14 用量账单；T15 Key 分组升降、永久 Key、配置发布端点、`key_limit_reached` 码；T17/T18 按新响应形状生成类型；T21 `-race` 与 CVE 审计。
