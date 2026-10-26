@@ -1,0 +1,75 @@
+@import './tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  *,
+  ::before,
+  ::after {
+    border-color: var(--border);
+  }
+
+  html {
+    min-width: 320px;
+    color-scheme: light;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    min-height: 100vh;
+    background-color: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--primary-soft);
+    color: var(--primary-strong);
+  }
+}
+
+@layer components {
+  /*
+   * PRD §1.4.3 item 7: the prototype's `.site-foot a { display:block }`
+   * overrode `.logo { display:flex }` and stacked the Mark above the Wordmark.
+   * This rule raises the selector priority and pins the footer logo to the same
+   * horizontal form as the header; colour is --text, not --text-2.
+   */
+  .site-footer .logo {
+    display: flex;
+    align-items: center;
+    color: var(--text);
+  }
+
+  .site-footer .logo span {
+    color: var(--text);
+  }
+
+  .skip-link {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    z-index: 100;
+    padding: 8px 16px;
+    background-color: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+  }
+
+  .skip-link:focus {
+    left: 16px;
+    top: 16px;
+  }
+}

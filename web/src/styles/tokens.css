@@ -1,0 +1,114 @@
+/*
+ * Design tokens. This is the only file under web/src allowed to contain raw
+ * colour values (Logo SVG assets are the other exception). Components use the
+ * Tailwind semantic names mapped in tailwind.config.ts.
+ *
+ * Brand geometry follows PRD §1.4.2 / assets/logo: container 28px / radius 9px,
+ * 15px glyph, 1.9 stroke, fill gradient #5B52F0 -> #3B32C9. The gradient lives
+ * inside the self-hosted SVG assets; it is not re-created with CSS here.
+ */
+:root {
+  /* Brand */
+  --primary: #4F46E5;
+  --primary-hover: #4338ca;
+  --primary-strong: #3730a3;
+  --primary-soft: #eef2ff;
+  --primary-ring: #c7d2fe;
+
+  /* Surfaces */
+  --bg: #f8fafc;
+  --surface: #ffffff;
+  --surface-2: #f1f5f9;
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+
+  /* Text */
+  --text: #0f1729;
+  --text-2: #475569;
+  --text-3: #94a3b8;
+  --text-inverse: #ffffff;
+
+  /* Status */
+  --success: #059669;
+  --success-soft: #ecfdf5;
+  --warning: #d97706;
+  --warning-soft: #fffbeb;
+  --danger: #dc2626;
+  --danger-hover: #b91c1c;
+  --danger-soft: #fef2f2;
+  --info: #0284c7;
+  --info-soft: #f0f9ff;
+
+  /* Console / admin sidebar (dark in both ends) */
+  --sidebar-bg: #0f1729;
+  --sidebar-surface: #1e293b;
+  --sidebar-hover: #1e293b;
+  --sidebar-active: #312e81;
+  --sidebar-text: #f8fafc;
+  --sidebar-muted: #94a3b8;
+  --sidebar-border: #1e293b;
+
+  /* Typography */
+  --font-sans: Inter, "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei",
+    system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  /* Type scale (size / line-height) */
+  --font-size-xs: 12px;
+  --line-height-xs: 16px;
+  --font-size-sm: 14px;
+  --line-height-sm: 20px;
+  --font-size-base: 16px;
+  --line-height-base: 24px;
+  --font-size-lg: 18px;
+  --line-height-lg: 28px;
+  --font-size-xl: 20px;
+  --line-height-xl: 28px;
+  --font-size-2xl: 24px;
+  --line-height-2xl: 32px;
+  --font-size-3xl: 30px;
+  --line-height-3xl: 36px;
+  /* Wordmark sizes from PRD §1.4.2: 15.5px light / 14.5px dark. */
+  --font-size-wordmark: 15.5px;
+  --font-size-wordmark-sm: 14.5px;
+
+  /* 4px spacing ladder. Tailwind's numeric scale consumes the same steps. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* Brand geometry (PRD §1.4.2) */
+  --logo-mark: 28px;
+  --logo-mark-sm: 26px;
+  --logo-icon: 15px;
+  --logo-gap: 9px;
+  --logo-gap-dark: 10px;
+  --logo-radius: 9px;
+  --logo-radius-sm: 8px;
+  --sidebar-width: 15rem;
+  --sidebar-collapsed-width: 4.5rem;
+
+  /* Radius */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.12);
+  --shadow-focus: 0 0 0 3px rgba(79, 70, 229, 0.32);
+
+  /* Overlay */
+  --overlay: rgba(15, 23, 42, 0.55);
+}

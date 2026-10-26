@@ -1,19 +1,19 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"
-     width="40" height="40" role="img" aria-label="云枢 API">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48"
+     width="48" height="48" role="img" aria-label="云枢 API">
   <title>云枢 API</title>
   <defs>
     <linearGradient id="ysGrad" x1="0.1005" y1="-0.0705" x2="0.8995" y2="1.0705">
       <stop offset="0" stop-color="#5B52F0"/>
       <stop offset="1" stop-color="#3B32C9"/>
     </linearGradient>
-    <filter id="ysShadow" x="-45%" y="-45%" width="190%" height="190%">
+    <filter id="ysShadow" x="-60%" y="-60%" width="220%" height="220%">
       <feDropShadow dx="0" dy="3" stdDeviation="4.5"
                     flood-color="#4F46E5" flood-opacity="0.32"/>
     </filter>
   </defs>
-  <rect x="6" y="6" width="28" height="28" rx="9" fill="url(#ysGrad)"
+  <rect x="10" y="10" width="28" height="28" rx="9" fill="url(#ysGrad)"
         filter="url(#ysShadow)"/>
-  <g transform="translate(12.5 12.5) scale(0.625)" fill="none" stroke="#FFFFFF"
+  <g transform="translate(16.5 16.5) scale(0.625)" fill="none" stroke="#FFFFFF"
      stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
     <path d="M12 3v7M12 14v7M5 12H3m18 0h-2M7 7l1.5 1.5M17 7l-1.5 1.5M7 17l1.5-1.5M17 17l-1.5-1.5"/>
     <circle cx="12" cy="12" r="2.2"/>

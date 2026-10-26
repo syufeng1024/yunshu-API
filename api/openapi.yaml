@@ -1,0 +1,167 @@
+openapi: 3.1.0
+info:
+  title: 云枢 API 控制面接口
+  version: 0.1.0
+  description: |
+    T17 前端类型生成的最小骨架。只登记已验证存在的控制面路由与统一错误体；
+    其余业务接口按任务卡 T11 扩充后重新生成，禁止在 web/src 手写响应类型。
+
+    TODO(T11 扩充): 补齐控制台、运营后台与官网公开数据接口，并登记所有响应 schema。
+servers:
+  - url: /
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      tags: [ops]
+      summary: 进程存活检查
+      responses:
+        '200':
+          description: 进程存活
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+  /readyz:
+    get:
+      operationId: getReadyz
+      tags: [ops]
+      summary: 依赖就绪检查
+      responses:
+        '200':
+          description: 依赖全部就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+        '503':
+          description: 依赖未就绪
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthStatus'
+  /api/v1/auth/me:
+    get:
+      operationId: getCurrentUser
+      tags: [auth]
+      summary: 当前登录账号
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 当前账号
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentUser'
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 账号不可用
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/v1/auth/logout:
+    post:
+      operationId: postLogout
+      tags: [auth]
+      summary: 退出登录并清除会话
+      security:
+        - sessionCookie: []
+      responses:
+        '204':
+          description: 会话已清除
+        '401':
+          description: 未登录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: yunshu_session
+  schemas:
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok, ready, not_ready]
+    ErrorEnvelope:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorBody'
+    ErrorBody:
+      type: object
+      required: [type, code, message, retry_after_seconds, hint, request_id]
+      properties:
+        type:
+          type: string
+          enum:
+            - authentication_error
+            - authorization_error
+            - invalid_request_error
+            - billing_error
+            - rate_limit_exceeded
+            - conflict_error
+            - upstream_error
+            - service_unavailable_error
+            - client_error
+            - internal_error
+        code:
+          type: string
+          description: 稳定错误码，取值见 PRD 附录 E.1。
+        message:
+          type: string
+        retry_after_seconds:
+          type: integer
+          minimum: 0
+        hint:
+          type: string
+          description: 可操作提示，指向一个确定页面或动作。
+        request_id:
+          type: string
+        reset_at:
+          type: string
+          format: date-time
+          description: 仅限限流类与 402。
+        limit:
+          type: integer
+          description: 仅限限流类与 402。
+        remaining:
+          type: integer
+          description: 仅限限流类与 402。
+    CurrentUser:
+      type: object
+      required: [id, email, display_name, role, status]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/UserRole'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+    UserRole:
+      type: string
+      description: 与后端 t_user.role 同名。
+      enum: [PERSONAL, OPS, FINANCE, SUPER_ADMIN]
+    UserStatus:
+      type: string
+      description: 与后端 t_user.status 同名。
+      enum: [NORMAL, DISABLED, FROZEN_OVERDRAFT]
