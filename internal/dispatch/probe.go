@@ -60,7 +60,15 @@ func (d *Dispatcher) noteUsage(ctx context.Context, channelID int64, sawUsage bo
 		}
 		return
 	}
-	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(contextOrBackground(ctx)), 2*time.Second)
+	if ctx == nil {
+		// The caller lost the request context. Inventing one would hide the
+		// propagation bug; skip the write and make the gap visible instead.
+		if d.opts.Logger != nil {
+			d.opts.Logger.Warn(context.TODO(), "stream_usage_downgrade_skipped: nil context", obslog.Fields{Stage: "P25"})
+		}
+		return
+	}
+	writeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
 	defer cancel()
 	if err := d.opts.UsageModeWriter.SetStreamUsageMode(writeCtx, channelID, "ESTIMATE"); err != nil {
 		if d.opts.Logger != nil {
@@ -75,11 +83,4 @@ func (d *Dispatcher) noteUsage(ctx context.Context, channelID int64, sawUsage bo
 			Stage: "P25",
 		})
 	}
-}
-
-func contextOrBackground(ctx context.Context) context.Context {
-	if ctx == nil {
-		return context.Background()
-	}
-	return ctx
 }

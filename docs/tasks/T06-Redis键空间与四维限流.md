@@ -8,7 +8,7 @@
 | 依赖 | T03 |
 | 可并行 | 与 T04 / T05 / T11 并行 |
 | 交付根 | `internal/redisx/`、`internal/ratelimit/`、`internal/idemstore/`、`internal/breaker/` |
-| 状态 | ⬜ 未开始 |
+| 状态 | ✅ 已交付（两轮补正，2026-10-26） |
 
 ## 1. 目标
 

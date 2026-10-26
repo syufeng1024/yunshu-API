@@ -2,7 +2,6 @@ package apierr
 
 import (
 	crand "crypto/rand"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"regexp"
@@ -10,6 +9,7 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+	"yunshu.dev/core/internal/jsonx"
 )
 
 // maxMessageRunes bounds upstream-derived text (PRD E.1.7: 脱敏截断 200 字).
@@ -239,7 +239,7 @@ func normalize(e *APIError) *APIError {
 // MarshalJSON emits {"error":{...}} and, like the write path, guarantees a
 // non-empty request_id.
 func (e *APIError) MarshalJSON() ([]byte, error) {
-	return json.Marshal(errorEnvelope{Error: normalize(e).object()})
+	return jsonx.Marshal(errorEnvelope{Error: normalize(e).object()})
 }
 
 type errorEnvelope struct {

@@ -5,7 +5,7 @@
 | 卡片编号 | T16 |
 | 阶段 | 4 · 控制面 |
 | 优先级 | P1 |
-| 依赖 | T15（用户/模型/资金基础接口） |
+| 依赖 | T15（用户/模型/资金基础接口）、**T10**（错误码） |
 | 可并行 | 与 T12 / T13 / T14 并行 |
 | 交付根 | `internal/control/ticket/`、`internal/control/review/`、`internal/control/modelmaster/` |
 | 状态 | ⬜ 未开始 |

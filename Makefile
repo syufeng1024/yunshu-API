@@ -38,6 +38,9 @@ run-jobs:
 	@$(LOAD_ENV) $(GO) run ./cmd/jobsd
 
 check: vet test
+
+ci: check
+	@bash scripts/lint.sh
 	@set -e; \
 	if grep -rn '"encoding/json"' --include='*.go' . | grep -v 'internal/jsonx'; then \
 		echo 'FAIL: encoding/json is only allowed inside internal/jsonx'; exit 1; \

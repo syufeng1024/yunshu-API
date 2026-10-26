@@ -8,11 +8,11 @@
 | 依赖 | T01 |
 | 可并行 | 与 T17 并行 |
 | 交付根 | `internal/platform/migrate/`、`internal/platform/migrate/sql/mysql/` |
-| 状态 | ⬜ 未开始 |
+| 状态 | ✅ 已交付（2026-10-26） |
 
 ## 1. 目标
 
-交付**可审计、可回滚、防重号**的迁移引擎，以及 54 张表中的 **47 张核心表**（0001–0006），外加 `t_plan` 种子数据（0009）。本卡完成后，"库能建起来、编号不会撞、回滚有脚本、checksum 有守卫"，后续所有卡只做增量。
+交付**可审计、可回滚、防重号**的迁移引擎，以及 **56 张表中的 47 张核心表**（0001–0006）。> 注：TDS §1.2 的分层清单写 54，实为 56——漏收 `t_job_lock` / `t_reconcile_diff`（E-15）与 `t_request_body`（E-16），外加 `t_plan` 种子数据（0009）。本卡完成后，"库能建起来、编号不会撞、回滚有脚本、checksum 有守卫"，后续所有卡只做增量。
 
 > **勘误（2026-10-26 交付总监，验收时修正）**：本节与 §7 A2 原写「46 张」，系我按 `8+11+26+2` 心算时漏掉 `t_config_publish`（TDS §1.8 有定义、§1.2 分层清单未收录）。按 §4 逐表清单实际为 **47 张**；54 = 47（本卡）+ 7（T03 的 0012/0014/0015/0016/0017）。实现方发现差异后**未删表凑数**、原样交付并报回，处置正确。
 
@@ -21,7 +21,7 @@
 | 文档 | 区间 | 要点 |
 | :--- | :--- | :--- |
 | TDS §0 | 1067–1110 | 字符集 `utf8mb4_0900_as_cs`；`datetime(3)` UTC；金额 `bigint _micro`；单价 `int unsigned _micro_per_k`；`http_status smallint unsigned`；索引命名 `uk_/idx_/fk_`；软删哨兵改写 |
-| TDS §1.2 | 1179–1192 | 54 张表分层清单（**本卡的范围判据**） |
+| TDS §1.2 | 1179–1192 | 表分层清单（**本卡的范围判据**；清单本身漏收 3 张，见 E-15 / E-16） |
 | TDS §1.3 | 1195–1424 | `t_user`、`t_api_key` 等建表级定义 |
 | TDS §1.4 | 1424–2023 | 配置驱动层（`t_channel` / `t_model` / `t_route` / `t_price_rule` / `t_config_*`） |
 | TDS §1.5 | 2023–2419 | 资金账本（`t_ledger_entry` 的 append-only、三个唯一键、CAS 余额） |
@@ -70,7 +70,7 @@
 | 11 | `sql/mysql/0006_price_group.sql` + `.down.sql` | `t_price_group`（`ratio_bp int unsigned`）、`t_price_group_scope`、`ALTER TABLE t_api_key ADD group_code varchar(32) NOT NULL DEFAULT 'standard'` |
 | 12 | `sql/mysql/0009_seed_plan.sql` + `.down.sql` | 5 行 `t_plan` 种子（TRIAL/STANDARD/PRO/ENTERPRISE/FREE_DEFAULT） |
 | 13 | `cmd/migrate/main.go` 或 `make migrate` | 命令入口，支持 `up` / `down N` / `status` |
-| 14 | `docs/schema.md` | 54 表总表：表名 → 迁移编号 → 分层 → 关键唯一键（用于后续卡索引，**不复制 DDL**） |
+| 14 | `docs/schema.md` | 表总表：表名 → 迁移编号 → 分层 → 关键唯一键（用于后续卡索引，**不复制 DDL**） |
 
 ## 6. 硬约束（违反即驳回）
 
@@ -107,7 +107,7 @@
 | A11 | `go test ./internal/platform/migrate/...` 6+ 条断言全绿 | 复跑 |
 | A12 | `t_plan` 5 行数值与 PRD §3.2.1 逐列比对一致 | SQL 抽样 |
 | A13 | `t_ledger_entry` 三唯一键存在，且均不含 `created_at` | `SHOW INDEX` |
-| A14 | `docs/schema.md` 覆盖 54 表且标出哪些属 0010–0017（尚未创建） | 人工 |
+| A14 | `docs/schema.md` 覆盖本卡建的 47 张表，并标出哪些属 0010–0017（尚未创建） | 人工 |
 
 ## 8. 自检命令
 

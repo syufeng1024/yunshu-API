@@ -8,7 +8,7 @@
 | 依赖 | T07 |
 | 可并行 | 否（关键路径） |
 | 交付根 | `relaykit/`（独立 module）、`internal/dispatch/`、`internal/stream/` |
-| 状态 | ⬜ 未开始 |
+| 状态 | ✅ 已交付（2026-10-26） |
 
 ## 1. 目标
 
@@ -105,7 +105,7 @@
 cd relaykit && GOWORK=off go build ./... && go test ./... && cd ..
 go test ./internal/dispatch/... ./internal/stream/... -race -cover
 grep -rn "QuantumNous" relaykit/ internal/ || echo "OK"
-curl -N -s -D - localhost:8080/v1/chat/completions -H "Authorization: Bearer $KEY" \
+curl -N -s -D - localhost:8082/v1/chat/completions -H "Authorization: Bearer $KEY" \
   -d '{"model":"qwen-max","messages":[{"role":"user","content":"hi"}],"stream":true}' | head -20
 ```
 

@@ -1,11 +1,11 @@
 package apierr
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"yunshu.dev/core/internal/jsonx"
 )
 
 // SSEProtocol selects the frame carrier. The error object is identical; only
@@ -45,7 +45,7 @@ func WriteSSE(w io.Writer, e *APIError, proto SSEProtocol) error {
 		frame.CreditsConsumed = &zero
 	}
 
-	payload, err := json.Marshal(&frame)
+	payload, err := jsonx.Marshal(&frame)
 	if err != nil {
 		return err
 	}

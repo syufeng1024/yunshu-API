@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# Hard-constraint scans. These encode rules that have already been accepted as
+# non-negotiable across T01-T09; a hit here means someone quietly broke one.
+#
+# This is deliberately NOT a general-purpose linter. golangci-lint belongs in
+# T21's CI job; this script must stay dependency-free so `scripts/dev.sh ci`
+# works on a machine with nothing but Go installed.
+set -uo pipefail
+
+cd "$(dirname "$0")/.." || exit 1
+
+fail=0
+
+check_empty() {
+  local name="$1" hits="$2" hint="$3"
+  if [ -n "$hits" ]; then
+    echo "LINT FAIL: $name"
+    echo "$hits" | sed 's/^/    /' | head -10
+    echo "    -> $hint"
+    fail=1
+  else
+    echo "ok: $name"
+  fi
+}
+
+# 1. encoding/json is funnelled through internal/jsonx for the main module.
+#    relaykit is a separate module and may use it (documented exception, T08).
+check_empty "encoding/json only in internal/jsonx (relaykit exempt)" \
+  "$(grep -rn '"encoding/json"' --include='*.go' internal cmd 2>/dev/null \
+     | grep -v 'internal/jsonx' | grep -v '_test\.go')" \
+  "import internal/jsonx instead"
+
+# 2. Money never touches floating point. temperature is not money.
+check_empty "no float in ledger/billing" \
+  "$(grep -rn 'float32\|float64' --include='*.go' internal/ledger internal/billing 2>/dev/null \
+     | grep -v '_test\.go')" \
+  "amounts are int64 micro-credits"
+
+# 3. Migrations must not use TIMESTAMP: it is timezone-shifting, datetime(3) is not.
+check_empty "no timestamp in migrations" \
+  "$(grep -rni 'timestamp' internal/platform/migrate/sql/mysql/*.sql 2>/dev/null)" \
+  "use datetime(3) storing UTC"
+
+# 4. No foreign keys: consistency is enforced in the application layer.
+check_empty "no FOREIGN KEY in migrations" \
+  "$(grep -rni 'foreign key' internal/platform/migrate/sql/mysql/*.sql 2>/dev/null)" \
+  "the ledger relies on append-only writes, not referential constraints"
+
+# 5. The balance column is derived from the ledger. Nothing may overwrite it.
+check_empty "no direct balance overwrite" \
+  "$(grep -rn 'UPDATE t_credit_account SET balance_micro' --include='*.go' internal cmd 2>/dev/null)" \
+  "append a ledger entry; balance is a materialised view"
+
+# 6. The ledger is append-only.
+check_empty "no UPDATE/DELETE on t_ledger_entry" \
+  "$(grep -rn 'UPDATE t_ledger_entry\|DELETE FROM t_ledger_entry' --include='*.go' internal cmd 2>/dev/null \
+     | grep -v '_test\.go')" \
+  "correct mistakes with a REVERSAL entry"
+
+# 7. Licence hygiene: new-api is AGPLv3, not a single line may be copied.
+check_empty "no QuantumNous / new-api references" \
+  "$(grep -rn 'QuantumNous' --include='*.go' --include='*.sql' --include='*.md' \
+     relaykit internal cmd 2>/dev/null)" \
+  "see TDS licensing note"
+
+# 8. Request paths must inherit the caller's context, never invent one.
+check_empty "no context.Background() under internal/" \
+  "$(grep -rn 'context.Background()' --include='*.go' internal 2>/dev/null \
+     | grep -v '_test\.go' | grep -v 'testmain')" \
+  "derive from the request context so cancellation propagates"
+
+if [ "$fail" -ne 0 ]; then
+  echo
+  echo "lint: FAILED"
+  exit 1
+fi
+
+echo
+echo "lint: all hard constraints hold"

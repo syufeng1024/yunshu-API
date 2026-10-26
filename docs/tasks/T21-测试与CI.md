@@ -60,7 +60,7 @@
 | 6 | `internal/apierr/codes_test.go`（强化） | **枚举表实际行数 == 常量数 == 文档声明数（65）** |
 | 7 | `internal/recon/assert_test.go` | 8 条对账断言各自的违例检测用例 |
 | 8 | `internal/ledger/invariant_test.go` | 不变量：`SUM(ledger) == balance`、无孤儿流水、批次余额和一致 |
-| 9 | `.github/workflows/ci.yml` | 阶段：lint → build → unit（`-race`）→ 集成（compose 起 MySQL/Redis）→ 迁移 up/down → e2e → 覆盖率门禁 |
+| 9 | `.github/workflows/ci.yml` | 阶段：lint → build → unit（`-race`，**必须在 Linux runner 上跑**：本机 Windows 无 gcc，`-race` 不可用）→ 集成（compose 起 MySQL/Redis）→ 迁移 up/down → e2e → 覆盖率门禁 |
 | 10 | `.github/workflows/nightly.yml` | 夜间：全量 GWT + 8 断言 + 长跑稳定性（10 万请求 soak） |
 | 11 | `scripts/coverage-gate.sh` | 覆盖率门禁：`internal/ledger` ≥ 85%、`internal/billing` ≥ 85%、`internal/apierr` ≥ 90%、整体 ≥ 70% |
 | 12 | `docs/test-matrix.md` | 「验收条目 → 用例名 → 运行方式」三列表（审计与交接用） |
@@ -74,7 +74,9 @@
 3. **CI 必须起真实 MySQL 8.0 + Redis**，不得用 mock 替代集成测试（单测可 mock，但 GWT 与 14 条必须跑真实依赖）。
 4. **迁移 up/down 必须在 CI 里跑一遍**（含 `0013` 的 down 必须失败断言）。
 5. **覆盖率门禁**：低于阈值即失败；不得用 `//nolint` 或空测试凑数。
-6. **`-race` 必须开**：任何数据竞争即失败。
+6. **`-race` 必须开**：任何数据竞争即失败。本机 Windows 无 C 编译器，`-race` 只能在 Linux runner 或 `golang:1.24` 容器里跑（T04/T05/T06/T08/T09 的验收都是这么补的）。
+7. **测试并发度固定 `-p 2`**：`go test ./...` 默认全并发时，多个测试二进制共用一个 Redis 测试库会互相 `FLUSHDB`，导致 `balance` / `breaker` 偶发失败（T09 实测约 1/3 轮次）。彻底解法是 per-package Redis DB（`redistest` 已留口子），本卡必须落地；在此之前流水线与本地一律 `-p 2`。
+8. **覆盖率门禁需先对齐现状**：`internal/billing` 的实测覆盖是 **83.6%**，而下方门禁写的是 ≥85%。本卡开工时二选一：补测试到 85%，或把门禁调到实测值并登记理由——**不允许门禁一上线就红**。
 7. **硬约束静态扫描**作为独立 CI job：浮点金额、`timestamp` 列、`context.Background()`、`QuantumNous`、`encoding/json` 越界、`http.Error` 越界。
 8. **e2e 必须断言"无明文 Key"**：从 network、DOM、localStorage、sessionStorage、URL 五处抓取。
 9. **失败用例不得 `t.Skip`**：未实现的功能可以 `t.Skip` 但必须带 `// TODO(Txx)` 卡号，且 CI 汇总输出 skip 清单。
@@ -86,7 +88,7 @@
 
 | # | 判定 | 方式 |
 | :--- | :--- | :--- |
-| A1 | `make ci` 本地一条命令跑完全部阶段并全绿 | 复跑 |
+| A1 | `bash scripts/dev.sh ci` 本地一条命令跑完（build → vet → test -p 2 → lint）并全绿。**本机无 GNU make**，`make ci` 不是可用入口 | 复跑 |
 | A2 | 14 条 CI 用例存在且通过（`grep -c "func TestCI_"` == 14） | 复跑 |
 | A3 | 12 条 GWT 存在且通过（`grep -c "func TestGWT"` == 12） | 复跑 |
 | A4 | 覆盖率达标（四条阈值） | 复跑 |
@@ -102,7 +104,7 @@
 ## 7. 自检命令
 
 ```bash
-make ci
+bash scripts/dev.sh ci
 grep -c "func TestCI_" internal/acceptance/ci14_test.go     # 14
 grep -c "func TestGWT" internal/acceptance/gwt_test.go      # 12
 ./scripts/coverage-gate.sh

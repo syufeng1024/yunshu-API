@@ -1,9 +1,9 @@
 package apierr
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
+	"yunshu.dev/core/internal/jsonx"
 )
 
 // Write is the only function allowed to put an error response on the wire.
@@ -16,12 +16,12 @@ func Write(w http.ResponseWriter, e *APIError) error {
 	e = normalize(e)
 	rid := e.EnsureRequestID()
 
-	payload, err := json.Marshal(e)
+	payload, err := jsonx.Marshal(e)
 	if err != nil {
 		// Keep the contract even if a caller supplied a non-finite float:
 		// fall back to internal_error with the same request id.
 		e = New(CodeInternalError).WithRequestID(rid)
-		payload, err = json.Marshal(e)
+		payload, err = jsonx.Marshal(e)
 		if err != nil {
 			return err
 		}

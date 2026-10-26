@@ -9,7 +9,7 @@
 # It mirrors the Makefile targets one-to-one; neither is a second source of
 # truth for behaviour — both call the same underlying commands.
 #
-#   scripts/dev.sh up | down | ps | env | build | test | vet | lint | check
+#   scripts/dev.sh up | down | ps | env | build | test | vet | lint | check | ci
 #   scripts/dev.sh run-gw | run-ctl | run-jobs | migrate
 #
 # Port handling: if the host port is busy the compose overlay
@@ -140,6 +140,7 @@ case "$cmd" in
     ;;
   build) "$GO" build ./... ;;
   test)  "$GO" test -p 2 ./... ;;
+  ci)    "$GO" build ./... && "$GO" vet ./... && "$GO" test -p 2 ./... && bash "$(dirname "$0")/lint.sh" ;;
   vet)   "$GO" vet ./... ;;
   lint)
     files="$(gofmt -l $(find . -name '*.go' -not -path './.git/*' -not -path './web/*'))"

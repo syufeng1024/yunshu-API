@@ -5,7 +5,7 @@
 | 卡片编号 | T12 |
 | 阶段 | 4 · 控制面 |
 | 优先级 | P0 |
-| 依赖 | T11（+ T03 表结构、T06 `KeyAuthWriter`） |
+| 依赖 | T11（+ T03 表结构、T06 `KeyAuthWriter`、**T10** 错误码） |
 | 可并行 | 与 T13 / T14 / T15 并行 |
 | 交付根 | `internal/control/user/`、`internal/control/key/`、`internal/control/model/` |
 | 状态 | ⬜ 未开始 |
