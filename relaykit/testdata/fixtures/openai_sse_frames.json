@@ -1,0 +1,8 @@
+[
+  {"name": "role", "data": {"id": "c1", "object": "chat.completion.chunk", "created": 1700000000, "model": "qwen-plus", "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]}},
+  {"name": "content", "data": {"id": "c1", "object": "chat.completion.chunk", "created": 1700000000, "model": "qwen-plus", "choices": [{"index": 0, "delta": {"content": "你"}, "finish_reason": null}]}},
+  {"name": "empty-delta", "data": {"id": "c1", "object": "chat.completion.chunk", "created": 1700000000, "model": "qwen-plus", "choices": [{"index": 0, "delta": {}, "finish_reason": null}]}},
+  {"name": "tool", "data": {"id": "c1", "object": "chat.completion.chunk", "created": 1700000000, "model": "qwen-plus", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{\"q\":"}}]}, "finish_reason": null}]}},
+  {"name": "usage", "data": {"id": "c1", "object": "chat.completion.chunk", "created": 1700000000, "model": "qwen-plus", "choices": [], "usage": {"prompt_tokens": 7, "completion_tokens": 2, "total_tokens": 9, "prompt_tokens_details": {"cached_tokens": 3}}}},
+  {"name": "done", "data": "[DONE]"}
+]

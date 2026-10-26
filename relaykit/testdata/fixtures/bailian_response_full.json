@@ -1,0 +1,19 @@
+{
+  "id": "bailian-1",
+  "object": "chat.completion",
+  "created": 1700000001,
+  "model": "qwen-max",
+  "request_id": "req-1",
+  "choices": [{
+    "index": 0,
+    "message": {"role": "assistant", "content": "hello"},
+    "finish_reason": "stop",
+    "logprobs": {"content": [{"token": "hello"}]}
+  }],
+  "usage": {
+    "prompt_tokens": 7,
+    "completion_tokens": 2,
+    "total_tokens": 9,
+    "prompt_tokens_details": {"cached_tokens": 2}
+  }
+}

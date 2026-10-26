@@ -1,0 +1,27 @@
+{
+  "model": "qwen-max",
+  "messages": [
+    {"role": "system", "content": "be brief"},
+    {"role": "user", "content": "hi"},
+    {"role": "assistant", "content": null, "tool_calls": [
+      {"id": "call_9", "type": "function", "function": {"name": "lookup", "arguments": "{\"q\":\"y\"}"}}
+    ]},
+    {"role": "tool", "tool_call_id": "call_9", "content": "done"}
+  ],
+  "stream": true,
+  "stream_options": {"include_usage": true},
+  "max_tokens": 256,
+  "temperature": 0.3,
+  "top_p": 0.85,
+  "stop": ["</s>"],
+  "tools": [{"type": "function", "function": {
+    "name": "lookup", "description": "look up a record",
+    "parameters": {"type": "object"}
+  }}],
+  "tool_choice": {"type": "function", "function": {"name": "lookup"}},
+  "response_format": {"type": "json_object"},
+  "n": 1,
+  "enable_search": true,
+  "search_options": {"forced_search": false},
+  "seed": 42
+}

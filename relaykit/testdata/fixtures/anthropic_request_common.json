@@ -1,0 +1,17 @@
+{
+  "model": "qwen-plus",
+  "max_tokens": 512,
+  "system": "be brief",
+  "messages": [
+    {"role": "user", "content": "hi"}
+  ],
+  "stream": true,
+  "temperature": 0.2,
+  "top_p": 0.9,
+  "stop_sequences": ["</s>"],
+  "tools": [{"name": "lookup", "description": "look up a record",
+             "input_schema": {"type": "object"}}],
+  "tool_choice": {"type": "tool", "name": "lookup"},
+  "metadata": {"user_id": "u-123"},
+  "top_k": 40
+}

@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	randv2 "math/rand/v2"
+	"net/http"
 	"os"
 	"regexp"
 	"sync/atomic"
@@ -183,6 +185,13 @@ func writeRouting(t *testing.T, members map[string]any) *config.Store {
 }
 
 // staticDeps is the shared fixture for stage tests that do not need I/O.
+// noopTerminal satisfies NewHandler for tests whose subject is a pre-P14
+// error. T08 removed the production temporary terminal; tests must supply one
+// explicitly.
+var noopTerminal = TerminalFunc(func(w http.ResponseWriter, _ *http.Request, _ *Ctx) {
+	w.WriteHeader(http.StatusOK)
+})
+
 func staticDeps(catalog *Catalog) *Deps {
 	if catalog == nil {
 		catalog = NewStaticCatalog(&RoutingSnapshot{})
@@ -255,27 +264,46 @@ func mustExec(t *testing.T, query string, args ...any) {
 // micro-credits. It returns the user id.
 func seedAccount(t *testing.T, availableMicro int64) int64 {
 	t.Helper()
-	var userID int64
-	if err := testDB.QueryRowContext(t.Context(),
-		`SELECT COALESCE(MAX(id), 90000) + 1 FROM t_user`).Scan(&userID); err != nil {
-		t.Fatalf("next user id: %v", err)
+	// The ledger package shares yunshu_test and allocates ids through
+	// AUTO_INCREMENT. A MAX(id)+1 read is a cross-package race: the ledger can
+	// insert between the read and this insert. A random id plus a duplicate
+	// retry removes the collision without serialising the whole suite.
+	for attempt := 0; attempt < 20; attempt++ {
+		userID := int64(100_000 + randv2.Int64N(800_000))
+		now := time.Now().UTC()
+		_, err := testDB.ExecContext(t.Context(), `INSERT INTO t_user
+			(id, user_no, password_hash, password_updated_at, created_at, updated_at)
+			VALUES (?, ?, 'x', ?, ?, ?)`,
+			userID, fmt.Sprintf("U%011d", userID), now, now, now)
+		if err != nil {
+			if isDuplicateKey(err) {
+				continue
+			}
+			t.Fatalf("insert user: %v", err)
+		}
+		if _, err := testDB.ExecContext(t.Context(), `INSERT INTO t_credit_account
+			(user_id, balance_recharge_micro, balance_bonus_micro, balance_micro,
+			 frozen_refund_micro, overdraft_limit_micro, version, created_at, updated_at)
+			VALUES (?, ?, 0, ?, 0, 500000, 0, ?, ?)`,
+			userID, availableMicro, availableMicro, now, now); err != nil {
+			_, _ = testDB.ExecContext(context.WithoutCancel(t.Context()),
+				`DELETE FROM t_user WHERE id = ?`, userID)
+			t.Fatalf("insert account: %v", err)
+		}
+		t.Cleanup(func() {
+			cleanupCtx := context.WithoutCancel(t.Context())
+			_, _ = testDB.ExecContext(cleanupCtx, `DELETE FROM t_credit_account WHERE user_id = ?`, userID)
+			_, _ = testDB.ExecContext(cleanupCtx, `DELETE FROM t_prehold_hold WHERE user_id = ?`, userID)
+			_, _ = testDB.ExecContext(cleanupCtx, `DELETE FROM t_ledger_entry WHERE user_id = ?`, userID)
+			_, _ = testDB.ExecContext(cleanupCtx, `DELETE FROM t_user WHERE id = ?`, userID)
+		})
+		return userID
 	}
-	now := time.Now().UTC()
-	mustExec(t, `INSERT INTO t_user
-		(id, user_no, password_hash, password_updated_at, created_at, updated_at)
-		VALUES (?, ?, 'x', ?, ?, ?)`,
-		userID, fmt.Sprintf("U%011d", userID), now, now, now)
-	mustExec(t, `INSERT INTO t_credit_account
-		(user_id, balance_recharge_micro, balance_bonus_micro, balance_micro,
-		 frozen_refund_micro, overdraft_limit_micro, version, created_at, updated_at)
-		VALUES (?, ?, 0, ?, 0, 500000, 0, ?, ?)`,
-		userID, availableMicro, availableMicro, now, now)
-	t.Cleanup(func() {
-		cleanupCtx := context.WithoutCancel(t.Context())
-		_, _ = testDB.ExecContext(cleanupCtx, `DELETE FROM t_credit_account WHERE user_id = ?`, userID)
-		_, _ = testDB.ExecContext(cleanupCtx, `DELETE FROM t_prehold_hold WHERE user_id = ?`, userID)
-		_, _ = testDB.ExecContext(cleanupCtx, `DELETE FROM t_ledger_entry WHERE user_id = ?`, userID)
-		_, _ = testDB.ExecContext(cleanupCtx, `DELETE FROM t_user WHERE id = ?`, userID)
-	})
-	return userID
+	t.Fatal("could not allocate a unique test user id")
+	return 0
+}
+
+func isDuplicateKey(err error) bool {
+	var me *mysql.MySQLError
+	return errors.As(err, &me) && me.Number == 1062
 }

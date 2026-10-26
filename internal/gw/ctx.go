@@ -22,6 +22,7 @@ import (
 	"yunshu.dev/core/internal/idemstore"
 	"yunshu.dev/core/internal/ledger"
 	"yunshu.dev/core/internal/ratelimit"
+	"yunshu.dev/relaykit/ir"
 )
 
 // Endpoint identifies the inbound protocol route (P03).
@@ -84,20 +85,23 @@ type Ctx struct {
 
 	RawBody  []byte
 	BodyHash string
-	IR       *IRRequest
+	IR       *ir.Request
 
 	// Stage outputs.
-	Auth    *AuthContext
-	Model   *ModelEntry
-	Idem    *IdemState
-	Replay  *idemstore.ReplayDecision
-	Slot    *InflightSlot
-	Route   *RouteCandidate
-	Routes  []RouteCandidate
-	Est     *billing.Preestimate
-	Price   *PriceRule
-	Verdict *ratelimit.Verdict
-	Hold    *ledger.PreholdResult
+	Auth  *AuthContext
+	Model *ModelEntry
+	Idem  *IdemState
+	// IdemDone is set by the terminal after a successful/partial response was
+	// recorded. releaseRequest must not overwrite it with FAILED.
+	IdemDone bool
+	Replay   *idemstore.ReplayDecision
+	Slot     *InflightSlot
+	Route    *RouteCandidate
+	Routes   []RouteCandidate
+	Est      *billing.Preestimate
+	Price    *PriceRule
+	Verdict  *ratelimit.Verdict
+	Hold     *ledger.PreholdResult
 
 	// Upstream timeouts copied from the snapshot for T08 (P15/P16).
 	UpstreamTimeout  time.Duration

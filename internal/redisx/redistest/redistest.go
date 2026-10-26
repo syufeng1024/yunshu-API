@@ -3,9 +3,15 @@
 // test rely on real EVAL atomicity and real server-side LIST/STREAM commands.
 //
 // All T06 packages use TEST_REDIS_ADDR / TEST_REDIS_DB (default
-// 127.0.0.1:16379 / DB 15, the T05 convention) and FLUSHDB before and after a
-// test binary. Because `go test ./...` runs package binaries concurrently, a
-// filesystem lock serialises binaries that share the same Redis database.
+// 127.0.0.1:16379 / DB 14) and FLUSHDB before and after a test binary. Because
+// `go test ./...` runs package binaries concurrently, a filesystem lock
+// serialises binaries that share the same Redis database.
+//
+// DB 14, not the T05 config tests' DB 15: config's TestMain flushes DB 15
+// without taking this lock. Sharing it made `go test ./...` fail whenever a
+// config flush landed inside a breaker/ratelimit test (T06 acceptance already
+// flagged the shared-DB hazard).
+//
 // DB 0 (local development) is never touched.
 package redistest
 
@@ -24,8 +30,9 @@ import (
 const (
 	// DefaultAddr matches the local compose overlay in scripts/dev.sh.
 	DefaultAddr = "127.0.0.1:16379"
-	// DefaultDB is DB 15, matching the T05 config tests.
-	DefaultDB = 15
+	// DefaultDB is 14. The T05 config tests keep DB 15 and flush it without
+	// this package's cross-binary lock.
+	DefaultDB = 14
 
 	lockTimeout = 90 * time.Second
 	lockStale   = 30 * time.Second

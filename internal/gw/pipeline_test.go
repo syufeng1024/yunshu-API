@@ -13,6 +13,7 @@ import (
 	"yunshu.dev/core/internal/apierr"
 	"yunshu.dev/core/internal/jsonx"
 	"yunshu.dev/core/internal/redisx"
+	"yunshu.dev/relaykit/ir"
 )
 
 // --- fakes ---------------------------------------------------------------
@@ -217,7 +218,7 @@ func TestAuthStageLoadsGroupAndRatioFromSameRecord(t *testing.T) {
 
 func p07Ctx(model string, keyID int64, group string) *Ctx {
 	return &Ctx{
-		IR:   &IRRequest{Model: model},
+		IR:   &ir.Request{Model: model},
 		Auth: &AuthContext{KeyID: keyID, GroupCode: group, GroupRatioBP: 10000},
 	}
 }
@@ -424,9 +425,9 @@ func g02Context() *Ctx {
 			ContextLength: 100_000, MaxOutputTokens: 32_768, ListingState: ListingListed},
 		// 3,996 ASCII bytes + the inter-message newline = 3,997 bytes, i.e. exactly
 		// 1,000 tokens with HeuristicCounter ((3997+3)/4).
-		IR: &IRRequest{
+		IR: &ir.Request{
 			Model:     "qwen-plus",
-			Messages:  []IRMessage{{Role: "user", Content: IRContent{Text: strings.Repeat("a", 3996)}}},
+			Messages:  []ir.Message{{Role: "user", Content: ir.Content{Text: strings.Repeat("a", 3996)}}},
 			MaxTokens: &maxTokens,
 		},
 	}
@@ -499,7 +500,7 @@ func TestP09RejectsEndpointModelTypeMismatch(t *testing.T) {
 		Endpoint: EndpointImages,
 		Auth:     &AuthContext{UserID: 7, KeyID: 10, GroupRatioBP: 10000},
 		Model:    &ModelEntry{ID: 1, ModelType: ModelTypeText},
-		IR:       &IRRequest{Model: "m", N: 1, ImageParams: &IRImageParams{Prompt: "x", N: 1}},
+		IR:       &ir.Request{Model: "m", N: 1, ImageParams: &ir.ImageParams{Prompt: "x", N: 1}},
 	}
 	err := NewEstimateStage(d).Run(t.Context(), c)
 	assertAPIError(t, err, apierr.CodePriceNotConfigured, http.StatusInternalServerError)

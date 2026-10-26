@@ -51,6 +51,8 @@
 | 17 | `internal/stream/abort.go` | P24 客户端断连检测：`ctx.Done()` → 停止读上游、记录部分产出、走部分结算 |
 | 18 | `internal/stream/*_test.go` | 逐字节喂入的半帧用例、乱序帧、双 `data:` 行、无 `[DONE]`、上游中途断开 |
 | 19 | `docs/relay-contract.md` | 三协议字段映射矩阵（对外字段 → IR → 上游字段），以及**不透传字段清单** |
+| 20 | `internal/cryptobox/cryptobox.go` + `cmd/keytool/` | AES-256-GCM 信封（`v1:` + nonce + ciphertext）；KEK 取 env `CHANNEL_KEY_KEK`（base64 32B）。`keytool encrypt \| seed-channel` 供本地把明文 Key 加密写库（`upstream_key_enc` **始终密文**，代码里**不得**有明文回退分支） |
+| 21 | `cmd/fakeupstream/` | 开发态 OpenAI 兼容假上游（流式/非流式；可模拟 429 / 500 / 无 `[DONE]` / 半帧）。仅用于 A13 端到端联调，**不得**进生产构建路径 |
 
 ## 4. 硬约束（违反即驳回）
 
@@ -72,6 +74,10 @@
 16. **不得缓存或落盘上游响应体全文**（除 `full_log_enabled` 用户且经信封加密，属 T22 范围）。
 17. **渠道 Key 只从配置快照解密取用**，禁止出现在日志、`t_upstream_attempt`、错误体。
 18. **`relaykit` 与 `internal/` 不得出现 `QuantumNous` / new-api 任何代码片段**（AGPLv3 传染性）。
+19. **单一 IR（D-15）**：`relaykit/ir` 是唯一 IR 定义。`internal/gw/ir.go` 的 `IRRequest` / `IRMessage` / `IRTool` **必须删除**，`Ctx.IR` 改为 `*ir.IRRequest`，P04/P09 与相关测试同步调整。**禁止**保留两套 IR——两套结构下「未知字段透传」守不住。
+20. **渠道载荷按 D-14 补齐**：`ChannelEntry` 增加 `base_url`、`upstream_key_enc`(base64)、`timeout_connect_ms`/`timeout_first_byte_ms`/`timeout_total_ms`、`retry_max`、`stream_usage_mode`、`upstream_model_name_map`，与 TDS §1.4 选路 SQL 的列一致。缺字段时按最安全默认拒绝（503 `config_unavailable`），**不得**猜默认值。
+21. **Key 解密只在发送前一刻**：`upstream_key_enc` 解出明文后只活在本次请求的局部变量里，**不得**进 `Ctx`、日志、`t_upstream_attempt`、错误体、metric 标签。KEK 缺失或密文不合法 → 503 `config_unavailable`，不得回退明文。
+22. **必须替换并删除 `NotWiredTerminal`**：T07 的临时终端（返 503 + `Settle(consumed=0)` 释放预扣）**不得保留**，`cmd/gatewayd/main.go` 的 `NewHandler(deps, nil)` 改为传入真实 dispatcher。若保留任何回到临时终端的开关，视为未完成。
 
 ## 5. 验收标准
 
@@ -89,7 +95,8 @@
 | A10 | 客户端断连：产出 200 token 后断开 → 结算 200 token 对应费用，剩余预扣释放；成功率不计失败 | 单测 |
 | A11 | 心跳：静默 15s 后出现 `: keep-alive`；有数据流时不出现 | 单测 |
 | A12 | 流式响应头三件套齐备，**无** `X-Credits-Consumed` | 手工 curl |
-| A13 | 真实上游联调（`0019` 的本地渠道或任一境内测试渠道）：`/v1/chat/completions` 非流式与流式各 1 次成功 | 手工 |
+| A13 | **端到端联调（对 `cmd/fakeupstream`）**：`/v1/chat/completions` 非流式与流式各 1 次成功，流式须验证「解析后重发」而非字节透传（假上游注入一个非标准帧，客户端不应收到原样字节）。**真实境内上游本次无法联调**（`0019` 的渠道 `base_url=https://local.invalid/v1` 是占位、Key 是假值），登记为遗留，**不得**用假上游冒充真实上游宣称通过 | 手工 |
+| A15 | `grep -rn "v1:" internal/ --include=*.go` 之外不得出现明文 Key 回退分支；`keytool` 加密后库内 `upstream_key_enc` 以 `v1:` 开头 | 复跑 |
 | A14 | `grep -rn "QuantumNous" relaykit internal` 为空 | grep |
 
 ## 6. 自检命令
@@ -110,16 +117,59 @@ curl -N -s -D - localhost:8080/v1/chat/completions -H "Authorization: Bearer $KE
 - 不得用「客户端 429」表示上游限流。
 - 不得为了首字节更快而跳过协议解析（AD-05 已定案）。
 
-## 8. 完成回执
+## 8. 完成回执（已归档 · 2026-10-26）
 
+| 项 | 内容 |
+| :--- | :--- |
+| 卡号 | T08 |
+| 完成状态 | 完成（21 项交付物；A13 改为对假上游，真实上游见遗留） |
+| 验收结论 | ✅ **通过**（验收时修掉 1 处真缺陷：环境代理污染） |
+| 复核人 | 交付总监 |
+
+**交付物**：`relaykit/`（独立 module：`ir/` + `openai/` + `anthropic/` + `bailian/` + 15 个 fixture）、`internal/dispatch/`、`internal/stream/`、`internal/cryptobox/`、`cmd/keytool/`、`cmd/fakeupstream/`、`docs/relay-contract.md`（128 行）。
+
+**自检结果**
+
+```bash
+cd relaykit && GOWORK=off go build ./... && GOWORK=off go test ./...
+ok  yunshu.dev/relaykit  0.029s      # 57 条 RUN 全 PASS，仅标准库
+go test ./... -count=1               # 21 个包全绿
+
+A3 429   attempts=1 outward=503 upstream_capacity_exceeded retry_after=30 cooldown=30s
+A4 500   attempt1 500 RETRY_SAME_ROUTE → attempt2 200 SUCCESS；settle 恰 1 次
+A5 DNS   attempts=1 outward=502 upstream_dns_failure class=DNS（不重试）
+A6 预算   attempts=1 outward=504 upstream_timeout（剩余 40s < 65s 门槛）
+A7 半帧   `data: {"cho` + `ices":[]}` → 正确拼成一帧
+A8 无DONE 部分收尾，usage 走兜底，结算不为 0
+A9 首token role 帧在前 → first_token_ms 取内容帧
+A10 断连  consumed=405 released=595
+A11 心跳  静默 15s 出 `: keep-alive`；有数据时不发
+A12 流式头 preheld=1000 remaining=9000，**无 X-Credits-Consumed**
+A13 联调  非流式 consumed=13 remaining=9987；流式 preheld=1000 remaining=9000
+A15 加密  库内 upstream_key_enc = `v1:4YbYKwZ…`（59 字节），mask = sk-****-key
+
+覆盖率   dispatch 67.5% / stream 73.6% / cryptobox 93.0%
+-race    容器内 dispatch / stream / cryptobox / gw 四包全 PASS
+grep     QuantumNous 0；internal/stream 内 io.Copy 0；:8080 仅 env 默认值
 ```
-卡号: T08
-relaykit: 目录结构 + GOWORK=off 构建输出 + 三协议文件清单
-重试矩阵: A3/A4/A5/A6 四条用例输出（attempt 行数 + 对外码）
-SSE: A7/A8/A9 用例名与输出
-断连: A10 用例输出（结算额 + 释放额）
-联调: A13 两次请求的关键响应头 + 首帧
-协议映射: docs/relay-contract.md 覆盖字段数
-硬约束自查: 逐条 1-18
-遗留:
-```
+
+**启动装配实测**：`gatewayd` 带真实 dispatcher 起来后 `/healthz` 200、`/readyz` 三依赖 ok、无鉴权请求返 401 `invalid_api_key` 且带 `request_id`。
+
+**验收时我修掉的一处真缺陷（不是实现方漏写）**
+
+`dispatch` 用 `Proxy: http.ProxyFromEnvironment` 建 Transport。本机环境有 `HTTP_PROXY=127.0.0.1:62934`，于是：
+
+1. `no-such-host.invalid` **根本没做本地 DNS 解析**，被送去代理，代理返 5xx → A5 判成 `upstream_all_failed`（用例失败，card A5 要求 `upstream_dns_failure`）；
+2. 更要紧的是生产语义：**所有客户请求体都会经过运维环境里随手 export 的代理**——多一跳、延迟不可控、per-channel 超时预算失效、第三方能看到请求内容，而 V1 上游全是 `region=DOMESTIC`，根本不需要代理。
+
+已改为 `Proxy: nil` 并在代码注释写明理由；将来要按渠道走代理必须是显式配置。改后 A5 通过，dispatch 全绿。
+
+**偏离与遗留**
+
+| # | 项 | 处置 |
+| :--- | :--- | :--- |
+| 1 | **真实境内上游未联调** | `0019` 的渠道 `base_url=https://local.invalid/v1` 是占位、Key 是假值，A13 只能对 `cmd/fakeupstream` 做。**待有真实渠道后必须补**，不得以假上游充当验收 |
+| 2 | **ROUTING 快照仍无生产方**（T07 遗留 #1，D-14 已定载荷） | 网关能起、能鉴权失败，但**无法走到 P12 选路**——没有快照、也没有 API Key。真实端到端要等 T11 |
+| 3 | 实现方越界 | 本轮只派了「第一段 relaykit」，实际交付了整张卡。内容我逐项复核通过，但**回执与派单范围不一致**；后续派单会明确「只做本段、超范围的部分留待下一段」，避免验收口径与工作量对不上 |
+| 4 | Anthropic `error` 对象内部非标准成员只留顶层 Extra | 影响面极小，T10 的 SSE 错误帧已覆盖对外契约 |
+| 5 | `image_url.detail` / `source.cache_control` 上提到 `ContentPart.Extra` | IR 规范化选择，已在 `relay-contract.md` 表 1 标注 |

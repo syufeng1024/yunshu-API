@@ -86,7 +86,11 @@ type RouteEntry struct {
 	Enabled           flexBool `json:"enabled"`
 }
 
-// ChannelEntry is one t_channel row reduced to routing fields.
+// ChannelEntry is one t_channel row reduced to routing + dispatch fields.
+//
+// D-14: the dispatch columns mirror the TDS §1.4 routing SQL verbatim. The
+// snapshot is the only source the gateway may use; it never reads t_channel
+// from MySQL on the request path.
 type ChannelEntry struct {
 	ID                 int64    `json:"id"`
 	Name               string   `json:"name"`
@@ -99,6 +103,19 @@ type ChannelEntry struct {
 	FallbackAllowed    flexBool `json:"fallback_allowed"`
 	StreamSupported    flexBool `json:"stream_supported"`
 	Enabled            flexBool `json:"enabled"`
+
+	// Dispatch payload (D-14). UpstreamKeyEnc is always the v1: envelope; it is
+	// never plaintext and never leaves the dispatcher in a log or a Ctx.
+	BaseURL            string `json:"base_url"`
+	UpstreamKeyEnc     string `json:"upstream_key_enc"`
+	TimeoutConnectMS   int64  `json:"timeout_connect_ms"`
+	TimeoutFirstByteMS int64  `json:"timeout_first_byte_ms"`
+	TimeoutTotalMS     int64  `json:"timeout_total_ms"`
+	// RetryMax is a pointer so "absent" is distinguishable from an explicit 0.
+	// A snapshot that omits it is refused (D-14), not read as "no retry".
+	RetryMax             *int64            `json:"retry_max"`
+	StreamUsageMode      string            `json:"stream_usage_mode"`
+	UpstreamModelNameMap map[string]string `json:"upstream_model_name_map"`
 }
 
 // GroupEntry is one t_price_group row plus its scope sets.

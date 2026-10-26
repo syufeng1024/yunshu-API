@@ -1,0 +1,6 @@
+[
+  {"name": "role", "data": {"id": "b1", "object": "chat.completion.chunk", "created": 1700000000, "model": "qwen-max", "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": null}]}},
+  {"name": "content", "data": {"id": "b1", "object": "chat.completion.chunk", "created": 1700000000, "model": "qwen-max", "choices": [{"index": 0, "delta": {"content": "你"}, "finish_reason": null}]}},
+  {"name": "usage", "data": {"id": "b1", "object": "chat.completion.chunk", "created": 1700000000, "model": "qwen-max", "choices": [], "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5, "prompt_tokens_details": {"cached_tokens": 2}}}},
+  {"name": "done", "data": "[DONE]"}
+]

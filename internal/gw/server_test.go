@@ -180,7 +180,7 @@ func TestServerErrorPathsEndToEnd(t *testing.T) {
 			headers: http.Header{"Authorization": {"Bearer " + key}, "X-Api-Key": {"sk-other"}},
 		},
 	}
-	handler := NewHandler(serverDeps(catalog, authorizedAuth(key)), nil)
+	handler := NewHandler(serverDeps(catalog, authorizedAuth(key)), noopTerminal)
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -232,7 +232,7 @@ func TestServerModelsEndpointSkipsQuota(t *testing.T) {
 		map[string]KeyModelGrant{"10": {Mode: ScopeAll}},
 	)
 	deps := serverDeps(catalog, authorizedAuth(key))
-	handler := NewHandler(deps, nil)
+	handler := NewHandler(deps, noopTerminal)
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
 	req.Header.Set("Authorization", "Bearer "+key)
@@ -285,7 +285,7 @@ func TestServerSuccessReachesTerminalAfterPrehold(t *testing.T) {
 }
 
 func TestServerUnknownPathIs404(t *testing.T) {
-	handler := NewHandler(serverDeps(basicCatalog(), authorizedAuth("sk-ok")), nil)
+	handler := NewHandler(serverDeps(basicCatalog(), authorizedAuth("sk-ok")), noopTerminal)
 	req := httptest.NewRequest(http.MethodGet, "/v1/nonexistent", nil)
 	req.Header.Set("X-Request-Id", "rid-404")
 	rec := httptest.NewRecorder()
@@ -296,7 +296,7 @@ func TestServerUnknownPathIs404(t *testing.T) {
 }
 
 func TestServerOversizedBodyIs413BeforeAuth(t *testing.T) {
-	handler := NewHandler(&Deps{}, nil)
+	handler := NewHandler(&Deps{}, noopTerminal)
 	body := strings.NewReader(strings.Repeat("x", MaxBodyBytes+1))
 	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", body)
 	req.Header.Set("X-Request-Id", "rid-413")
@@ -311,7 +311,7 @@ func TestServerRateLimiterUnavailableIs503(t *testing.T) {
 	key := "sk-ok"
 	deps := serverDeps(basicCatalog(), authorizedAuth(key))
 	deps.Limiter = &fakeLimiter{err: ratelimit.ErrUnavailable}
-	handler := NewHandler(deps, nil)
+	handler := NewHandler(deps, noopTerminal)
 	rec, decoded := postChat(t, handler, key, "qwen-plus", "rid-rl-down")
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())

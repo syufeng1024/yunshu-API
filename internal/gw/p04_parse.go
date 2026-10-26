@@ -6,6 +6,7 @@ import (
 
 	"yunshu.dev/core/internal/apierr"
 	"yunshu.dev/core/internal/jsonx"
+	"yunshu.dev/relaykit/ir"
 )
 
 // PlatformMaxOutputTokens is the P04 platform ceiling on max_tokens (TDS
@@ -34,7 +35,7 @@ var knownFields = map[string]bool{
 // ParseRequest performs P04. It validates shape only: model existence,
 // listing state and authorization are P07, and business authorization must not
 // leak into this stage (card §4.16).
-func ParseRequest(endpoint Endpoint, body []byte) (*IRRequest, *apierr.APIError) {
+func ParseRequest(endpoint Endpoint, body []byte) (*ir.Request, *apierr.APIError) {
 	if len(body) == 0 {
 		return nil, apierr.Newf(apierr.CodeInvalidRequestBody, "请求体为空")
 	}
@@ -46,7 +47,7 @@ func ParseRequest(endpoint Endpoint, body []byte) (*IRRequest, *apierr.APIError)
 		return nil, apierr.Newf(apierr.CodeInvalidRequestBody, "无法解析为 JSON 对象")
 	}
 
-	req := &IRRequest{RawExtra: map[string]jsonx.RawMessage{}}
+	req := &ir.Request{RawExtra: map[string]jsonx.RawMessage{}}
 	for name, raw := range fields {
 		if !knownFields[name] {
 			req.RawExtra[name] = raw
@@ -87,7 +88,7 @@ func ParseRequest(endpoint Endpoint, body []byte) (*IRRequest, *apierr.APIError)
 	return req, nil
 }
 
-func parseModel(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIError {
+func parseModel(fields map[string]jsonx.RawMessage, req *ir.Request) *apierr.APIError {
 	raw, ok := fields["model"]
 	if !ok {
 		return apierr.Newf(apierr.CodeInvalidRequestBody, "缺少 model")
@@ -104,7 +105,7 @@ func parseModel(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIE
 	return nil
 }
 
-func parseStream(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIError {
+func parseStream(fields map[string]jsonx.RawMessage, req *ir.Request) *apierr.APIError {
 	raw, ok := fields["stream"]
 	if !ok {
 		return nil
@@ -123,7 +124,7 @@ type wireMessage struct {
 	Name    string           `json:"name"`
 }
 
-func parseMessages(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIError {
+func parseMessages(fields map[string]jsonx.RawMessage, req *ir.Request) *apierr.APIError {
 	raw, ok := fields["messages"]
 	if !ok {
 		return apierr.New(apierr.CodeInvalidMessages)
@@ -150,7 +151,7 @@ func parseMessages(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.A
 		if role != "assistant" && content.Text == "" && len(content.Parts) == 0 {
 			return apierr.New(apierr.CodeInvalidMessages)
 		}
-		req.Messages = append(req.Messages, IRMessage{
+		req.Messages = append(req.Messages, ir.Message{
 			Role:    role,
 			Name:    wire.Name,
 			Content: content,
@@ -167,30 +168,30 @@ type wirePart struct {
 	} `json:"image_url"`
 }
 
-func parseContent(raw jsonx.RawMessage) (IRContent, *apierr.APIError) {
+func parseContent(raw jsonx.RawMessage) (ir.Content, *apierr.APIError) {
 	if len(raw) == 0 {
-		return IRContent{}, nil
+		return ir.Content{}, nil
 	}
 	var text string
 	if err := jsonx.Unmarshal(raw, &text); err == nil {
-		return IRContent{Text: text}, nil
+		return ir.Content{Text: text}, nil
 	}
 	var parts []wirePart
 	if err := jsonx.Unmarshal(raw, &parts); err != nil {
-		return IRContent{}, apierr.New(apierr.CodeInvalidMessages)
+		return ir.Content{}, apierr.New(apierr.CodeInvalidMessages)
 	}
-	out := IRContent{Parts: make([]IRContentPart, 0, len(parts))}
+	out := ir.Content{Parts: make([]ir.ContentPart, 0, len(parts))}
 	for _, p := range parts {
-		part := IRContentPart{Type: p.Type, Text: p.Text}
+		part := ir.ContentPart{Type: p.Type, Text: p.Text}
 		if p.Type == "image_url" {
 			if p.ImageURL == nil || !validImageURL(p.ImageURL.URL) {
-				return IRContent{}, apierr.New(apierr.CodeInvalidImageURL)
+				return ir.Content{}, apierr.New(apierr.CodeInvalidImageURL)
 			}
 			part.ImageURL = p.ImageURL.URL
 		}
 		if p.Type != "text" && p.Type != "image_url" &&
 			p.Type != "tool_use" && p.Type != "tool_result" {
-			return IRContent{}, apierr.New(apierr.CodeInvalidMessages)
+			return ir.Content{}, apierr.New(apierr.CodeInvalidMessages)
 		}
 		out.Parts = append(out.Parts, part)
 	}
@@ -201,7 +202,7 @@ func validImageURL(raw string) bool {
 	return strings.HasPrefix(raw, "https://") || strings.HasPrefix(raw, "data:image/")
 }
 
-func parseSystem(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIError {
+func parseSystem(fields map[string]jsonx.RawMessage, req *ir.Request) *apierr.APIError {
 	raw, ok := fields["system"]
 	if !ok {
 		return nil
@@ -237,7 +238,7 @@ type wireTool struct {
 	InputSchema jsonx.RawMessage `json:"input_schema"`
 }
 
-func parseTools(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIError {
+func parseTools(fields map[string]jsonx.RawMessage, req *ir.Request) *apierr.APIError {
 	raw, ok := fields["tools"]
 	if !ok {
 		return nil
@@ -247,7 +248,7 @@ func parseTools(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIE
 		return apierr.Newf(apierr.CodeInvalidTools, "tools[?]")
 	}
 	for i, item := range items {
-		tool := IRTool{}
+		tool := ir.Tool{}
 		switch {
 		case item.Function != nil && item.Type == "function":
 			tool.Name = strings.TrimSpace(item.Function.Name)
@@ -264,7 +265,7 @@ func parseTools(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIE
 	return nil
 }
 
-func parseImage(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIError {
+func parseImage(fields map[string]jsonx.RawMessage, req *ir.Request) *apierr.APIError {
 	var prompt string
 	if raw, ok := fields["prompt"]; ok {
 		if err := jsonx.Unmarshal(raw, &prompt); err != nil || strings.TrimSpace(prompt) == "" {
@@ -299,13 +300,13 @@ func parseImage(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIE
 	req.N = n
 	req.Size = size
 	req.ResponseFormat = responseFormat
-	req.ImageParams = &IRImageParams{
+	req.ImageParams = &ir.ImageParams{
 		Prompt: prompt, N: n, Size: size, ResponseFormat: responseFormat,
 	}
 	return nil
 }
 
-func parseEmbeddings(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr.APIError {
+func parseEmbeddings(fields map[string]jsonx.RawMessage, req *ir.Request) *apierr.APIError {
 	raw, ok := fields["input"]
 	if !ok {
 		return apierr.Newf(apierr.CodeInvalidRequestBody, "缺少 input")
@@ -333,7 +334,7 @@ func parseEmbeddings(fields map[string]jsonx.RawMessage, req *IRRequest) *apierr
 	return apierr.Newf(apierr.CodeInvalidRequestBody, "input 类型不支持")
 }
 
-func parseGeneration(fields map[string]jsonx.RawMessage, req *IRRequest, endpoint Endpoint) *apierr.APIError {
+func parseGeneration(fields map[string]jsonx.RawMessage, req *ir.Request, endpoint Endpoint) *apierr.APIError {
 	if raw, ok := fields["temperature"]; ok {
 		var temp float64
 		if err := jsonx.Unmarshal(raw, &temp); err != nil {

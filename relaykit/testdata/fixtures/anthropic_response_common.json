@@ -1,0 +1,10 @@
+{
+  "id": "msg-c",
+  "type": "message",
+  "role": "assistant",
+  "model": "qwen-plus",
+  "content": [{"type": "text", "text": "hello"}],
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {"input_tokens": 5, "output_tokens": 2}
+}

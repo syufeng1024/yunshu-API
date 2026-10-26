@@ -13,7 +13,6 @@ import (
 	"yunshu.dev/core/internal/config"
 	"yunshu.dev/core/internal/idemstore"
 	"yunshu.dev/core/internal/jsonx"
-	"yunshu.dev/core/internal/ledger"
 	obslog "yunshu.dev/core/internal/obs/log"
 	"yunshu.dev/core/internal/ratelimit"
 )
@@ -26,8 +25,8 @@ const (
 	DefaultStreamBudgetMS = 600_000
 )
 
-// Terminal is the seam after P14. T07 ships NotWiredTerminal; T08 replaces it
-// with the upstream dispatcher.
+// Terminal is the seam after P14. T08 wires the upstream dispatcher; there is
+// deliberately no fallback implementation.
 type Terminal interface {
 	Serve(w http.ResponseWriter, r *http.Request, c *Ctx)
 }
@@ -47,10 +46,12 @@ type Handler struct {
 	terminal Terminal
 }
 
-// NewHandler wires the handler. A nil terminal gets NotWiredTerminal.
+// NewHandler wires the handler. A nil terminal is a boot-time programming
+// error: the dispatcher is mandatory and there is no temporary terminal to fall
+// back to (T08 hard constraint 22).
 func NewHandler(d *Deps, terminal Terminal) *Handler {
 	if terminal == nil {
-		terminal = NotWiredTerminal(d)
+		panic("gw: NewHandler requires a terminal (upstream dispatcher)")
 	}
 	return &Handler{
 		d:        d,
@@ -311,10 +312,11 @@ func (h *Handler) releaseRequest(ctx context.Context, c *Ctx) {
 	if c.ConnHeld && h.d.ConnGuard != nil {
 		h.d.ConnGuard.Release(c.Auth.KeyID)
 	}
-	if c.Idem != nil && h.d.Idem != nil {
-		// T07 never reaches a successful upstream response. A request that
-		// owned the idempotency lease must be marked FAILED so the client's
-		// retry is allowed instead of blocking for the 15s lease.
+	if c.Idem != nil && h.d.Idem != nil && !c.IdemDone {
+		// A request that owned the idempotency lease and did not reach a
+		// terminal success is marked FAILED so the client's retry is allowed
+		// instead of blocking for the 15s lease. T08's dispatcher marks
+		// IdemDone on success, partial stream completion and client abort.
 		completeCtx, cancel := detach(ctx, 2*time.Second)
 		defer cancel()
 		_ = h.d.Idem.Complete(completeCtx, c.Idem.Record, idemstore.StateFailed, nil)
@@ -368,36 +370,4 @@ func clientIP(remoteAddr string) netip.Addr {
 		return netip.Addr{}
 	}
 	return addr
-}
-
-// NotWiredTerminal is the T07 terminal. No upstream call is made in this card,
-// so a hold that was placed must be released before answering; leaving it HELD
-// would freeze customer funds until the 200s TTL, which is not a timeout case
-// and must not be handed to reconciliation. T08 replaces this terminal with the
-// dispatcher and removes the compensation.
-func NotWiredTerminal(d *Deps) TerminalFunc {
-	return func(w http.ResponseWriter, r *http.Request, c *Ctx) {
-		if c.Hold != nil && d.Ledger != nil {
-			ctx, cancel := detach(r.Context(), 5*time.Second)
-			defer cancel()
-			_, err := d.Ledger.Settle(ctx, ledger.SettleParams{
-				RequestID:     c.RequestID,
-				UserID:        c.Auth.UserID,
-				ConsumedMicro: 0,
-				ReleaseReason: "upstream_not_wired",
-			})
-			if err != nil && d.Logger != nil {
-				d.Logger.Error(ctx, "prehold_release_failed: "+err.Error(), obslog.Fields{Stage: "P10"})
-			}
-		}
-		e := apierr.New(apierr.CodeConfigUnavailable).WithRequestID(c.RequestID)
-		if d.Logger != nil {
-			d.Logger.Warn(r.Context(), "upstream_dispatch_not_wired", obslog.Fields{
-				Stage:     "P14",
-				RequestID: c.RequestID,
-				Status:    e.HTTPStatus,
-			})
-		}
-		_ = apierr.Write(w, e)
-	}
 }

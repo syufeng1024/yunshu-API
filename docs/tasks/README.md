@@ -54,6 +54,9 @@
 | D-08 | 配置键共 **45** 个（TDS §3.7 正文写 34 是过期计数，见 errata E-07），命名空间归属按 TDS §3.7；`quota.overdraft_warn_days` 不归属任何命名空间、写入即 `config_value_invalid`；`/admin/config` 运行时可写白名单仅 12 个键 | TDS §3.7（2026-10-19 收口 + TA-1.1） | T05、T15 |
 | D-09 | **前端展示结构以 `ref-frontend-structure.md` 为「参考」，不是规范**（对标 kmitu.com/products/llm-api）。区块与功能点仍以 PRD §4.1–§4.5 为基线：区块一条不能少、**顺序与形态可自行取舍**、不为"像参考站"新增区块或组件。参考站中与 PRD 冲突的元素（送现金/折扣/资质墙/调用排行/配置助手/代理入口）属**禁写项**，已列在该文档 §4–§5 | 用户 2026-10-26：「参考，不用照抄照搬」；禁写项本身来自 PRD 合规与范围条款 | T18（参考）、T19/T20（版式可选） |
 | D-10 | **金额单位双轨**：账本与积分一律 `_micro`（微积分）；**支付金额用 `_fen`（分）**。T04 的「禁浮点/禁 decimal」检查不得把 `_fen` 判为违规 | `t_plan.price_fen` 按 TDS 定义即「分」；若统一写成微积分，"99 元"会变成 99000000，支付对账反而易错 | T02、T04、T13、T15 |
+| D-16 | **网关上游 Transport 不继承环境代理**（`Proxy: nil`）。不做 `ProxyFromEnvironment`：V1 上游全部 `region=DOMESTIC`，继承运维环境里的 `HTTP_PROXY` 会让客户请求体多穿一跳第三方、per-channel 超时预算失效。验收时就是因为本机 `HTTP_PROXY=127.0.0.1:62934` 导致 `no-such-host.invalid` 被代理接管、A5 的 DNS 用例判错才发现 | 若将来需要按渠道走代理，必须是显式配置项，不得依赖环境变量 | T08 已实现、T22 部署需复核 |
+| D-14 | **ROUTING 快照的渠道载荷按 TDS §1.4 选路 SQL 补齐**：`base_url`、`upstream_key_enc`（base64，**始终密文**）、`timeout_connect_ms`/`timeout_first_byte_ms`/`timeout_total_ms`、`retry_max`、`stream_usage_mode`。T07 的 `ChannelEntry` 只取了路由判定所需子集，T08 必须按此扩字段 | TDS §1.4（1679–1692 行）的选路 SQL 原文就选了这 8 列；硬约束「渠道 Key 只从配置快照解密取用」也要求密文进快照 | T08 实现、T11/T15 发布 |
+| D-15 | **`relaykit/ir` 是全项目唯一的 IR 定义**：`internal/gw/ir.go` 的 `IRRequest` 等结构**删除**，`Ctx.IR` 改为 `*ir.IRRequest`，P04/P09 与相关测试随之调整。禁止保留两套 IR | T07 已经为了 P04 解析自建了一份 IR，T08 又要建 relaykit 的 IR。两套并存必然字段漂移——而本卡硬约束 3 恰恰是「未知字段必须保留」，两套结构下这条守不住 | T08 |
 | D-13 | **执行顺序调整：T10 提到 T07 之前**。T10 是纯库（65 码 + 写出口 + 响应头 + SSE 错误帧），不依赖流水线；而 T07 的每个失败分支都要产出这些码。若按原图先做 T07，错误处理会先写一套临时实现、T10 再返工 | 依赖图原标 T10 依赖 T07，是把它当成"流水线的错误出口"；实际它是被流水线**消费**的库 | T10、T07 |
 | D-12 | **幂等租约补列走方案 A**：新增迁移 `0020` 给 `t_idempotency_record` 加 `fence_token char(36)` + `lease_expires_at datetime(3)`（纯 Expand，只加不删，可回滚为 `DROP COLUMN`）；不做「用 `request_id` 当 fence」的凑合方案 | 幂等 fencing 的语义一旦凑合，后续排查「谁抢了租约」时无从下手；现在只是一条 DDL。编号超出 TDS §8.6 裁定表，已在 `docs/schema.md` 登记待回写 | T06（补正）、T07 |
 | D-11 | **套餐发票/SLA 口径**（原 Q-06）：`invoice_supported` 付费三档（STANDARD / PRO / ENTERPRISE）= `1`，`TRIAL` / `FREE_DEFAULT` = `0`；`sla_text` 付费三档填「7×24 工单受理，不承诺可用性百分比」，其余为空串 | 开票是 PRD G-07 功能点，若五档全 0，定价页会渲染成"全部不支持发票"，与产品事实相反；但开票需实名且需实际支付，体验版与默认档无可开票金额 | T03（0018 种子）、T18（定价页展示） |
@@ -207,6 +210,7 @@ flowchart LR
 | — | 2026-10-26 | 2026-10-26 | ✅ 0020 幂等租约（D-12） | — | 补 fence_token/lease_expires_at；18 条迁移 |
 | T10 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 4 项非阻塞 | 65 码 + 写出口；84 turns / 633s / $6.74 |
 | T07 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 14 项（4 项需 T11/T08 联调） | 网关前置段；157 turns / 1045s / $20.27 |
+| T08 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 5 项（真实上游与 ROUTING 快照待 T11） | relaykit + dispatch + stream；149 turns / 833s / $9.97 |
 
 ### T01 验收记录（交付总监独立复核，2026-10-26）
 
@@ -481,6 +485,30 @@ flowchart LR
 **追清的一处数字疑问**：T07 报 `est=7920`，而 T04 示例写 `est=7200`。核对后确认链路正确——`est = raw × 1.1(安全) × 1.2(预扣倍率)`，`HoldMicro` 只做 `min(est, 可用×50%)`，**没有重复乘系数**。是我 T04 卡片的示例值少乘了安全系数，已修正（两种取值下 `hold` 都被 50% 上限截断为 3250，断言不变）。
 
 **四项需要后续联调**：① ROUTING 快照与 K19 价格目前**没有生产方**，T11/T15 落地前网关只能返 503/500；② P10 之后的终端是临时补偿（返 503 + 释放预扣），**T08 必须替换，不能保留**；③ K13 不含账户状态，`account_disabled`/`account_frozen` 暂无判定来源；④ tokenizer 是占位实现，替换点在 `billing.InputCounter`。
+
+### T08 验收记录（交付总监独立复核，2026-10-26）
+
+| 复核项 | 结果 | 证据 |
+| :--- | :--- | :--- |
+| relaykit 独立可构建 | ✅ | `GOWORK=off go build ./...` + `go test ./...` 全绿，57 条 RUN，仅标准库依赖 |
+| 三协议双向 | ✅ | OpenAI 64 / Anthropic 63 / 百炼 55 个已建模字段，其余走 `Extra` |
+| 未知字段透传 | ✅ | `logprobs`、`top_logprobs`、`metadata.user_id`、`enable_search` 跨三轮仍在 |
+| 单一 IR（D-15） | ✅ | `internal/gw/ir.go` 已删除，`Ctx.IR` 指向 `relaykit/ir`；`go build ./...` 通过 |
+| 重试矩阵 | ✅ | A3 attempts=1/503；A4 2 次尝试且 settle=1；A5 1 次/502/DNS；A6 1 次/504 |
+| 上游 429 不转客户端 429 | ✅ | `upstream_capacity_exceeded` + `retry_after=30`，attempt 仅 1 行 |
+| SSE 解析后重发 | ✅ | A7 半帧拼接、A8 无 `[DONE]`、`TestVendorFrameIsNotForwarded`（非标帧不透传） |
+| 首 token 口径 | ✅ | A9 `role` 帧不计，取内容帧 |
+| 断连部分结算 | ✅ | A10 `consumed=405 released=595` |
+| 流式头 | ✅ | A12/A13 均无 `X-Credits-Consumed`，有 `X-Credits-Preheld` |
+| 渠道 Key 加密 | ✅ | 库内 `v1:` 前缀 59 字节，mask 正确；`keytool seed-channel` 非 local 环境拒绝执行 |
+| 临时终端 | ✅ | `NotWiredTerminal` 已删除，`main.go` 传真实 `dispatcher`；网关实测 401 走新链路 |
+| 覆盖率 | ✅ | dispatch 67.5% / stream 73.6% / cryptobox 93.0% |
+| **竞态** | ✅ | 容器内 `-race` 跑 dispatch/stream/cryptobox/gw 四包全 PASS |
+| 禁用项 | ✅ | `QuantumNous` 0、`internal/stream` 内 `io.Copy` 0、`:8080` 仅 env 默认值 |
+
+**验收时我改的一处代码（D-16）**：`Proxy: http.ProxyFromEnvironment` → `nil`。理由是生产语义问题而非测试便利：客户请求体不该穿过运维环境里随手 export 的代理。详见回执。
+
+**五项遗留**：① 真实境内上游未联调（`local.invalid` 占位）；② ROUTING 快照与 API Key 都还没有生产方，真实端到端要等 T11；③ 本轮实际交付超出派单范围（只派了 relaykit 一段，交付了整张卡），内容复核通过但口径不一致；④ Anthropic 错误对象内部 Extra 未保留；⑤ `image_url.detail` 等字段上提层级，已在契约文档标注。
 
 ---
 

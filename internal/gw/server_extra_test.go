@@ -126,22 +126,32 @@ func TestServerOwnedIdemLeaseIsCompletedFailedOnEarlyExit(t *testing.T) {
 	}
 }
 
-func TestNotWiredTerminalReleasesHold(t *testing.T) {
+// T08 removed the temporary terminal. The handler must hand a successful
+// pipeline to the injected terminal and must not settle on its own: settlement
+// belongs to the dispatcher, which knows the real usage.
+func TestHandlerDelegatesToTerminalAndDoesNotSettle(t *testing.T) {
 	key := "sk-ok"
 	deps := serverDeps(basicCatalog(), authorizedAuth(key))
 	fake := &fakeLedger{hold: 10}
 	deps.Ledger = fake
-	handler := NewHandler(deps, nil) // default terminal
+	called := false
+	handler := NewHandler(deps, TerminalFunc(func(w http.ResponseWriter, _ *http.Request, c *Ctx) {
+		called = true
+		if c.Hold == nil || c.Hold.HoldMicro != 10 {
+			t.Errorf("terminal did not receive the hold: %+v", c.Hold)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
 
-	rec, _ := postChat(t, handler, key, "qwen-plus", "rid-not-wired")
-	if rec.Code != http.StatusServiceUnavailable {
+	rec, _ := postChat(t, handler, key, "qwen-plus", "rid-terminal")
+	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
 	}
-	if len(fake.settles) != 1 {
-		t.Fatalf("settles = %v, want one release", fake.settles)
+	if !called {
+		t.Fatal("the terminal was not called")
 	}
-	if fake.settles[0].ConsumedMicro != 0 {
-		t.Fatalf("terminal must release in full, consumed = %d", fake.settles[0].ConsumedMicro)
+	if len(fake.settles) != 0 {
+		t.Fatalf("the handler must not settle; settles = %v", fake.settles)
 	}
 }
 

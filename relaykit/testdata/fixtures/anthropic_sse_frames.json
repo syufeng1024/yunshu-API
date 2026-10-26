@@ -1,0 +1,10 @@
+[
+  {"name": "message-start", "event": "message_start", "data": {"type": "message_start", "message": {"id": "msg_1", "type": "message", "role": "assistant", "model": "claude-sonnet", "content": [], "usage": {"input_tokens": 5, "output_tokens": 0}}}},
+  {"name": "tool-start", "event": "content_block_start", "data": {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}}}},
+  {"name": "content", "event": "content_block_delta", "data": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "你"}}},
+  {"name": "empty-content", "event": "content_block_delta", "data": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": ""}}},
+  {"name": "tool-json", "event": "content_block_delta", "data": {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": "{\"q\":"}}},
+  {"name": "message-delta", "event": "message_delta", "data": {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 2}}},
+  {"name": "message-stop", "event": "message_stop", "data": {"type": "message_stop"}},
+  {"name": "error", "event": "error", "data": {"type": "error", "error": {"type": "overloaded_error", "message": "overloaded"}}}
+]

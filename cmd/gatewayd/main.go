@@ -18,6 +18,8 @@ import (
 	"yunshu.dev/core/internal/balance"
 	"yunshu.dev/core/internal/breaker"
 	"yunshu.dev/core/internal/config"
+	"yunshu.dev/core/internal/cryptobox"
+	"yunshu.dev/core/internal/dispatch"
 	"yunshu.dev/core/internal/gw"
 	"yunshu.dev/core/internal/idemstore"
 	"yunshu.dev/core/internal/ledger"
@@ -121,6 +123,7 @@ func main() {
 	}
 
 	mirror := balance.New(rdb, gw.DBAccountSource{DB: gwDB}, 60*time.Second, logger)
+	brk := breaker.New(rdb, redisClock, logger)
 
 	deps := &gw.Deps{
 		Config:        store,
@@ -131,7 +134,7 @@ func main() {
 		Ledger:        ledger.NewStore(gwDB, clock.Real{}),
 		Limiter:       limiter,
 		Idem:          idemstore.New(rdb, redisClock, idemstore.NewMySQL(gwDB), idemOpts, logger),
-		Breaker:       breaker.New(rdb, redisClock, logger),
+		Breaker:       brk,
 		Tokens:        gw.HeuristicCounter{},
 		CounterReader: gw.RedisCounters{Client: rdb},
 		Backpressure:  gw.NewBackpressure(logger),
@@ -144,7 +147,28 @@ func main() {
 		logger.Error(rootCtx, "gateway wiring incomplete: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
 		os.Exit(1)
 	}
-	handler := gw.NewHandler(deps, nil)
+
+	// The channel KEK. A missing or malformed KEK does not stop the process:
+	// every dispatch then answers 503 config_unavailable, which is visible and
+	// never falls back to a plaintext key (T08 hard constraint 21).
+	box, err := cryptobox.FromEnv()
+	if err != nil {
+		logger.Error(rootCtx, "channel key KEK unavailable: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
+		box = nil
+	}
+
+	dispatcher := dispatch.New(dispatch.Options{
+		Catalog:  deps.Catalog,
+		Tokens:   deps.Tokens,
+		Ledger:   deps.Ledger,
+		Balance:  deps.Balance,
+		Config:   deps.Config,
+		Logger:   logger,
+		Idem:     deps.Idem,
+		KEK:      box,
+		Cooldown: brk,
+	})
+	handler := gw.NewHandler(deps, dispatcher)
 
 	h := health.New()
 	h.Add("redis", func(ctx context.Context) error {
