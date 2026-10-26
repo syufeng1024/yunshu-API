@@ -27,3 +27,6 @@ build/
 .idea/
 .vscode/*
 !.vscode/extensions.json
+
+# Go 编译产物
+bin/
