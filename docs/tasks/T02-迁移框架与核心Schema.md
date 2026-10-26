@@ -134,18 +134,33 @@ ls internal/platform/migrate/sql/mysql/ | grep -E "^000[78]_" || echo "OK: 0007/
 - 不得在迁移里写业务数据（种子仅限 `0009` 的 `t_plan`，其余种子属 T03）。
 - 不得引入 ORM 自动迁移（gorm AutoMigrate 等）——只允许显式 SQL。
 
-## 10. 完成回执
+## 10. 完成回执（已归档 · 2026-10-26）
+
+> 归档说明：同 T01，当时回执未落入卡内，2026-10-26 统一补档。
+
+| 项 | 内容 |
+| :--- | :--- |
+| 卡号 | T02 |
+| 完成状态 | 完成（14 项交付物落地） |
+| 验收结论 | ⚠️ 有条件通过（3 项遗留，均非阻塞） |
+| 复核人 | 交付总监 |
+
+**迁移清单**：`0001`（8 表）、`0002`（11 表）、`0003`（26 表）、`0004`/`0005`（`t_config_item` 作用域两步）、`0006`（2 表 + `t_api_key.group_code`）、`0009`（`t_plan` 5 行种子）。`0007`/`0008` **未创建**（永久预留）。
+
+**自检结果**
 
 ```
-卡号: T02
-迁移清单: 逐条 版本号 / 文件名 / 表数 / down 是否存在
-表计数: information_schema 实际 46 条（贴输出）
-字段来源追溯: 列出所有「TDS 未给完整 DDL」的表，格式 表名 | 字段 | TDS 行号
-自检输出: §8 五条命令的关键输出
-硬约束自查:
-  - 无 timestamp: grep 结果
-  - decimal 仅 success_rate: grep 结果
-  - 0007/0008 未占用: 输出
-  - t_ledger_entry 三唯一键: SHOW INDEX 输出
-偏离与未决 / 遗留:
+schema_migrations            7 行，全部 APPLIED / CHECKSUM MATCH
+业务表                        47（information_schema 48，含 schema_migrations）
+collation 例外               0（全 utf8mb4_0900_as_cs）
+timestamp 字样               0 命中
+FOREIGN KEY                  0 命中
+decimal                      仅 t_metric_daily.success_rate
+t_ledger_entry 唯一键         PRIMARY(id) / uk_le_idem / uk_le_entry_no，均不含 created_at
+up/down 对称                 8/8、11/11、26/26、2/2
+引擎测试                     14 条用例全绿
+checksum 篡改                报错退出码 1
+重复版本号                   报错文案含两个文件名
 ```
+
+**偏离与遗留**：① 表数 **47 而非卡面 46**——卡内逐表清单 `8+11+26+2=47`，是卡片 §1 的算术错误，实现方未删表凑数；② `t_plan.daily_quota_micro` 改可空（E-04）；③ `t_user.cancel_apply_at` 替代 TDS 的中文列名（E-03）；④ 账本账号 `UPDATE`/`DELETE` 权限留待 T22。
