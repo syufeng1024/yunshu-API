@@ -8,12 +8,19 @@
 | :--- | ---: | :--- |
 | TDS §1.2 分层清单 | 46 | 只覆盖 §1.2 表格内列出的表，不含 `t_config_publish` |
 | T02 实际建表（0001–0006） | 47 | 0002 组按任务卡另含 `t_config_publish`（TDS §1.8 `2866` 行定义） |
-| T03 待建（0010–0017） | 7 | `t_content_policy_hit`、`t_arrears`、`t_ticket`、`t_ticket_reply`、`t_review_task`、`t_upstream_bill`、`t_channel_dedicated_user` |
-| 设计总量 | 54 | 47 + 7 |
-| T02 完成后 `information_schema.tables` | 48 | 47 张业务表 + `schema_migrations` |
-| T03 完成后 `information_schema.tables` | 55 | 54 张业务表 + `schema_migrations` |
+| T03 实际建表（0012 / 0014 / 0015 / 0016 / 0017） | 7 | `t_content_policy_hit`、`t_arrears`、`t_ticket`、`t_ticket_reply`、`t_review_task`、`t_upstream_bill`、`t_channel_dedicated_user` |
+| 当前业务表总量 | 54 | 47 + 7；0010 / 0011 / 0013 只改列，0017 另建 1 表（已计入 7） |
+| 当前 `information_schema.tables` | 55 | 54 张业务表 + `schema_migrations` |
+| 当前迁移条数 | 17 | 0001–0006（6）、0009（1）、0010–0019（10）；0007 / 0008 空缺不计 |
 
 任务卡 §1 / §7 A2 写「46 张」，与卡内 §4 逐表清单（8 + 11 + 26 + 2 = 47）相差 1；差的是 `t_config_publish`。本表按逐表清单登记，未删表凑数。`information_schema` 计数含迁移记录表，因此比业务表多 1。
+
+## 表 → 任务卡映射
+
+| 任务卡 | 表 | 数量 |
+| :--- | :--- | ---: |
+| T02 | `t_user`、`t_verify_record`、`t_device_fingerprint`、`t_verification_code`、`t_api_key`、`t_api_key_model`、`t_api_key_ip_rule`、`t_api_key_audit`、`t_protocol`、`t_channel`、`t_model`、`t_model_alias`、`t_model_capability`、`t_route`、`t_price_rule`、`t_plan`、`t_config_item`、`t_config_runtime`、`t_config_publish`、`t_price_group`、`t_price_group_scope`、`t_credit_account`、`t_credit_batch`、`t_ledger_entry`、`t_prehold_hold`、`t_settle_task`、`t_recharge_order`、`t_refund_order`、`t_redeem_batch`、`t_redeem_code`、`t_invoice_apply`、`t_quota_apply`、`t_usage_record`、`t_upstream_attempt`、`t_idempotency_record`、`t_rate_limit_policy`、`t_user_daily_quota`、`t_metric_minute`、`t_metric_daily`、`t_metric_model_daily`、`t_metric_channel_health`、`t_admin_audit_log`、`t_risk_rule`、`t_risk_hit_log`、`t_announcement`、`t_announcement_read`、`t_notification` | 47 |
+| T03 | `t_content_policy_hit`、`t_arrears`、`t_ticket`、`t_ticket_reply`、`t_review_task`、`t_upstream_bill`、`t_channel_dedicated_user` | 7 |
 
 ## 编号占用
 
@@ -28,7 +35,18 @@
 | 0007 | `t_model.enabled → listing_state` Expand | 永久预留，不创建 |
 | 0008 | `t_model` Contract 删旧列 | 永久预留，不创建 |
 | 0009 | `t_plan` 五档种子 | 已落盘 |
-| 0010–0019 | 幂等、专属渠道、工单、种子 | T03 |
+| 0010 | 幂等 Expand：`t_idempotency_record` 加 `body_hash` + `uk_idem_key` | 已落盘（T03） |
+| 0011 | `t_user.phone_hmac` + `uk_user_phone_hmac`，`phone` 去唯一键 | 已落盘（T03） |
+| 0012 | `t_content_policy_hit` 建表 | 已落盘（T03） |
+| 0013 | 幂等 Contract：删除 `uk_idem` | 已落盘（T03），**不可回滚** |
+| 0014 | `t_arrears` 建表 | 已落盘（T03） |
+| 0015 | `t_ticket` / `t_ticket_reply` / `t_review_task` 建表 | 已落盘（T03） |
+| 0016 | `t_upstream_bill` 建表 | 已落盘（T03） |
+| 0017 | `t_model.recommend_weight` + `idx_model_recommend`；`t_channel` 专属两列；`t_channel_dedicated_user` 建表 | 已落盘（T03） |
+| 0018 | 34 配置键 + 3 价格分组 + 3 协议 + 5 档限流策略种子 | 已落盘（T03） |
+| 0019 | 本地联调种子（仅 `ENV=local`） | 已落盘（T03），其他环境跳过并打 WARN |
+
+> **需回写 TDS §8.6**：0018 / 0019 是 TDS §8.6 裁定表之外的新增占用，由交付总监统一改源文档；实现方未改 TDS。
 
 ## 业务表
 
@@ -36,7 +54,7 @@
 
 | 表 | 迁移 | 分层 | 关键唯一键 |
 | :--- | :--- | :--- | :--- |
-| `t_user` | 0001 | 账号 | `uk_user_no`、`uk_user_email`、`uk_user_phone`、`uk_user_idno` |
+| `t_user` | 0001 | 账号 | `uk_user_no`、`uk_user_email`、`uk_user_idno`；`0011` 起手机号唯一性迁到 `uk_user_phone_hmac` |
 | `t_verify_record` | 0001 | 账号 | — |
 | `t_device_fingerprint` | 0001 | 账号 | `uk_fp_hash_user` |
 | `t_verification_code` | 0001 | 账号 | — |
@@ -45,8 +63,8 @@
 | `t_api_key_ip_rule` | 0001 | 凭据 | `uk_akip_key_cidr` |
 | `t_api_key_audit` | 0001 | 凭据 | — |
 | `t_protocol` | 0002 | 配置 | `uk_proto_code` |
-| `t_channel` | 0002 | 配置 | `uk_channel_name` |
-| `t_model` | 0002 | 配置 | `uk_model_name` |
+| `t_channel` | 0002 | 配置 | `uk_channel_name`；`0017` 加 `dedicated_scope_mode` / `fallback_allowed` |
+| `t_model` | 0002 | 配置 | `uk_model_name`；`0017` 加 `recommend_weight` / `idx_model_recommend` |
 | `t_model_alias` | 0002 | 配置 | `uk_alias_name` |
 | `t_model_capability` | 0002 | 配置 | `uk_mc_model_cap` |
 | `t_route` | 0002 | 配置 | `uk_route_model_channel_proto_upstream` |
@@ -70,7 +88,7 @@
 | `t_quota_apply` | 0003 | 资金 | `uk_qa_no` |
 | `t_usage_record` | 0003 | 计量 | `uk_ur_request` |
 | `t_upstream_attempt` | 0003 | 计量 | `uk_ua_request_attempt` |
-| `t_idempotency_record` | 0003 | 计量 | `uk_idem`；`0010` 将追加 `uk_idem_key`，`0013` 删除 `uk_idem` |
+| `t_idempotency_record` | 0003 | 计量 | `0010` 加 `uk_idem_key (scope, api_key_id, idem_key)`；`0013` 删除 `uk_idem`，现仅 `uk_idem_key` |
 | `t_rate_limit_policy` | 0003 | 限流 | `uk_rlp_scope_active` |
 | `t_user_daily_quota` | 0003 | 限流 | `uk_udq_user_date` |
 | `t_metric_minute` | 0003 | 指标 | `uk_mm_bucket_scope` |
@@ -83,13 +101,13 @@
 | `t_announcement` | 0003 | 运营 | — |
 | `t_announcement_read` | 0003 | 运营 | `uk_ar_ann_user` |
 | `t_notification` | 0003 | 运营 | — |
-| `t_content_policy_hit` | 0012（未创建） | 运营 | 待 T03 |
-| `t_arrears` | 0014（未创建） | 资金 | 待 T03 |
-| `t_ticket` | 0015（未创建） | 运营 | 待 T03 |
-| `t_ticket_reply` | 0015（未创建） | 运营 | 待 T03 |
-| `t_review_task` | 0015（未创建） | 运营 | 待 T03 |
-| `t_upstream_bill` | 0016（未创建） | 资金 | 待 T03 |
-| `t_channel_dedicated_user` | 0017（未创建） | 配置 | 待 T03 |
+| `t_content_policy_hit` | 0012 | 运营 | `uk_cph_request`；`matched_excerpt varchar(255)` 只存片段 |
+| `t_arrears` | 0014 | 资金 | `uk_arr_request`、`uk_arr_no` |
+| `t_ticket` | 0015 | 运营 | `uk_tk_no` |
+| `t_ticket_reply` | 0015 | 运营 | — |
+| `t_review_task` | 0015 | 运营 | `uk_rt_biz (biz_type, biz_id)` |
+| `t_upstream_bill` | 0016 | 资金 | `uk_ub_channel_period_line (channel_id, bill_period, bill_no)` |
+| `t_channel_dedicated_user` | 0017 | 配置 | `uk_cdu_channel_user (channel_id, user_id)` |
 
 ## 持有字段的迁移
 
@@ -99,6 +117,16 @@
 | 0005 | `t_config_item` | `DROP INDEX uk_cfg_ns_key`，`ADD UNIQUE uk_cfg_ns_key_scope (cfg_namespace, cfg_key, scope, scope_id)` |
 | 0006 | `t_api_key` | 加 `group_code varchar(32) NOT NULL DEFAULT 'standard'`、`idx_key_group (group_code, status)` |
 | 0009 | `t_plan` | 插入 TRIAL / STANDARD / PRO / ENTERPRISE / FREE_DEFAULT 五行 |
+| 0010 | `t_idempotency_record` | 加 `body_hash char(64) NOT NULL DEFAULT ''`、`uk_idem_key (scope, api_key_id, idem_key)`；`api_key_id` 改 `NOT NULL DEFAULT 0`；不回填 `body_hash` |
+| 0011 | `t_user` | 加 `phone_hmac char(64) NULL` + `uk_user_phone_hmac`；删除 `uk_user_phone`，`phone` 保留可空 |
+| 0013 | `t_idempotency_record` | `DROP INDEX uk_idem`；不可回滚 |
+| 0017 | `t_model` / `t_channel` | `t_model` 加 `recommend_weight int unsigned NOT NULL DEFAULT 0` + `idx_model_recommend (recommend_weight DESC, published_at DESC)`；`t_channel` 加 `dedicated_scope_mode varchar(16) NOT NULL DEFAULT 'ALL'`、`fallback_allowed tinyint(1) NOT NULL DEFAULT 0` |
+| 0018 | `t_config_item` / `t_price_group` / `t_protocol` / `t_rate_limit_policy` / `t_plan` | 34 配置键、3 分组、3 协议、5 档限流模板；`t_rate_limit_policy.daily_quota_micro` 改可空；付费三档 `invoice_supported=1` + SLA 文案 |
+| 0019 | `t_channel` / `t_model` / `t_model_alias` / `t_route` / `t_price_rule` | 仅 `ENV=local`：1 渠道、2 文本模型、2 别名、2 路由、2 价目规则 |
+
+`t_arrears.amount_micro` / `settled_micro` 对应 TDS §1.5 的 `due_micro` / `repaid_micro`；列名按 T03 卡落地，语义不变（欠费额 / 已抵扣额）。
+
+`0018` 的 5 档限流策略是**模板行**：`scope_type='USER'`、`scope_id=0` 为哨兵，不对应任何真实用户；用 `effective_from` 的固定毫秒差满足唯一键。`source` 写档位标识（TRIAL / STANDARD / PRO / ENTERPRISE / FREE_DEFAULT）便于运营对照；运行时按用户惰性生成的策略行仍使用 `PLAN` / `TRIAL` / `FREE_DEFAULT`。`FREE_DEFAULT.daily_quota_micro` 为 `NULL`（无上限），不是 0。
 
 ## 全局约束
 
@@ -109,5 +137,5 @@
 | 金额 | `bigint` + `_micro`；单价 `int unsigned` + `_micro_per_k`；唯一小数例外 `t_metric_daily.success_rate decimal(7,4)` |
 | 人民币分 | TDS 明确定义为 `*_fen int unsigned`（`t_plan.price_fen`、`t_recharge_order.pay_amount_fen`、`t_refund_order.refund_fen` 等），按 TDS 保留 |
 | 外键 | 全库不建；一致性由应用层事务保证 |
-| 软删 | 参与唯一索引的 `email` / `phone` / `key_hash` / `model_name` 删除时改写为 `#del#{id}#{unix_ms}` |
+| 软删 | 参与唯一索引的 `email` / `phone_hmac` / `key_hash` / `model_name` 删除时改写为 `#del#{id}#{unix_ms}`；`phone` 自 0011 起不再参与唯一索引 |
 | 账本 | `t_ledger_entry` 只追加；三个唯一键 `PRIMARY KEY(id)`、`uk_le_idem`、`uk_le_entry_no` 均不含 `created_at` |

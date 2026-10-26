@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -77,11 +78,25 @@ type Runner struct {
 	db         *sql.DB
 	migrations []Migration
 	now        func() time.Time
+	// skip maps a version to the reason it must not run in this process
+	// environment. A skipped migration is not recorded in schema_migrations:
+	// it stays pending, so a later run with the right ENV can still apply it.
+	skip map[string]string
 }
 
 // NewRunner builds a runner. now must return UTC; main passes clock.Real{}.Now.
 func NewRunner(db *sql.DB, migrations []Migration, now func() time.Time) *Runner {
 	return &Runner{db: db, migrations: migrations, now: now}
+}
+
+// Skip marks a version as not applicable in the current environment. Up logs a
+// WARN and continues instead of failing: a development-only seed must never
+// block a production upgrade.
+func (r *Runner) Skip(version, reason string) {
+	if r.skip == nil {
+		r.skip = make(map[string]string)
+	}
+	r.skip[version] = reason
 }
 
 // EnsureTable creates schema_migrations if it is missing.
@@ -147,6 +162,11 @@ func (r *Runner) Up(ctx context.Context) ([]Result, error) {
 	var results []Result
 	for _, m := range r.migrations {
 		if _, ok := done[m.Version]; ok {
+			continue
+		}
+		if reason, ok := r.skip[m.Version]; ok {
+			fmt.Fprintf(os.Stderr, "WARN: 迁移 %s（%s）已跳过：%s\n", m.Version, m.Name, reason)
+			results = append(results, Result{Version: m.Version, Name: m.Name, Direction: "skip"})
 			continue
 		}
 		result, err := r.applyUp(ctx, m)

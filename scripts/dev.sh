@@ -102,11 +102,18 @@ force_env() {
 }
 
 # Load .env into the environment for run-* targets, same as the Makefile does.
+# An ENV explicitly set by the caller wins over .env: `ENV=production ... migrate
+# up` must exercise the production branch (0019 skipped) even though the local
+# .env says ENV=dev. Without this, sourcing .env would overwrite the caller.
 with_env() {
+  local env_override="${ENV-}"
   set -a
   # shellcheck disable=SC1091
   [ -f .env ] && . ./.env
   set +a
+  if [ -n "$env_override" ]; then
+    export ENV="$env_override"
+  fi
   "$@"
 }
 

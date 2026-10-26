@@ -11,6 +11,8 @@
 | E-04 | TDS §1.4 `t_plan.daily_quota_micro` | `NOT NULL DEFAULT 0`，注释「0 = 继承上一档」 | 与 PRD §3.2.1「默认档日额度**无上限**」冲突；`0` 在日额度语义下等于「不能用」 | **`NULL` = 无上限**。`t_plan` 已改为可空；`t_rate_limit_policy` 由 T03 的 ALTER 补齐（见 T03 硬约束 15） |
 | E-05 | TDS §1.2 分层清单 vs §1.8 | 54 张表的分层清单**未收录** `t_config_publish` | 按 §1.2 逐层相加只得 53，与实际表数差 1 | **以 §1.8 为准**：`t_config_publish` 属配置层，计入 54。T02 已建 |
 | E-06 | PRD 附录 E.1 `account_not_verified` 的 hint vs PRD §3.2.1 / 第 1510 行 | 错误码 hint 写「完成实名认证后可领取 **10 万**体验积分」；§3.2.1 与第 1510 行写「体验赠送 **7,000** 积分（原 10 万口径**作废**）」 | 同一数值两处不一致，10 万是已作废的旧口径残留 | **7,000 为准**（§3.2.1 是套餐数值唯一来源）。错误码 hint 待改为「…可领取 7,000 体验积分」；T18 页面按 7,000 渲染 |
+| E-07 | TDS §3.7 正文声明 vs 同节键表 | 正文写「全表因此为 **34** 个键」（多次重复该数）；键表**实际 45 个唯一键**（含 4 行续行重复，原始 49 行） | 声明落后于表格：TA-1.2 追加的 11 个键从未计入总数 | **45 为准**。缺的 11 个：`billing.prestimate_safety_bp`、`pricing.tax_rate_multiplier`、`gw.stream_first_byte_ms`、`gw.stream_total_ms`、`gw.settle_reserve_ms`、`gw.retry_threshold_ms`、`idem.duplicate_window_seconds`、`idem.lease_ttl_seconds`、`idem.lease_renew_seconds`、`quota.free_max_active_keys`、`site.recommend_limit`。T03 的 0018 种子里必须全部存在（其中 `gw.stream_first_byte_ms` 正是 E-01 的执行值） |
+| E-08 | TDS §3.7 命名空间归属表 | 归属表只覆盖 `billing.*` / `pricing.*` / `plan.*` / `log.*` / `quota.*` / `gw.*` 六组前缀；TA-1.2 新增的 `idem.*` 与 `site.recommend_limit` **无归属** | 五个命名空间（ROUTING / RATELIMIT / PRICING / UPSTREAM / FEATURE）里无处安放，写入会被拒 | **两者归 `FEATURE`**：幂等窗口与推荐位条数都是功能开关，既不决定怎么扣钱、也不决定路由与上游超时。不新增第六个命名空间（新增就要新增失效通道）。待回写 TDS §3.7 |
 
 ## 口径备忘（不是勘误，是实现约定）
 

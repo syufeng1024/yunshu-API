@@ -44,7 +44,7 @@
 | D-05 | 前端**禁止**把价格、限流额度、套餐数值写进 bundle，一律运行时经 API 拉取 | PRD 附录 D F1-2 / F1-3（bundle 中搜不到价格字面量） | T18、T19 |
 | D-06 | 本地开发环境：`docker compose` 起 `mysql:8.0` + `redis:7`；**不实现 SQLite 单机模式** | 偏离 TDS GR-01 的「提供 SQLite 单机开发模式」。理由：账本 CAS 走 SQLite 串行化路径属第二套正确性实现，V1.0 无验收项依赖它，成本高于收益。列 Q-01 待确认 | T01、T02 |
 | D-07 | 金额全链路 `bigint` 微积分（`MICRO_PER_CREDIT=10000`），唯一舍入点 `(tokens_in*p_in + tokens_out*p_out + 999) / 1000`；禁止 `float`/`double`/`decimal` 承载金额 | TDS §0 / §0.1 | T04、T10 |
-| D-08 | 配置键共 34 个，命名空间归属按 TDS §3.7；`quota.overdraft_warn_days` 不归属任何命名空间、写入即 `config_value_invalid`；`/admin/config` 运行时可写白名单仅 12 个键 | TDS §3.7（2026-10-19 收口 + TA-1.1） | T05、T15 |
+| D-08 | 配置键共 **45** 个（TDS §3.7 正文写 34 是过期计数，见 errata E-07），命名空间归属按 TDS §3.7；`quota.overdraft_warn_days` 不归属任何命名空间、写入即 `config_value_invalid`；`/admin/config` 运行时可写白名单仅 12 个键 | TDS §3.7（2026-10-19 收口 + TA-1.1） | T05、T15 |
 | D-09 | **前端展示结构以 `ref-frontend-structure.md` 为「参考」，不是规范**（对标 kmitu.com/products/llm-api）。区块与功能点仍以 PRD §4.1–§4.5 为基线：区块一条不能少、**顺序与形态可自行取舍**、不为"像参考站"新增区块或组件。参考站中与 PRD 冲突的元素（送现金/折扣/资质墙/调用排行/配置助手/代理入口）属**禁写项**，已列在该文档 §4–§5 | 用户 2026-10-26：「参考，不用照抄照搬」；禁写项本身来自 PRD 合规与范围条款 | T18（参考）、T19/T20（版式可选） |
 | D-10 | **金额单位双轨**：账本与积分一律 `_micro`（微积分）；**支付金额用 `_fen`（分）**。T04 的「禁浮点/禁 decimal」检查不得把 `_fen` 判为违规 | `t_plan.price_fen` 按 TDS 定义即「分」；若统一写成微积分，"99 元"会变成 99000000，支付对账反而易错 | T02、T04、T13、T15 |
 | D-11 | **套餐发票/SLA 口径**（原 Q-06）：`invoice_supported` 付费三档（STANDARD / PRO / ENTERPRISE）= `1`，`TRIAL` / `FREE_DEFAULT` = `0`；`sla_text` 付费三档填「7×24 工单受理，不承诺可用性百分比」，其余为空串 | 开票是 PRD G-07 功能点，若五档全 0，定价页会渲染成"全部不支持发票"，与产品事实相反；但开票需实名且需实际支付，体验版与默认档无可开票金额 | T03（0018 种子）、T18（定价页展示） |
@@ -191,7 +191,7 @@ flowchart LR
 | T17 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 4 项非阻塞 | 前端基线；186 turns / 1149s / $11.37 |
 | T02 | 2026-10-26 | 2026-10-26 | ⚠️ **有条件通过** | 3 项（1 项须在 T03 内处理） | 47 张表 + 迁移引擎；55 turns / 294s / $3.84 |
 | T18 | 2026-10-26 | 2026-10-26 | ⚠️ **有条件通过** | 4 项（均非阻塞） | 官网 5 页 + 预览数据层；213 turns / 1365s / $18.13 |
-| T03 | — | — | ⬜ 未派发 | — | 下一步（补 0010–0019 + 配置种子，含 D-11 发票口径） |
+| T03 | 2026-10-26 | 2026-10-26 | ✅ **通过**（含一次返工） | 3 项非阻塞 | 17 迁移 / 54 业务表 / 45 键；107+33 turns / 567s / $8.77 |
 
 ### T01 验收记录（交付总监独立复核，2026-10-26）
 
@@ -302,6 +302,35 @@ flowchart LR
 **预览机制（本卡新增，供后续卡复用）**：`web/src/fixtures/` + `VITE_USE_FIXTURES=1`，仅开发态生效；生产构建由 `assertNoFixtures` 断言剔除。这样后端接口未就绪时也能看完整页面，且不会把假数据带进产物。
 
 **本地预览**：`cd web && VITE_USE_FIXTURES=1 npx vite --port 5180`，访问 `http://127.0.0.1:5180/`。
+
+### T03 验收记录（交付总监独立复核，2026-10-26）
+
+**一次返工**：首轮交付 34 个配置键（TDS 正文写「34 个键」），复核时发现 TDS §3.7 **键表实际有 45 个唯一键**（正文计数过期，E-07）。已要求补 11 键并重建本地库，第二轮通过。
+
+| 复核项 | 结果 | 证据 |
+| :--- | :--- | :--- |
+| 迁移条数 | ✅ 17 | `schema_migrations` 17 行；`0007/0008` 仍未占用；文件 34 个（17 up + 17 down） |
+| 业务表 | ✅ 54 | `information_schema` 55（含 `schema_migrations`） |
+| 配置键 | ✅ **45** | PRICING 21 / UPSTREAM 9 / FEATURE 8 / RATELIMIT 6 / UNASSIGNED 1 = 45 |
+| 关键键抽检 | ✅ | `gw.stream_first_byte_ms=30000`（E-01 执行值）、`gw.retry_threshold_ms={"unary":65000,"stream":45000}`、`billing.prestimate_safety_bp=11000`、`quota.free_max_active_keys=3`、`site.recommend_limit=8` |
+| 幂等 Contract | ✅ | `SHOW INDEX` 仅 `PRIMARY` + `uk_idem_key`，**无 `uk_idem`**；`api_key_id NOT NULL DEFAULT 0` |
+| `0013` 不可回滚 | ✅ | 直接执行 down → `ERROR 1644 (45000) 0013 不可回滚，只能前滚`，退出码 1 |
+| 分组三档 | ✅ | `internal=0` / `contract=8500` / `standard=10000`；`internal` 的 remark 写明「不计费」 |
+| 限流五档 | ✅ | 与 PRD §3.2.1 逐列一致；`FREE_DEFAULT` 日额度 **NULL**（E-04 落实） |
+| 发票口径 | ✅ | `t_plan.invoice_supported` = TRIAL 0 / STANDARD 1 / PRO 1 / ENTERPRISE 1 / FREE 0；付费三档 `sla_text` 长度 48（D-11 落实） |
+| 新增 7 表 | ✅ | `t_arrears`、`t_ticket`、`t_ticket_reply`、`t_review_task`、`t_upstream_bill`、`t_channel_dedicated_user`、`t_content_policy_hit` 均在 |
+| 本地种子 | ✅ | 1 渠道 / 2 模型 / 2 路由 / 2 价目（`ENV=local` 生效） |
+| 迁移测试 | ✅ | `go test ./internal/platform/migrate/...` 全绿，条数断言 17 |
+
+**三处需要记住的事**：
+
+| # | 项 | 处置 |
+| :--- | :--- | :--- |
+| 1 | TDS §3.7 正文「34 个键」与键表「45 个」不一致 | 登记 **E-07**；同时发现 `idem.*` 与 `site.*` 两组前缀在命名空间归属表里**没有归属**，裁定归 `FEATURE`，登记 **E-08** |
+| 2 | 我卡内 A6/A14 要求「全量 down 到空库」，与 `0013` 不可回滚**自相矛盾** | 已修卡：A6 限定在未应用 `0013` 的库上验；A14 改为「`0013` 之后重建走 DROP DATABASE → up」 |
+| 3 | `0018` 已应用后 checksum 锁定，改种子只能重建库 | 本轮已用「DROP 两个 schema → `ENV=local migrate up`」重建并验证；后续若再改 `0018` 需同样操作 |
+
+**三项遗留（非阻塞）**：① `t_review_task` 的 `CANCELLED` / 发票 `ISSUED` / 退款 `REFUNDED` 等状态落在哪张表待 T16 裁定；② `t_upstream_bill` 唯一键取 `(channel_id, bill_period, bill_no)`，待对账任务确认；③ `t_protocol` 只 seed 3 条，TDS 初始 4 行含 `CUSTOM(enabled=0)`，V1.0 不接线，留待 T15 补。
 
 ---
 

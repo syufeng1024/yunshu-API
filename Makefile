@@ -26,7 +26,7 @@ down:
 	$(COMPOSE) down
 
 migrate:
-	@echo "T01 has no migrations; schema migrations start in T02."
+	@$(LOAD_ENV) $(GO) run ./cmd/migrate up
 
 run-gw:
 	@$(LOAD_ENV) $(GO) run ./cmd/gatewayd

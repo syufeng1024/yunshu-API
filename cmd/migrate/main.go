@@ -60,6 +60,11 @@ func run() error {
 	}
 
 	runner := migrate.NewRunner(conn, migrations, clock.Real{}.Now)
+	// 0019 是本地联调种子（占位渠道 / 模型）。生产与其他环境跳过并打 WARN，
+	// 不报错中断：一个开发期种子不得让生产升级失败。
+	if env := strings.TrimSpace(os.Getenv("ENV")); !strings.EqualFold(env, "local") {
+		runner.Skip("0019", "本地联调种子只在 ENV=local 执行，当前 ENV="+env)
+	}
 
 	switch os.Args[1] {
 	case "up":
