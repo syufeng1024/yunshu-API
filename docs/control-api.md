@@ -62,6 +62,20 @@
 
 角色名以 `t_user.role` 为准，只有 `PERSONAL` / `OPS` / `FINANCE` / `SUPER_ADMIN` 四个（E-30）。未知角色在 `PermissionsFor` 中返回空集，登录后访问任何带权限的接口都是 403。
 
+## 公开接口（官网）
+
+5 条只读路径，无需 `sid` 会话，也无需 `X-CSRF-Token`；在 `internal/control/server.go` 中经 `s.public(...)` 注册（仅 panic 恢复，不进入 Session → CSRF → Require 链）。成功响应统一带 `Cache-Control: public, max-age=60`；错误响应（500 `internal_error`）不写该头，避免一次数据库故障被缓存 60 秒。
+
+| 路径 | 数据源与过滤 | 排序 / 上限 | 响应 |
+| :--- | :--- | :--- | :--- |
+| `GET /api/public/plans` | `t_plan`，`enabled=1` | `sort_order ASC, id ASC` | `{data: PublicPlan[]}`；`daily_quota_micro` 为 NULL 时输出 `null`（FREE_DEFAULT 无上限），不转 0 |
+| `GET /api/public/models` | `t_model`，`listing_state='LISTED'` 且 `deleted_at IS NULL`；`t_price_rule` 当前生效的 MODEL 级价格 | `recommend_weight DESC, published_at DESC` | `{data: PublicModel[]}`；无生效价或价格列为 NULL 的模型整行不返回；`context_window` 取自 `t_model.context_length` |
+| `GET /api/public/announcements` | `t_announcement`，`state='PUBLISHED'`、`effective_from<=now`、`effective_to IS NULL OR > now`、`deleted_at IS NULL` | `effective_from DESC, id DESC`，最多 20 条 | `{data: PublicAnnouncement[]}`；`content→body`、`ann_type→category`、`effective_from→effective_at`、`created_at→published_at` |
+| `GET /api/public/endpoints` | 无数据表（全部迁移中不存在 endpoint / integration / tool 表） | — | 恒为 `{data: []}`；`TODO(T24)` 在 `internal/control/publicapi/empty.go` |
+| `GET /api/public/integration-links` | 同上 | — | 恒为 `{data: []}`；同上 |
+
+公开模型的 `protocols` 只输出前端枚举内的 `OPENAI` / `ANTHROPIC`：`t_protocol.code='OPENAI_COMPAT'` → `OPENAI`，`ANTHROPIC_COMPAT` → `ANTHROPIC`，`BAILIAN` / `CUSTOM` 或 `protocol_id` 关联不到行时输出空数组。公告 `category` 只有 `PRICE` / `RATE_LIMIT` / `GENERAL` 三值：`ann_type='PRICE_CHANGE'` 映射为 `PRICE`，其余映射为 `GENERAL`（后端没有 `RATE_LIMIT` 枚举）。
+
 ## 错误码映射
 
 只列控制面会返回的码。完整 76 码见 `docs/error-codes.md`。

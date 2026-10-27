@@ -28,6 +28,7 @@ import (
 	"yunshu.dev/core/internal/control/model"
 	"yunshu.dev/core/internal/control/mw"
 	"yunshu.dev/core/internal/control/ops"
+	"yunshu.dev/core/internal/control/publicapi"
 	"yunshu.dev/core/internal/control/review"
 	"yunshu.dev/core/internal/control/ticket"
 	"yunshu.dev/core/internal/control/usage"
@@ -96,6 +97,7 @@ type Server struct {
 	logs    *logq.Service
 	usage   *usage.Service
 	auditQ  *auditq.Service
+	pub     *publicapi.Service
 }
 
 // New validates the wiring and builds the server.
@@ -172,6 +174,7 @@ func New(d Deps) (*Server, error) {
 		logs:    logs,
 		usage:   usageSvc,
 		auditQ:  auditSvc,
+		pub:     publicapi.New(d.DB, d.Now, d.Logger),
 	}, nil
 }
 
@@ -182,6 +185,15 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Public: unauthenticated by design.
 	mux.Handle("POST /api/v1/auth/register", s.public(s.auth.Register))
 	mux.Handle("POST /api/v1/auth/login", s.public(s.auth.Login))
+
+	// Website data. Read-only and session-free: the marketing pages are
+	// anonymous, so these routes must never enter the Session → CSRF chain.
+	// Cache-Control: public, max-age=60 is set by the handlers themselves.
+	mux.Handle("GET /api/public/plans", s.public(s.pub.Plans))
+	mux.Handle("GET /api/public/models", s.public(s.pub.Models))
+	mux.Handle("GET /api/public/announcements", s.public(s.pub.Announcements))
+	mux.Handle("GET /api/public/endpoints", s.public(s.pub.Endpoints))
+	mux.Handle("GET /api/public/integration-links", s.public(s.pub.IntegrationLinks))
 
 	// Authenticated, no capability required.
 	mux.Handle("GET /api/v1/auth/me", s.authed("", s.auth.Me))

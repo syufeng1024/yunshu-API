@@ -41,6 +41,9 @@ var (
 	safeDBName         = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
 )
 
+// configSchema is the schema these tests always own, whatever TEST_DB_DSN says.
+const configSchema = "yunshu_config_test"
+
 type originalConfigRow struct {
 	namespace string
 	key       string
@@ -88,9 +91,12 @@ func setupDatabase() error {
 	if err != nil {
 		return fmt.Errorf("parse TEST_DB_DSN: %w", err)
 	}
-	if cfg.DBName == "" {
-		cfg.DBName = "yunshu_test"
-	}
+	// Only host and credentials are inherited from TEST_DB_DSN. The schema is
+	// config-owned: these tests publish config versions, and t_config_publish /
+	// cfg:ver are global counters. Sharing yunshu_test with internal/control/ops
+	// (whose config handlers also publish) made TestPublishUpdatesAllStores
+	// fail intermittently whenever the two packages ran concurrently.
+	cfg.DBName = configSchema
 	if !safeDBName.MatchString(cfg.DBName) {
 		return fmt.Errorf("unsafe database name %q", cfg.DBName)
 	}

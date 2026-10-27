@@ -366,6 +366,45 @@ func TestSessionMutationRequiresCSRF(t *testing.T) {
 	t.Logf("old CSRF token after logout -> %d session_expired", rec.Code)
 }
 
+// The website reads these five routes without a session or CSRF token. The
+// positive case is the point: the deny tests above would still pass if the
+// whole mux were broken, and a site route accidentally wired through s.authed
+// would answer 401 here.
+func TestPublicSiteRoutesNeedNoSession(t *testing.T) {
+	rdb := redisx.New(redisx.Options{Addr: redistest.Addr(), DB: redistest.DB(), PoolSize: 5})
+	t.Cleanup(func() { _ = rdb.Close() })
+	sessMgr, err := mw.NewSessionManager(testDB, rdb, "0123456789abcdef")
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	srv, err := New(Deps{DB: testDB, Redis: rdb, Sessions: sessMgr, Now: clock.Real{}})
+	if err != nil {
+		t.Fatalf("control server: %v", err)
+	}
+	mux := http.NewServeMux()
+	srv.Register(mux)
+
+	for _, path := range []string{
+		"/api/public/plans",
+		"/api/public/models",
+		"/api/public/announcements",
+		"/api/public/endpoints",
+		"/api/public/integration-links",
+	} {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, path, nil) // no cookies at all
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s, want 200", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("Cache-Control"); got != "public, max-age=60" {
+				t.Fatalf("Cache-Control=%q, want public, max-age=60", got)
+			}
+		})
+	}
+}
+
 var authzUserSeq int64
 
 func newRoleUser(t *testing.T, role string) int64 {

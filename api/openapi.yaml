@@ -1908,6 +1908,117 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  # ---------------------------------------------------------------------------
+  # 官网公开数据（T24 后端缺口）：无需会话、无需 CSRF，响应带 60 秒公共缓存。
+  # ---------------------------------------------------------------------------
+  /api/public/plans:
+    get:
+      operationId: getPublicPlans
+      tags: [public]
+      summary: 官网套餐列表
+      description: |
+        `SELECT ... FROM t_plan WHERE enabled=1 ORDER BY sort_order ASC`。
+        无需 `sid` 会话与 `X-CSRF-Token`；响应头固定
+        `Cache-Control: public, max-age=60`，500 响应不写该头。
+        `daily_quota_micro` 为 NULL 时输出 JSON `null`（FREE_DEFAULT 无额度上限），
+        不回退为 `0`——`0` 的语义是“继承上一档”。
+      responses:
+        '200':
+          description: 已启用套餐，按 sort_order ASC
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicPlansResponse'
+        '500':
+          description: 查询失败（internal_error）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/public/models:
+    get:
+      operationId: getPublicModels
+      tags: [public]
+      summary: 官网模型广场
+      description: |
+        只返回 `t_model.listing_state='LISTED'` 且 `deleted_at IS NULL` 的模型，
+        按 `recommend_weight DESC, published_at DESC` 排序。价格取当前生效的
+        MODEL 级 `t_price_rule`（`enabled=1`、`effective_from<=now`、
+        `effective_to IS NULL OR > now`，`version DESC, id DESC` 取最新）。
+        无生效价或价格列为 NULL 的模型整行不返回，不补 0。
+        `context_window` 对应 `t_model.context_length`；`protocols` 只输出
+        站点枚举内的 `OPENAI` / `ANTHROPIC`，协议关联不到时为空数组。
+      responses:
+        '200':
+          description: 已上架且有生效价格的模型
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicModelsResponse'
+        '500':
+          description: 查询失败（internal_error）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/public/announcements:
+    get:
+      operationId: getPublicAnnouncements
+      tags: [public]
+      summary: 官网公告（当前生效）
+      description: |
+        只返回 `state='PUBLISHED'`、`effective_from<=now`、
+        `effective_to IS NULL OR > now`、`deleted_at IS NULL` 的公告，
+        按 `effective_from DESC` 取前 20 条。字段改名为前端契约：
+        `content→body`、`ann_type→category`、`effective_from→effective_at`、
+        `created_at→published_at`。`category` 取值 `PRICE` / `RATE_LIMIT` /
+        `GENERAL`；V1.0 的 `PRICE_CHANGE` 映射为 `PRICE`，其余 `ann_type`
+        映射为 `GENERAL`（后端暂无 `RATE_LIMIT` 枚举）。
+      responses:
+        '200':
+          description: 已发布且在生效窗口内的公告
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicAnnouncementsResponse'
+        '500':
+          description: 查询失败（internal_error）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/public/endpoints:
+    get:
+      operationId: getPublicEndpoints
+      tags: [public]
+      summary: 官网公开接入点（V1.0 恒为空）
+      description: |
+        V1.0 没有接入点数据表（全部迁移中不存在 endpoint / integration / tool
+        表），`t_channel` 是上游渠道池，不得对外当作接入点。契约已固定，
+        后端按 `TODO(T24)` 返回空数组，前端使用通用接入说明兜底。
+      responses:
+        '200':
+          description: 恒为 `{"data":[]}` 直到 T24 建表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicEndpointsResponse'
+  /api/public/integration-links:
+    get:
+      operationId: getPublicIntegrationLinks
+      tags: [public]
+      summary: 客户端深链导入模板（V1.0 恒为空）
+      description: |
+        与接入点同因：V1.0 无 integration/tool 表。深链模板须由后端持有，
+        浏览器不感知参数名（F4-2），因此在表与运营入口落地前返回空数组，
+        不编造模板（`TODO(T24)`）。
+      responses:
+        '200':
+          description: 恒为 `{"data":[]}` 直到 T24 建表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicIntegrationLinksResponse'
 components:
   securitySchemes:
     sessionCookie:
@@ -3120,3 +3231,107 @@ components:
         settled_consumed_bonus_micro: {type: integer, format: int64}
         settled_consumed_fen: {type: integer, format: int64}
         settled_success_rate_bp: {type: integer, format: int64}
+    PublicPlan:
+      type: object
+      required: [code, name, price_fen, grant_recharge_micro, grant_bonus_micro, bonus_valid_days, rpm, tpm, concurrency, daily_quota_micro, model_scope_mode, invoice_supported, sla_text, permanent, sort_order]
+      properties:
+        code: {type: string, enum: [TRIAL, STANDARD, PRO, ENTERPRISE, FREE_DEFAULT]}
+        name: {type: string, description: t_plan.name varchar(64)}
+        price_fen: {type: integer, format: int64, description: 售价，单位分}
+        grant_recharge_micro: {type: integer, format: int64, description: 到账充值积分，微积分}
+        grant_bonus_micro: {type: integer, format: int64, description: 赠送积分，微积分}
+        bonus_valid_days: {type: integer, description: 赠送积分有效天数}
+        rpm: {type: integer}
+        tpm: {type: integer}
+        concurrency: {type: integer, description: 名义并发上限}
+        daily_quota_micro: {type: integer, format: int64, nullable: true, description: '账户日额度；NULL = 无上限，0 = 继承上一档'}
+        model_scope_mode: {type: string, description: V1.0 恒为 ALL}
+        invoice_supported: {type: integer, enum: [0, 1]}
+        sla_text: {type: string}
+        permanent: {type: integer, enum: [0, 1]}
+        sort_order: {type: integer}
+    PublicPlansResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/PublicPlan'}
+    PublicModel:
+      type: object
+      required: [id, model_name, display_name, model_type, listing_state, context_window, input_price_micro_per_k, output_price_micro_per_k, protocols, recommend_weight, published_at]
+      properties:
+        id: {type: string, description: t_model.id 的十进制字符串}
+        model_name: {type: string, description: 客户端可传入的对外模型名}
+        display_name: {type: string}
+        model_type: {type: string, enum: [TEXT, IMAGE, EMBEDDING], description: 官网价格表只渲染 TEXT / IMAGE}
+        listing_state: {type: string, enum: [LISTED], description: 公开列表只含 LISTED}
+        context_window: {type: integer, format: int64, description: 对应 t_model.context_length}
+        input_price_micro_per_k: {type: integer, format: int64, description: 当前生效价，微积分/千 token}
+        output_price_micro_per_k: {type: integer, format: int64, description: 当前生效价，微积分/千 token}
+        protocols:
+          type: array
+          description: 协议关联不到时为空数组，不猜测标签
+          items: {type: string, enum: [OPENAI, ANTHROPIC]}
+        recommend_weight: {type: integer, format: int64, description: 0 表示不进推荐位}
+        published_at: {type: string, format: date-time, description: t_model.published_at；NULL 时回退 created_at}
+    PublicModelsResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/PublicModel'}
+    PublicAnnouncement:
+      type: object
+      required: [id, title, body, category, effective_at, published_at]
+      properties:
+        id: {type: string, description: t_announcement.id 的十进制字符串}
+        title: {type: string}
+        body: {type: string, description: 对应 t_announcement.content（字段名不同）}
+        category: {type: string, enum: [PRICE, RATE_LIMIT, GENERAL]}
+        effective_at: {type: string, format: date-time, description: 对应 t_announcement.effective_from}
+        published_at: {type: string, format: date-time, description: 对应 t_announcement.created_at}
+    PublicAnnouncementsResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          maxItems: 20
+          items: {$ref: '#/components/schemas/PublicAnnouncement'}
+    PublicEndpoint:
+      type: object
+      description: V1.0 无数据表，接口恒返回空数组（TODO T24）
+      required: [id, name, base_url, line, description, role, status_page_url, health_status]
+      properties:
+        id: {type: string}
+        name: {type: string}
+        base_url: {type: string}
+        line: {type: string}
+        description: {type: string}
+        role: {type: string, enum: [PRIMARY, BACKUP]}
+        status_page_url: {type: string}
+        health_status: {type: string, enum: [PASS, FAIL], nullable: true}
+    PublicEndpointsResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/PublicEndpoint'}
+    PublicIntegrationLink:
+      type: object
+      description: V1.0 无数据表，接口恒返回空数组（TODO T24）
+      required: [tool_key, deep_link_template, enabled]
+      properties:
+        tool_key: {type: string}
+        deep_link_template: {type: string, nullable: true, description: 后端持有的深链模板，浏览器不感知参数名}
+        enabled: {type: boolean}
+    PublicIntegrationLinksResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: '#/components/schemas/PublicIntegrationLink'}
