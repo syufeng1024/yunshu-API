@@ -51,3 +51,85 @@ const AUDIT_FIELD_LABEL: Record<string, string> = {
 export function auditFieldLabel(field: string): string {
   return AUDIT_FIELD_LABEL[field] ?? field
 }
+
+const ORDER_STATE_LABEL: Record<string, string> = {
+  PENDING: '待支付',
+  PAID: '已支付',
+  CLOSED: '已关闭',
+  REFUNDING: '退款中',
+  REFUNDED: '已退款',
+  PARTIAL_REFUNDED: '部分退款',
+}
+
+export function orderStateLabel(state: string): string {
+  return ORDER_STATE_LABEL[state] ?? state
+}
+
+const REFUND_STATE_LABEL: Record<string, string> = {
+  APPLIED: '已申请',
+  APPROVED: '已通过',
+  REJECTED: '已驳回',
+  PAYING: '退款中',
+  PAID: '已退款',
+  FAILED: '退款失败',
+}
+
+export function refundStateLabel(state: string): string {
+  return REFUND_STATE_LABEL[state] ?? state
+}
+
+const INVOICE_STATE_LABEL: Record<string, string> = {
+  APPLIED: '已申请',
+  APPROVED: '已通过',
+  ISSUED: '已开具',
+  REJECTED: '已驳回',
+  VOIDED: '已作废',
+}
+
+export function invoiceStateLabel(state: string): string {
+  return INVOICE_STATE_LABEL[state] ?? state
+}
+
+const MODEL_TYPE_LABEL: Record<string, string> = {
+  TEXT: '文本',
+  IMAGE: '图像',
+  EMBEDDING: '向量',
+}
+
+export function modelTypeLabel(type: string): string {
+  return MODEL_TYPE_LABEL[type] ?? type
+}
+
+/**
+ * Protocol codes come from t_protocol seeds; the API exposes only the code, so
+ * an unknown (newly added) protocol falls back to the code instead of being
+ * guessed.
+ */
+const PROTOCOL_LABEL: Record<string, string> = {
+  BAILIAN: '百炼',
+  OPENAI_COMPAT: 'OpenAI 兼容',
+  ANTHROPIC_COMPAT: 'Anthropic 兼容',
+}
+
+export function protocolLabel(code: string): string {
+  return PROTOCOL_LABEL[code] ?? code
+}
+
+const PAY_CHANNEL_LABEL: Record<string, string> = {
+  WECHAT: '微信支付',
+  ALIPAY: '支付宝',
+}
+
+export function payChannelLabel(channel: string): string {
+  return PAY_CHANNEL_LABEL[channel] ?? channel
+}
+
+const DIMENSION_LABEL: Record<string, string> = {
+  model: '按模型',
+  channel: '按渠道',
+  day: '按日',
+}
+
+export function dimensionLabel(dimension: string): string {
+  return DIMENSION_LABEL[dimension] ?? dimension
+}

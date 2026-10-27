@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   creditsFromMicro,
+  fenFromYuanInput,
   formatCreditsFromMicro,
   formatPercent,
   formatPlanPrice,
@@ -47,5 +48,16 @@ describe('credit conversions', () => {
     expect(formatQuotaCredits(50000000)).toBe('5,000 积分')
     expect(formatQuotaCredits(null)).toBe('无上限')
     expect(formatTokens(32768)).toBe('32,768 tokens')
+  })
+
+  it('normalises a user-entered yuan amount to fen', () => {
+    expect(fenFromYuanInput('99')).toBe(9900)
+    expect(fenFromYuanInput('99.5')).toBe(9950)
+    expect(fenFromYuanInput(' ￥1,000.00 ')).toBe(100_000)
+    expect(fenFromYuanInput('９９.５')).toBe(9950)
+    expect(fenFromYuanInput('0')).toBeNull()
+    expect(fenFromYuanInput('1.234')).toBeNull()
+    expect(fenFromYuanInput('-5')).toBeNull()
+    expect(fenFromYuanInput('abc')).toBeNull()
   })
 })

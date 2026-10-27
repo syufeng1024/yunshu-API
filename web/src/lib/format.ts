@@ -97,6 +97,23 @@ export function microFromCredits(credits: number): number {
 }
 
 /**
+ * User-entered yuan -> fen for POST bodies. This is an input normalisation,
+ * not a display conversion: full-width digits and separators are folded to
+ * ASCII, whitespace and a leading currency sign are dropped, and the result is
+ * rounded to the nearest fen. Returns null for anything that is not a positive
+ * decimal with at most two fraction digits.
+ */
+export function fenFromYuanInput(raw: string): number | null {
+  const normalized = raw
+    .replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+    .replace(/[，,]/g, '')
+    .replace(/[¥￥\s]/g, '')
+  if (!/^\d+(\.\d{1,2})?$/.test(normalized)) return null
+  const fen = Math.round(Number(normalized) * FEN_PER_YUAN)
+  return Number.isSafeInteger(fen) && fen > 0 ? fen : null
+}
+
+/**
  * Basis points -> percent. 9850 -> "98.5%". Used for success_rate_bp and other
  * integers the backend reports in 1/10000 units.
  */

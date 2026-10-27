@@ -276,6 +276,320 @@ interface ConsoleModelsResponse extends Page<ConsoleModel> {
   items: ConsoleModel[]
 }
 
+export type ModelType = 'TEXT' | 'IMAGE' | 'EMBEDDING'
+
+/** B-53: null means "not configured" and must render as "—", not "不支持". */
+export interface ModelCapabilities {
+  stream: boolean | null
+  tool_call: boolean | null
+  vision: boolean | null
+  json_mode: boolean | null
+}
+
+/**
+ * Standard price from t_price_rule. The catalog never carries the viewer's
+ * group ratio (F1-5) and omits cache_* when cache billing is disabled.
+ */
+export interface ModelPricing {
+  in_price_micro_per_k: number
+  out_price_micro_per_k: number
+  per_call_price_micro: number
+  in_price_credits_per_k: string
+  out_price_credits_per_k: string
+  per_call_credits_per_call: string
+  in_price_cny_per_k: string
+  out_price_cny_per_k: string
+  per_call_cny_per_call: string
+  cache_billing_enabled: boolean
+  cache_hit_ratio_bp?: number | null
+  cache_write_ratio_bp?: number | null
+  cache_hit_price_credits_per_k?: string | null
+  cache_write_price_credits_per_k?: string | null
+}
+
+/** GET /api/console/models item. LISTED/DOMESTIC only, server-sorted. */
+export interface CatalogModel extends ConsoleModel {
+  capabilities: ModelCapabilities
+  recommend_weight: number
+  published_at: string | null
+  /** null = the API flagged a missing price; render "—", never a fake zero. */
+  pricing: ModelPricing | null
+}
+
+export type ModelCatalogResponse = Page<CatalogModel>
+
+export interface ModelCatalogParams {
+  page?: number
+  pageSize?: number
+  modelType?: ModelType
+  protocol?: string
+  q?: string
+}
+
+// ---------------------------------------------------------------------------
+// Usage / bill / export (GET /api/console/usage, /bills; POST /usage/export)
+// ---------------------------------------------------------------------------
+
+export type UsageDimension = 'model' | 'channel' | 'day'
+
+export interface UsageRow {
+  dimension: string
+  id: number
+  name: string
+  request_total: number
+  request_success: number
+  success_rate_bp: number
+  tokens_in: number
+  tokens_out: number
+  consumed_micro: number
+  consumed_recharge_micro: number
+  consumed_bonus_micro: number
+  amount_fen: number
+  amount_yuan: string
+}
+
+export interface UsageFilterEcho {
+  model_id: number | null
+  channel_id: number | null
+}
+
+export interface UsageResponse {
+  from: string
+  to: string
+  dimension: UsageDimension
+  filter: UsageFilterEcho
+  window_days: number
+  /** Same definition and order as the CSV header (F9-3). */
+  columns: string[]
+  items: UsageRow[]
+  totals: UsageRow
+}
+
+export interface UsageParams {
+  /** YYYY-MM-DD or RFC3339. */
+  from: string
+  to: string
+  dimension: UsageDimension
+  modelId?: number
+  channelId?: number
+}
+
+export interface BillResponse {
+  month: string
+  period_start: string
+  period_end: string
+  request_total: number
+  request_success: number
+  success_rate_bp: number
+  consumed_micro: number
+  consumed_recharge_micro: number
+  consumed_bonus_micro: number
+  amount_fen: number
+  /** Backend-rendered with two decimals; never recompute from fen. */
+  amount_yuan: string
+}
+
+export type ExportState = 'RUNNING' | 'DONE' | 'FAILED'
+
+export interface ExportStartResponse {
+  /** HMAC-signed task token. */
+  task_id: string
+  state: 'RUNNING'
+}
+
+export interface ExportStatusResponse {
+  task_id: string
+  state: ExportState
+  /** Signed download path, present when state is DONE. */
+  url?: string | null
+  expires_at?: string | null
+}
+
+// ---------------------------------------------------------------------------
+// Funds: plans / orders / redeem / refunds / invoices
+// ---------------------------------------------------------------------------
+
+export interface Plan {
+  id: number
+  code: string
+  name: string
+  price_fen: number
+  price_yuan: number
+  grant_recharge_micro: number
+  grant_bonus_micro: number
+  grant_recharge: number
+  grant_bonus: number
+  bonus_valid_days: number
+  rpm: number
+  tpm: number
+  concurrency: number
+  daily_quota_micro: number | null
+  daily_quota: number | null
+  permanent: boolean
+  /** FREE_DEFAULT and TRIAL are granted, never sold. */
+  purchasable: boolean
+  sort_order: number
+}
+
+export interface PlanList {
+  items: Plan[]
+  default_tier: string
+  default_tier_label: string
+  trial_days: number
+  bonus_expire_days: number
+  micro_per_credit: number
+}
+
+export type OrderState =
+  | 'PENDING'
+  | 'PAID'
+  | 'CLOSED'
+  | 'REFUNDING'
+  | 'REFUNDED'
+  | 'PARTIAL_REFUNDED'
+
+export type OrderStatusFilter = 'pending' | 'paid' | 'closed' | 'refunding' | 'refunded'
+
+export interface Order {
+  id: number
+  order_no: string
+  order_type: 'CUSTOM' | 'PLAN'
+  plan_code?: string
+  pay_amount_fen: number
+  pay_amount_yuan: number
+  recharge_micro: number
+  bonus_micro: number
+  recharge: number
+  bonus: number
+  pay_channel: 'WECHAT' | 'ALIPAY'
+  state: OrderState
+  paid_at: string | null
+  expire_at: string
+  created_at: string
+}
+
+export type OrderList = Page<Order>
+
+export interface OrderListParams {
+  status?: OrderStatusFilter
+  q?: string
+  page?: number
+  pageSize?: number
+}
+
+export interface CreateOrderInput {
+  order_type: 'CUSTOM' | 'PLAN'
+  plan_id?: number
+  /** Required for CUSTOM; omitted for PLAN so the server prices the tier. */
+  pay_amount_fen?: number
+  pay_channel: 'WECHAT' | 'ALIPAY'
+}
+
+export interface CreatedOrder {
+  order: Order
+  idempotent_replay: boolean
+}
+
+export interface RedeemResult {
+  batch_name: string
+  amount_micro: number
+  /** Whole credits, not micro-credits. */
+  amount: number
+  credit_target: 'BONUS' | 'RECHARGE'
+  expire_at: string
+  balance_after_micro: number
+}
+
+export type RefundState = 'APPLIED' | 'APPROVED' | 'REJECTED' | 'PAYING' | 'PAID' | 'FAILED'
+export type RefundStatusFilter =
+  | 'applied'
+  | 'approved'
+  | 'rejected'
+  | 'paying'
+  | 'paid'
+  | 'failed'
+
+export interface Refund {
+  id: number
+  refund_no: string
+  recharge_order_id: number
+  apply_micro: number
+  apply_credits: number
+  refund_micro: number
+  refund_credits: number
+  refund_fen: number
+  refund_yuan: number
+  fee_fen: number
+  fee_yuan: number
+  state: RefundState
+  reject_reason: string | null
+  fail_reason: string | null
+  pay_txn_id: string | null
+  auditor_id: number | null
+  audited_at: string | null
+  paid_at: string | null
+  created_at: string
+}
+
+export type RefundList = Page<Refund>
+
+export interface RefundListParams {
+  status?: RefundStatusFilter
+  page?: number
+  pageSize?: number
+}
+
+export interface CreatedRefund {
+  refund: Refund
+  idempotent_replay: boolean
+}
+
+export type InvoiceState = 'APPLIED' | 'APPROVED' | 'ISSUED' | 'REJECTED' | 'VOIDED'
+export type InvoiceStatusFilter = 'applied' | 'approved' | 'issued' | 'rejected' | 'voided'
+
+export interface Invoice {
+  id: number
+  apply_no: string
+  recharge_order_id: number
+  invoice_type: string
+  title_type: 'PERSONAL' | 'COMPANY'
+  title: string
+  tax_no: string | null
+  receive_email: string
+  amount_fen: number
+  amount_yuan: number
+  tax_rate_bp: number
+  state: InvoiceState
+  reject_reason: string | null
+  invoice_url: string | null
+  auditor_id: number | null
+  issued_at: string | null
+  created_at: string
+}
+
+export type InvoiceList = Page<Invoice>
+
+export interface InvoiceListParams {
+  status?: InvoiceStatusFilter
+  page?: number
+  pageSize?: number
+}
+
+export interface CreateInvoiceInput {
+  recharge_order_id: number
+  title_type: 'PERSONAL' | 'COMPANY'
+  title: string
+  tax_no?: string
+  receive_email: string
+  /** Omitted = the remaining invoiceable amount, per the API contract. */
+  amount_fen?: number
+}
+
+export interface CreatedInvoice {
+  invoice: Invoice
+  idempotent_replay: boolean
+}
+
 // ---------------------------------------------------------------------------
 // Quota apply (POST /api/console/quota-applies)
 // ---------------------------------------------------------------------------
@@ -476,6 +790,243 @@ export function useCreateQuotaApply() {
       }),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ['console', 'quota-applies'] })
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Model plaza calls
+// ---------------------------------------------------------------------------
+
+function modelCatalogQuery(params: ModelCatalogParams): string {
+  const search = new URLSearchParams()
+  search.set('page', String(params.page ?? 1))
+  search.set('page_size', String(params.pageSize ?? 20))
+  if (params.modelType) search.set('model_type', params.modelType)
+  if (params.protocol) search.set('protocol', params.protocol)
+  const q = params.q?.trim()
+  if (q) search.set('q', q)
+  return search.toString()
+}
+
+export function fetchModelCatalog(params: ModelCatalogParams): Promise<ModelCatalogResponse> {
+  return api.get<ModelCatalogResponse>(`/api/console/models?${modelCatalogQuery(params)}`)
+}
+
+export function useModelCatalog(params: ModelCatalogParams) {
+  return useQuery({
+    queryKey: ['console', 'models', 'catalog', params],
+    queryFn: () => fetchModelCatalog(params),
+    placeholderData: keepPreviousData,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Usage / bill / export calls
+// ---------------------------------------------------------------------------
+
+function usageQuery(params: UsageParams): string {
+  const search = new URLSearchParams()
+  search.set('from', params.from)
+  search.set('to', params.to)
+  search.set('dimension', params.dimension)
+  if (params.modelId !== undefined) search.set('model_id', String(params.modelId))
+  if (params.channelId !== undefined) search.set('channel_id', String(params.channelId))
+  return search.toString()
+}
+
+export function fetchUsage(params: UsageParams): Promise<UsageResponse> {
+  return api.get<UsageResponse>(`/api/console/usage?${usageQuery(params)}`)
+}
+
+export function fetchBill(month: string | undefined): Promise<BillResponse> {
+  const suffix = month ? `?month=${encodeURIComponent(month)}` : ''
+  return api.get<BillResponse>(`/api/console/bills${suffix}`)
+}
+
+export function startUsageExport(params: UsageParams): Promise<ExportStartResponse> {
+  return api.post<ExportStartResponse>(`/api/console/usage/export?${usageQuery(params)}`)
+}
+
+export function fetchExportStatus(taskId: string): Promise<ExportStatusResponse> {
+  return api.get<ExportStatusResponse>(`/api/console/exports/${encodeURIComponent(taskId)}`)
+}
+
+export function useUsage(params: UsageParams) {
+  return useQuery({
+    queryKey: ['console', 'usage', params],
+    queryFn: () => fetchUsage(params),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useBill(month: string) {
+  return useQuery({
+    queryKey: ['console', 'bills', month],
+    queryFn: () => fetchBill(month),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useStartUsageExport() {
+  return useMutation({ mutationFn: (params: UsageParams) => startUsageExport(params) })
+}
+
+/**
+ * Polls a signed export task token until it leaves RUNNING. A DONE response
+ * carries the signed download URL; a missing/expired token answers 404 and the
+ * page renders that message verbatim (the link lives for one hour).
+ */
+export function useExportStatus(taskId: string | null) {
+  return useQuery({
+    queryKey: ['console', 'usage', 'export', taskId],
+    queryFn: () => fetchExportStatus(taskId as string),
+    enabled: Boolean(taskId),
+    retry: false,
+    refetchInterval: (query) =>
+      query.state.data?.state === 'RUNNING' ? 2_000 : false,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Fund calls
+// ---------------------------------------------------------------------------
+
+export function fetchPlans(): Promise<PlanList> {
+  return api.get<PlanList>('/api/console/plans')
+}
+
+function ordersQuery(params: OrderListParams): string {
+  const search = new URLSearchParams()
+  search.set('page', String(params.page ?? 1))
+  search.set('page_size', String(params.pageSize ?? 20))
+  if (params.status) search.set('status', params.status)
+  const q = params.q?.trim()
+  if (q) search.set('q', q)
+  return search.toString()
+}
+
+export function fetchOrders(params: OrderListParams): Promise<OrderList> {
+  return api.get<OrderList>(`/api/console/orders?${ordersQuery(params)}`)
+}
+
+function refundsQuery(params: RefundListParams): string {
+  const search = new URLSearchParams()
+  search.set('page', String(params.page ?? 1))
+  search.set('page_size', String(params.pageSize ?? 20))
+  if (params.status) search.set('status', params.status)
+  return search.toString()
+}
+
+export function fetchRefunds(params: RefundListParams): Promise<RefundList> {
+  return api.get<RefundList>(`/api/console/refunds?${refundsQuery(params)}`)
+}
+
+function invoicesQuery(params: InvoiceListParams): string {
+  const search = new URLSearchParams()
+  search.set('page', String(params.page ?? 1))
+  search.set('page_size', String(params.pageSize ?? 20))
+  if (params.status) search.set('status', params.status)
+  return search.toString()
+}
+
+export function fetchInvoices(params: InvoiceListParams): Promise<InvoiceList> {
+  return api.get<InvoiceList>(`/api/console/invoices?${invoicesQuery(params)}`)
+}
+
+export function usePlans() {
+  return useQuery({
+    queryKey: ['console', 'plans'],
+    queryFn: fetchPlans,
+    staleTime: 5 * 60_000,
+  })
+}
+
+export function useOrders(params: OrderListParams) {
+  return useQuery({
+    queryKey: ['console', 'orders', 'list', params],
+    queryFn: () => fetchOrders(params),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useRefunds(params: RefundListParams) {
+  return useQuery({
+    queryKey: ['console', 'refunds', 'list', params],
+    queryFn: () => fetchRefunds(params),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useInvoices(params: InvoiceListParams) {
+  return useQuery({
+    queryKey: ['console', 'invoices', 'list', params],
+    queryFn: () => fetchInvoices(params),
+    placeholderData: keepPreviousData,
+  })
+}
+
+/**
+ * Order / refund / invoice creation share the backend's 10-second
+ * Idempotency-Key window. The key is generated per submission, so a repeated
+ * click cannot create two orders.
+ */
+export function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+export function useCreateOrder() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreateOrderInput) =>
+      api.post<CreatedOrder>('/api/console/orders', input, {
+        headers: { 'Idempotency-Key': newIdempotencyKey() },
+      }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['console', 'orders'] })
+    },
+  })
+}
+
+export function useRedeemCode() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (code: string) => api.post<RedeemResult>('/api/console/redeem', { code }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['console', 'overview'] })
+    },
+  })
+}
+
+export function useCreateRefund() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (rechargeOrderId: number) =>
+      api.post<CreatedRefund>(
+        '/api/console/refunds',
+        { recharge_order_id: rechargeOrderId },
+        { headers: { 'Idempotency-Key': newIdempotencyKey() } },
+      ),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['console', 'refunds'] })
+      void client.invalidateQueries({ queryKey: ['console', 'orders'] })
+      void client.invalidateQueries({ queryKey: ['console', 'overview'] })
+    },
+  })
+}
+
+export function useCreateInvoice() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreateInvoiceInput) =>
+      api.post<CreatedInvoice>('/api/console/invoices', input, {
+        headers: { 'Idempotency-Key': newIdempotencyKey() },
+      }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['console', 'invoices'] })
     },
   })
 }
