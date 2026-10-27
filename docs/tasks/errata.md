@@ -43,7 +43,7 @@
 
 | E-32 | TDS §1.8 `t_announcement.state` 注释 vs PRD F17-2「公告定时到点自动发布」 | TDS 只列 `DRAFT / PUBLISHED / OFFLINE` 三态 | 「已排期但未到点」在库里无处表达：若复用 `DRAFT`，调度器无法区分「人工草稿」与「等待到点」，会把草稿一并发出去 | **新增 `SCHEDULED`**（`varchar(16)` 可存，**无需迁移**）：调度器只认它，`DRAFT` 永不被时间触发。回写 TDS 注释时补第四态 |
 | E-33 | T15 卡交付物 16 vs 权限矩阵 | 卡面写用户列表用 `user.read` | `PERSONAL` 角色本就持有 `user.read`（控制台看自己），若后台复用同一权限点，普通客户就能拉到全量用户列表与 `disable_reason`——而硬约束 13 要求禁用原因仅运营可见 | **后台用户列表改用 `admin.read`**（写入仍 `user.write`），与 E-31 同一原则：后台读权限不得与控制台读权限共用 |
-| E-34 | PRD §6.4 F16-7「未配价不得上架」vs T15 第一段的模型创建 | PRD 要求模型必须配价才能 `LISTED` | 第一段 `CreateModel` / `listing-state` 允许无价直接上架 → 广场会出现无价模型（前端按 0 展示或渲染失败），且网关取不到价必拒 | **补校验：切 `LISTED` 前必须存在生效中的 `t_price_rule`**，否则拒绝并提示先配价。已列专项修复 |
+| E-34 | PRD §6.4 F16-7「未配价不得上架」vs T15 第一段的模型创建 | PRD 要求模型必须配价才能 `LISTED` | 第一段 `CreateModel` / `listing-state` 允许无价直接上架 → 广场会出现无价模型（前端按 0 展示或渲染失败），且网关取不到价必拒 | **补校验：切 `LISTED` 前必须存在生效中的 `t_price_rule`**，否则拒绝并提示先配价。✅ **已修（2026-10-27）**：`CreateModel` 与 `listing-state` 两个入口都拦，返回 409 `resource_state_conflict`（「模型尚未配置生效价格，不能上架」），hint 指向定价页；生效口径复用 `pricing.go` 的 `activePriceRule`，未另立一套。**连带行为变更**：`listing_state` 缺省值由 `LISTED` 改为 `CATALOG_ONLY`——新行在 INSERT 前不可能有价，缺省 LISTED 会让所有普通创建都变 409。外部调用方若依赖「不传即上架」需显式改 |
 
 ## 口径备忘（不是勘误，是实现约定）
 

@@ -129,7 +129,7 @@
 | [T12](T12-用户密钥与模型域API.md) | 用户 / 密钥 / 模型域 API | T11 | `internal/control/user/`、`.../key/`、`.../model/` | ✅ |
 | [T13](T13-资金域API.md) | 资金域 API（订单/退款/发票/提额/套餐） | T11,T04 | `internal/control/fund/` | 🟨 有条件通过（缺 QA） |
 | [T14](T14-用量账单与日志API.md) | 用量·账单·请求日志 API | T11 | `internal/control/usage/` | ⬜ |
-| [T15](T15-运营后台API.md) | 运营后台 API（渠道/模型/定价/分组/公告/风控） | T11,T05 | `internal/control/ops/` | 🟨 第一段 ✅ |
+| [T15](T15-运营后台API.md) | 运营后台 API（渠道/模型/定价/分组/公告/风控） | T11,T05 | `internal/control/ops/` | ✅ 两段完成 |
 | [T16](T16-工单审核与模型主数据API.md) | 工单·审核中心·模型主数据 API | T15 | `internal/control/ticket/`、`.../review/` | ⬜ |
 
 ### 阶段 5 · 前端
@@ -223,6 +223,37 @@ flowchart LR
 | T13 | 2026-10-27 | 2026-10-27 | 🟨 **有条件通过**（两段已交付，**缺 QA 独立验证**） | 6 项遗留 + 7 条勘误 | 第一段 `a1e096a`（回调幂等/分账/兑换码）、第二段 `1d256c4`（退款/发票/提额/防刷）；`fund` 覆盖率 64.0%→66.7%；QA 首轮 429 中断 |
 | — | 2026-10-27 | 2026-10-27 | ✅ E-28 审计列宽（P1） | — | 迁移 `0023` 放宽 `result` 到 `varchar(24)`；`0022` 仍留 T22；修复被拒登录审计静默丢失 |
 | T15 第一段 | 2026-10-27 | 2026-10-27 | 🟨 已交付，待验收 | 5 项 | 状态码收敛 70→74、权限点 19 个 + 四角色矩阵、渠道 6 路由、模型主数据 5 路由；「10 角色」实为 4（E-30） |
+| T15 第二段 | 2026-10-27 | 2026-10-27 | 🟨 已交付，待验收 | 5 项 | 定价（地板整数交叉相乘/7 天公示期/唯一真相源）、分组、公告、风控、用户、配置白名单；`resource_not_found` 收口，码表 74→75 |
+| T15 补丁 | 2026-10-27 | 2026-10-27 | ✅ F16-7 未配价不得上架（E-34） | — | 409 `resource_state_conflict`；缺省 `listing_state` 改 `CATALOG_ONLY` |
+
+**T15 全卡验收结论（交付总监复核）**
+
+| 复核项 | 结果 | 证据 |
+| :--- | :--- | :--- |
+| 编译/静态 | ✅ | `go build` / `go vet` 零错误 |
+| 控制面全量测试 | ✅ | control(+ops)、auth、fund、key、model、mw、units、user + apierr + ledger 共 11 包全绿（`-count=1`） |
+| `lint.sh` 8 条 | ✅ | `all hard constraints hold` |
+| 码表 75 | ✅ | `grep "Code: Code"` = 75；`docs/error-codes.md` 76 行 `\| \`` = 1 表头 + **75 数据行** |
+| 状态类债清偿 | ✅ | `fund` 包只剩 2 处 `invalid_request_body`，均为真·body（改小金额/额度即可成功） |
+| 毛利地板 | ✅ | 读码确认 `lhs := 3*price*ratioBP` vs `rhs := 40000*cost`，`floorScale=30000` 用于展示 `ceil(4C/3)`；`grep 1.25\|1.333\|float` 为空；A11 实测 `850 < 1067` 差额 217、`cost=600` 通过 |
+| 越权 | ✅ | 13 条 `/api/admin/*` 对 `PERSONAL` 全 403（`-v` 逐条确认） |
+| 迁移/配置 | ✅ | 全卡零迁移、零新增配置键 |
+| **全仓测试** | ⚠️ **非全绿** | `internal/recon` 与 `internal/jobs` 在共享库 `yunshu_test` 上红；见下 |
+
+**全仓测试红灯的定性（重要，不是 T15 引入）**
+
+用 `git stash` 在 `2dd0fd4`（无本次改动）复跑，**同样两包红**，证明与 T15 无关。进一步对照：
+
+| 库 | `internal/recon` | `internal/jobs` |
+| :--- | :--- | :--- |
+| `yunshu_test`（累积数据） | ❌ `R01_BALANCE_MISMATCH` 601 条差异（`biz_date=2026-10-20`） | ❌ `TestPurgeLogRetentionBoundaries` + `TestRollupBuildsAllFourTables` |
+| `yunshu_clean`（全新库 + `migrate up`） | ✅ **全绿** | ❌ 仅 `TestRollupBuildsAllFourTables`：`read channel health: sql: no rows in result set` |
+
+结论两条：
+1. **`recon` 是测试隔离缺陷**：它扫描整天全库，共享库累积的历史行被当成「内部不一致」。T09 的「通过」只在新库成立，与 T06 遗留 #4「测试共用 Redis DB 15」同一类问题。
+2. **`jobs` 的 rollup 用例在干净库上仍红**，是真实缺陷（或依赖种子的隐式假设），非数据污染。
+
+两项均记入待修。
 
 ### T15 第一段验收记录（交付总监复核，2026-10-27）
 

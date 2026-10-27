@@ -323,6 +323,15 @@ func (s *Service) CreateModel(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
 		return
 	}
+	// F16-7: a model may only be LISTED with an effective price. The id exists
+	// only after the INSERT, so the check runs here; the deferred rollback
+	// removes the row when it refuses.
+	if in.listingState == listingListed {
+		if apiErr := s.requireEffectivePrice(ctx, tx, id); apiErr != nil {
+			mw.WriteError(w, r, apiErr)
+			return
+		}
+	}
 	if apiErr := replaceAliases(ctx, tx, id, in.aliases, now); apiErr != nil {
 		mw.WriteError(w, r, apiErr)
 		return
@@ -572,6 +581,16 @@ func (s *Service) updateModel(w http.ResponseWriter, r *http.Request, id int64, 
 		add("listing_state", state)
 	}
 
+	// F16-7: switching into LISTED requires a price that is effective now.
+	// DELISTED / CATALOG_ONLY stay reachable without a price, so an unpriced
+	// model can always be taken off the shelf.
+	if stateChanged && nextState == listingListed {
+		if apiErr := s.requireEffectivePrice(ctx, tx, id); apiErr != nil {
+			mw.WriteError(w, r, apiErr)
+			return
+		}
+	}
+
 	// Recommendation weight: non-zero is meaningful only for LISTED. A move
 	// away from LISTED zeroes it automatically, even when the caller did not
 	// mention the field; that is the documented behaviour, not a silent cap.
@@ -742,7 +761,11 @@ func (s *Service) validateCreateModel(r *http.Request, req *modelCreateRequest) 
 	if req.ProtocolID == nil || *req.ProtocolID <= 0 {
 		return in, mw.InvalidField("protocol_id")
 	}
-	state := listingListed
+	// New models default to CATALOG_ONLY. A brand-new row cannot have a price
+	// rule yet (t_price_rule.scope_id points at an existing t_model.id), so
+	// defaulting to LISTED would make every plain create a 409. An explicit
+	// LISTED is still accepted once an effective price exists.
+	state := listingCatalogOnly
 	if req.ListingState != nil {
 		var e *apierr.APIError
 		state, e = validateListingState(*req.ListingState)
@@ -833,6 +856,32 @@ func validateModelType(raw string) (string, *apierr.APIError) {
 func recommendWeightRefusal(state string) *apierr.APIError {
 	return apierr.Newf(apierr.CodeResourceStateConflict,
 		fmt.Sprintf("模型当前状态为 %s，推荐权重必须为 0（仅 LISTED 可设非 0 权重）", state))
+}
+
+// requireEffectivePrice enforces PRD F16-7: LISTED needs a price that is
+// effective at the server's now. It calls activePriceRule (pricing.go) rather
+// than repeating the window, so the listing gate and the pricing form cannot
+// disagree about what "current price" means: enabled=1, effective_from <= now,
+// effective_to IS NULL OR > now, newest version wins. A rule whose
+// effective_from is in the future is not a current price and does not pass.
+func (s *Service) requireEffectivePrice(ctx context.Context, q priceDB, modelID int64) *apierr.APIError {
+	_, err := activePriceRule(ctx, q, modelID, s.now())
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		s.logError(ctx, "ops_model_price_check_failed: "+err.Error())
+		return apierr.New(apierr.CodeInternalError)
+	}
+	return listingPriceRequired()
+}
+
+// listingPriceRequired is a state refusal, not a body error: editing the
+// request cannot help, the operator has to configure a price first.
+func listingPriceRequired() *apierr.APIError {
+	return apierr.Newf(apierr.CodeResourceStateConflict,
+		"模型尚未配置生效价格，不能上架").
+		WithHint("控制台 → 定价页为该模型配置生效价格后再上架")
 }
 
 func normalizeAliases(raw []string) ([]string, *apierr.APIError) {

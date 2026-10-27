@@ -12,13 +12,26 @@ import (
 
 func newPricingModel(t *testing.T, svc *Service, uid int64, modelType string) modelView {
 	t.Helper()
+	// CATALOG_ONLY is deliberate: F16-7 refuses LISTED before a price exists,
+	// and these tests price the model after creating it.
 	return createTestModel(t, svc, uid, map[string]any{
-		"model_name":   "t15-price-" + uniqueSuffix(),
-		"display_name": "T15 定价模型",
-		"region":       "DOMESTIC",
-		"model_type":   modelType,
-		"protocol_id":  protocolID(t, "OPENAI_COMPAT"),
+		"model_name":    "t15-price-" + uniqueSuffix(),
+		"display_name":  "T15 定价模型",
+		"region":        "DOMESTIC",
+		"model_type":    modelType,
+		"protocol_id":   protocolID(t, "OPENAI_COMPAT"),
+		"listing_state": "CATALOG_ONLY",
 	})
+}
+
+// createTestPrice writes one effective price through the public handler.
+func createTestPrice(t *testing.T, svc *Service, uid, modelID, in, out, cost int64) {
+	t.Helper()
+	rec := call(t, svc.CreatePrice, http.MethodPost, "/api/admin/prices",
+		priceBody(modelID, in, out, cost), testCallOptions{uid: uid, role: "OPS"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create price status=%d body=%s", rec.Code, rec.Body.String())
+	}
 }
 
 func priceBody(modelID int64, in, out, cost int64) map[string]any {

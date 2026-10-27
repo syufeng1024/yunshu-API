@@ -76,7 +76,7 @@ func TestScheduledAnnouncementPublishesAtDueTime(t *testing.T) {
 		`SELECT listing_state FROM t_model WHERE id = ?`, model.ID).Scan(&listing); err != nil {
 		t.Fatal(err)
 	}
-	if listing != model.ListingState || listing != listingListed {
+	if listing != model.ListingState {
 		t.Fatalf("listing_state = %s, want unchanged %s", listing, model.ListingState)
 	}
 	t.Logf("A14 clock %s → %s; model listing_state=%s unchanged",
@@ -161,7 +161,8 @@ func TestPublishAnnouncementDoesNotRollbackModelState(t *testing.T) {
 		`SELECT listing_state FROM t_model WHERE id = ?`, model.ID).Scan(&listing); err != nil {
 		t.Fatal(err)
 	}
-	if listing != listingListed {
-		t.Fatalf("listing_state = %s, want LISTED (announcement must not change it)", listing)
+	if listing != model.ListingState {
+		t.Fatalf("listing_state = %s, want %s unchanged (announcement must not change it)",
+			listing, model.ListingState)
 	}
 }

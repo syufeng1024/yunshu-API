@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 func modelBody(t *testing.T, name, state string) map[string]any {
@@ -43,15 +44,27 @@ func TestModelRejectsOverseasRegion(t *testing.T) {
 func TestModelListingTransitionsDraftAndZeroWeight(t *testing.T) {
 	svc := newTestService(t)
 	uid := newTestUser(t, "OPS")
-	body := modelBody(t, "t15-model-state-"+uniqueSuffix(), "LISTED")
-	body["recommend_weight"] = 7
+	body := modelBody(t, "t15-model-state-"+uniqueSuffix(), "CATALOG_ONLY")
 	body["aliases"] = []string{"t15-alias-" + uniqueSuffix()}
 	m := createTestModel(t, svc, uid, body)
-	if m.RecommendWeight != 7 {
-		t.Fatalf("initial weight=%d, want 7", m.RecommendWeight)
+	// F16-7: the model must be priced before it can enter LISTED.
+	createTestPrice(t, svc, uid, m.ID, 1000, 1000, 600)
+	rec := call(t, svc.SetListingState, http.MethodPost, "/api/admin/models/1/listing-state",
+		map[string]any{"listing_state": "LISTED"},
+		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("initial LISTED status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec = call(t, svc.SetRecommendWeight, http.MethodPost, "/api/admin/models/1/recommend-weight",
+		map[string]any{"recommend_weight": 7},
+		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set weight status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	rec := call(t, svc.SetListingState, http.MethodPost, "/api/admin/models/1/listing-state",
+	// The initial CATALOG_ONLY → LISTED already wrote one "new listing" draft.
+	drafts := draftCount(t, m.ModelName)
+	rec = call(t, svc.SetListingState, http.MethodPost, "/api/admin/models/1/listing-state",
 		map[string]any{"listing_state": "CATALOG_ONLY", "reason": "成本调整"},
 		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
 	if rec.Code != http.StatusOK {
@@ -65,8 +78,8 @@ func TestModelListingTransitionsDraftAndZeroWeight(t *testing.T) {
 	if resp.Model.PublishedAt == nil {
 		t.Fatal("published_at was cleared by CATALOG_ONLY; the first listing date must be kept")
 	}
-	if n := draftCount(t, m.ModelName); n != 1 {
-		t.Fatalf("drafts=%d after LISTED→CATALOG_ONLY, want 1", n)
+	if n := draftCount(t, m.ModelName); n != drafts+1 {
+		t.Fatalf("drafts=%d after LISTED→CATALOG_ONLY, want %d", n, drafts+1)
 	}
 	assertListingAudit(t, m.ID, "成本调整")
 
@@ -80,8 +93,8 @@ func TestModelListingTransitionsDraftAndZeroWeight(t *testing.T) {
 	if resp.Model.ListingState != "LISTED" {
 		t.Fatalf("state=%s, want LISTED", resp.Model.ListingState)
 	}
-	if n := draftCount(t, m.ModelName); n != 2 {
-		t.Fatalf("drafts=%d after CATALOG_ONLY→LISTED, want 2", n)
+	if n := draftCount(t, m.ModelName); n != drafts+2 {
+		t.Fatalf("drafts=%d after CATALOG_ONLY→LISTED, want %d", n, drafts+2)
 	}
 
 	// Announcements are drafts and must never drive the model state back.
@@ -133,6 +146,7 @@ func TestModelRecommendWeightOnlyForListed(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("set zero weight status=%d body=%s", rec.Code, rec.Body.String())
 	}
+	createTestPrice(t, svc, uid, m.ID, 1000, 1000, 600)
 	rec = call(t, svc.SetListingState, http.MethodPost, "/api/admin/models/1/listing-state",
 		map[string]any{"listing_state": "LISTED"},
 		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
@@ -169,11 +183,11 @@ func TestModelAliasConflict(t *testing.T) {
 	uid := newTestUser(t, "OPS")
 	alias := "t15-shared-alias-" + uniqueSuffix()
 
-	first := modelBody(t, "t15-model-a-"+uniqueSuffix(), "LISTED")
+	first := modelBody(t, "t15-model-a-"+uniqueSuffix(), "CATALOG_ONLY")
 	first["aliases"] = []string{alias}
 	createTestModel(t, svc, uid, first)
 
-	second := modelBody(t, "t15-model-b-"+uniqueSuffix(), "LISTED")
+	second := modelBody(t, "t15-model-b-"+uniqueSuffix(), "CATALOG_ONLY")
 	second["aliases"] = []string{alias}
 	rec := call(t, svc.CreateModel, http.MethodPost, "/api/admin/models", second,
 		testCallOptions{uid: uid, role: "OPS"})
@@ -182,6 +196,149 @@ func TestModelAliasConflict(t *testing.T) {
 	}
 	if msg := errorBody(t, rec).Error.Message; !strings.Contains(msg, alias) {
 		t.Fatalf("message=%q, want the alias named", msg)
+	}
+}
+
+// F16-7 / E-34: a model cannot be created directly as LISTED without an
+// effective price, and the refused save leaves no row behind. CATALOG_ONLY and
+// DELISTED still create without a price.
+func TestModelCreateListedRequiresEffectivePrice(t *testing.T) {
+	svc := newTestService(t)
+	uid := newTestUser(t, "OPS")
+
+	name := "t15-model-unpriced-" + uniqueSuffix()
+	rec := call(t, svc.CreateModel, http.MethodPost, "/api/admin/models",
+		modelBody(t, name, "LISTED"), testCallOptions{uid: uid, role: "OPS"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("create LISTED without price status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	eb := errorBody(t, rec)
+	if eb.Error.Code != "resource_state_conflict" {
+		t.Fatalf("code=%q, want resource_state_conflict", eb.Error.Code)
+	}
+	if !strings.Contains(eb.Error.Message, "模型尚未配置生效价格，不能上架") {
+		t.Fatalf("message=%q, want the F16-7 reason", eb.Error.Message)
+	}
+	if !strings.Contains(eb.Error.Hint, "定价页") {
+		t.Fatalf("hint=%q, want the pricing-page path", eb.Error.Hint)
+	}
+	var n int64
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM t_model WHERE model_name = ?`, name).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("refused create left %d row(s) behind", n)
+	}
+
+	// Unlisting states are not gated: DELISTED needs no price.
+	delisted := createTestModel(t, svc, uid, modelBody(t, "t15-model-delisted-"+uniqueSuffix(), "DELISTED"))
+	if delisted.ListingState != listingDelisted {
+		t.Fatalf("state=%s, want DELISTED", delisted.ListingState)
+	}
+}
+
+// F16-7 / E-34: CATALOG_ONLY → LISTED is refused until a price is effective;
+// once configured, the same transition succeeds.
+func TestModelListRequiresEffectivePrice(t *testing.T) {
+	svc := newTestService(t)
+	uid := newTestUser(t, "OPS")
+	m := createTestModel(t, svc, uid, modelBody(t, "t15-model-list-"+uniqueSuffix(), "CATALOG_ONLY"))
+
+	rec := call(t, svc.SetListingState, http.MethodPost, "/api/admin/models/1/listing-state",
+		map[string]any{"listing_state": "LISTED"},
+		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("LISTED without price status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	if code := errorBody(t, rec).Error.Code; code != "resource_state_conflict" {
+		t.Fatalf("code=%q, want resource_state_conflict", code)
+	}
+
+	var state string
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT listing_state FROM t_model WHERE id = ?`, m.ID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if state != listingCatalogOnly {
+		t.Fatalf("state=%s after refusal, want CATALOG_ONLY", state)
+	}
+
+	createTestPrice(t, svc, uid, m.ID, 1000, 1000, 600)
+	rec = call(t, svc.SetListingState, http.MethodPost, "/api/admin/models/1/listing-state",
+		map[string]any{"listing_state": "LISTED"},
+		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("LISTED after price status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp modelDetailResponse
+	decodeBody(t, rec, &resp)
+	if resp.Model.ListingState != listingListed {
+		t.Fatalf("state=%s, want LISTED", resp.Model.ListingState)
+	}
+}
+
+// F16-7 uses the same window as pricing.go: a rule that starts in the future
+// is not a current price, while a disabled or expired one is not either.
+func TestModelListIgnoresFuturePrice(t *testing.T) {
+	svc := newTestService(t)
+	uid := newTestUser(t, "OPS")
+	m := createTestModel(t, svc, uid, modelBody(t, "t15-model-future-"+uniqueSuffix(), "CATALOG_ONLY"))
+
+	futureID := insertRawPriceRule(t, m.ID, 1000, time.Now().UTC().Add(48*time.Hour))
+	rec := call(t, svc.SetListingState, http.MethodPost, "/api/admin/models/1/listing-state",
+		map[string]any{"listing_state": "LISTED"},
+		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("LISTED with future-only price status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	if msg := errorBody(t, rec).Error.Message; !strings.Contains(msg, "模型尚未配置生效价格") {
+		t.Fatalf("message=%q", msg)
+	}
+
+	// Remove the planted future row before the follow-up write: an enabled row
+	// that starts later would trip the A12 conflict check, not the listing gate.
+	if _, err := testDB.ExecContext(context.Background(),
+		`DELETE FROM t_price_rule WHERE id = ?`, futureID); err != nil {
+		t.Fatal(err)
+	}
+	createTestPrice(t, svc, uid, m.ID, 1000, 1000, 600)
+	rec = call(t, svc.SetListingState, http.MethodPost, "/api/admin/models/1/listing-state",
+		map[string]any{"listing_state": "LISTED"},
+		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("LISTED after effective price status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// The gate must not block anything else: a priced model can be listed directly,
+// and edits (including a no-op listing_state=LISTED) stay allowed.
+func TestModelPricedListingIsNotBlocked(t *testing.T) {
+	svc := newTestService(t)
+	uid := newTestUser(t, "OPS")
+	m := createTestModel(t, svc, uid, modelBody(t, "t15-model-priced-"+uniqueSuffix(), "CATALOG_ONLY"))
+	createTestPrice(t, svc, uid, m.ID, 1000, 1000, 600)
+
+	rec := call(t, svc.SetListingState, http.MethodPost, "/api/admin/models/1/listing-state",
+		map[string]any{"listing_state": "LISTED"},
+		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("priced LISTED status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	// Editing a different field while LISTED must not re-run the price gate.
+	rec = call(t, svc.UpdateModel, http.MethodPatch, "/api/admin/models/1",
+		map[string]any{"display_name": "改过的展示名"},
+		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH while LISTED status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// Sending LISTED again is a no-op state, not a transition.
+	rec = call(t, svc.UpdateModel, http.MethodPatch, "/api/admin/models/1",
+		map[string]any{"listing_state": "LISTED"},
+		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": itoa(m.ID)}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("no-op LISTED PATCH status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -8,7 +8,7 @@
 | 依赖 | T11、T05、**T10**（错误码） |
 | 可并行 | 与 T12 / T13 / T14 并行 |
 | 交付根 | `internal/control/ops/` |
-| 状态 | 🟨 第一段已交付（2026-10-27）· 交付物 1–7 + 状态码收敛；第二段（定价/分组/公告/风控/用户/配置）未派 |
+| 状态 | ✅ 两段已交付（2026-10-27）· 交付物 1–18 + 状态码收敛 |
 
 ## 1. 目标
 
@@ -252,3 +252,15 @@ ok  := lhs >= rhs
 3. **PRD F16-7「未配价不得上架」第一段未实现**（E-34）：允许无价 `LISTED`。已列专项修复，回填到模型状态机。
 4. 公告 `model_ids` 只用于冲突检查，`t_announcement` 无模型列故不持久化。
 5. 分组 K13 扇出为异步，响应 `key_sync.keys=0`（不等待）；测试注入 writer 取证。
+
+### 补充修复 · F16-7 未配价不得上架（E-34）
+
+`CreateModel` 与 `listing-state` 两个入口都加校验：切 `LISTED` 前必须存在**当前生效**的 `t_price_rule`（`enabled=1` 且 `effective_from <= now`，复用定价模块的 `activePriceRule`，未另立口径），否则 409 `resource_state_conflict` + hint 指向定价页。
+
+**未来生效的价格不算当前有价**——另有专门用例锁死（只种一条 `effective_from=now+48h` 的行 → 仍拒绝）。
+
+**连带行为变更**：`listing_state` 缺省值由 `LISTED` 改为 `CATALOG_ONLY`。原因：新行在 INSERT 前不可能有价，缺省 LISTED 会让所有普通创建都变 409。这是安全默认（新模型默认不上广场）。
+
+5 条既有用例随之调整（均非删除）：上架前补配价、草稿数改基线增量、fixture 改 `CATALOG_ONLY`、公告用例断言由硬编码 `LISTED` 改为与实际状态比对。
+
+**一处实现补充**：`apierr` 增加 `WithHint`，让单次拒绝可以覆盖 spec 的通用 hint（本例要从「刷新后重试」改成「去定价页」），仍走 `renderHint`/`sanitizeText`，码表不变。

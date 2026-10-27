@@ -41,11 +41,12 @@ type APIError struct {
 	HTTPStatus int
 	Owner      Owner
 
-	spec       Spec
-	sse        bool
-	rateLimit  *RateLimitSnapshot
-	redactions []string
-	cause      error
+	spec         Spec
+	sse          bool
+	hintOverride bool
+	rateLimit    *RateLimitSnapshot
+	redactions   []string
+	cause        error
 }
 
 // Newf builds an error from its code and message interpolation arguments.
@@ -148,6 +149,20 @@ func (e *APIError) WithRetryAfter(seconds int) *APIError {
 		if e.spec.Optional == OptionalRateLimit {
 			e.setResetAt(time.Now().Add(time.Duration(seconds) * time.Second))
 		}
+	}
+	return e
+}
+
+// WithHint replaces the spec hint for this instance. It is reserved for codes
+// shared by several resources where the correct next step depends on which
+// resource was refused — resource_state_conflict covers orders, refunds,
+// quota applications and model listing transitions, and only the call site
+// knows which page the operator must open. The text is sanitized and rendered
+// at write time exactly like a spec hint.
+func (e *APIError) WithHint(hint string) *APIError {
+	if e != nil {
+		e.Hint = hint
+		e.hintOverride = true
 	}
 	return e
 }
@@ -286,7 +301,9 @@ func (e *APIError) object() errorObject {
 	// Render from the spec at write time so a direct change to
 	// RetryAfterSeconds cannot leave "{retry}" unresolved in hint.
 	hint := renderHint(settings.Hint, e.RetryAfterSeconds)
-	if settings.Hint == "" {
+	if e.hintOverride {
+		hint = renderHint(e.Hint, e.RetryAfterSeconds)
+	} else if settings.Hint == "" {
 		hint = e.Hint
 	}
 	hint = sanitizeText(hint, e.redactions, false)
