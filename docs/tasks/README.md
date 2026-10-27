@@ -66,6 +66,7 @@
 | D-13 | **执行顺序调整：T10 提到 T07 之前**。T10 是纯库（65 码 + 写出口 + 响应头 + SSE 错误帧），不依赖流水线；而 T07 的每个失败分支都要产出这些码。若按原图先做 T07，错误处理会先写一套临时实现、T10 再返工 | 依赖图原标 T10 依赖 T07，是把它当成"流水线的错误出口"；实际它是被流水线**消费**的库 | T10、T07 |
 | D-12 | **幂等租约补列走方案 A**：新增迁移 `0020` 给 `t_idempotency_record` 加 `fence_token char(36)` + `lease_expires_at datetime(3)`（纯 Expand，只加不删，可回滚为 `DROP COLUMN`）；不做「用 `request_id` 当 fence」的凑合方案 | 幂等 fencing 的语义一旦凑合，后续排查「谁抢了租约」时无从下手；现在只是一条 DDL。编号超出 TDS §8.6 裁定表，已在 `docs/schema.md` 登记待回写 | T06（补正）、T07 |
 | D-11 | **套餐发票/SLA 口径**（原 Q-06）：`invoice_supported` 付费三档（STANDARD / PRO / ENTERPRISE）= `1`，`TRIAL` / `FREE_DEFAULT` = `0`；`sla_text` 付费三档填「7×24 工单受理，不承诺可用性百分比」，其余为空串 | 开票是 PRD G-07 功能点，若五档全 0，定价页会渲染成"全部不支持发票"，与产品事实相反；但开票需实名且需实际支付，体验版与默认档无可开票金额 | T03（0018 种子）、T18（定价页展示） |
+| D-23 | **T16 的「模型主数据」并入 `internal/control/ops/`，不新建 `internal/control/modelmaster/`**；交付根改为 `internal/control/ops/{model,alias,listing}.go`。T16 卡面写的 `modelmaster/` 作废 | T15 已经交付了模型管理（`ops/model.go`：CRUD、三态、推荐权重、公告草稿、F16-7 未配价不得上架），路由占着 `GET/POST /api/admin/models`。若按卡面另建 `modelmaster/`，同一个资源会有两套 handler 与两套状态机校验——这正是 D-15 禁止的「两套 IR」同类问题，必然字段漂移 | T16 第二段 |
 
 ## 三、待确认事项（不阻塞派单，默认按右列执行）
 
@@ -130,7 +131,7 @@
 | [T13](T13-资金域API.md) | 资金域 API（订单/退款/发票/提额/套餐） | T11,T04 | `internal/control/fund/` | 🟨 有条件通过（缺 QA） |
 | [T14](T14-用量账单与日志API.md) | 用量·账单·请求日志 API | T11 | `internal/control/usage/` | ⬜ |
 | [T15](T15-运营后台API.md) | 运营后台 API（渠道/模型/定价/分组/公告/风控） | T11,T05 | `internal/control/ops/` | ✅ 两段完成 |
-| [T16](T16-工单审核与模型主数据API.md) | 工单·审核中心·模型主数据 API | T15 | `internal/control/ticket/`、`.../review/` | ⬜ |
+| [T16](T16-工单审核与模型主数据API.md) | 工单·审核中心·模型主数据 API | T15 | `internal/control/ticket/`、`.../review/`、`ops/`（D-23） | 🟨 第一段 ✅ |
 
 ### 阶段 5 · 前端
 
@@ -225,6 +226,7 @@ flowchart LR
 | T15 第一段 | 2026-10-27 | 2026-10-27 | 🟨 已交付，待验收 | 5 项 | 状态码收敛 70→74、权限点 19 个 + 四角色矩阵、渠道 6 路由、模型主数据 5 路由；「10 角色」实为 4（E-30） |
 | T15 第二段 | 2026-10-27 | 2026-10-27 | 🟨 已交付，待验收 | 5 项 | 定价（地板整数交叉相乘/7 天公示期/唯一真相源）、分组、公告、风控、用户、配置白名单；`resource_not_found` 收口，码表 74→75 |
 | T15 补丁 | 2026-10-27 | 2026-10-27 | ✅ F16-7 未配价不得上架（E-34） | — | 409 `resource_state_conflict`；缺省 `listing_state` 改 `CATALOG_ONLY` |
+| T16 第一段 | 2026-10-27 | 2026-10-27 | 🟨 已交付，待验收 | 4 项 | 工单中心 8 条路由；三态无 AUTO_CLOSED；SLA 假时钟证明不自动关闭；越权三类同一 404；三条审计分写 |
 
 **T15 全卡验收结论（交付总监复核）**
 

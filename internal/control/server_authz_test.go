@@ -74,6 +74,11 @@ var adminRoutes = []struct {
 	{http.MethodPost, "/api/admin/users/1/enable"},
 	{http.MethodGet, "/api/admin/config"},
 	{http.MethodPut, "/api/admin/config"},
+	// T16 ticket centre: the operator queue is ticket.reply, which PERSONAL
+	// never holds.
+	{http.MethodGet, "/api/admin/tickets"},
+	{http.MethodPost, "/api/admin/tickets/1/reply"},
+	{http.MethodPost, "/api/admin/tickets/1/state"},
 }
 
 func TestPersonalAccountGets403OnEveryAdminRoute(t *testing.T) {
@@ -148,6 +153,94 @@ func TestOpsCanReadChannels(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("OPS channel list status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+}
+
+// The ticket consoles are split: OPS answers through ticket.reply but must not
+// open the account-scoped console routes. Ticket ids in the path are irrelevant:
+// Require rejects before the handler runs.
+func TestOpsCannotReachConsoleTickets(t *testing.T) {
+	rdb := redisx.New(redisx.Options{Addr: redistest.Addr(), DB: redistest.DB(), PoolSize: 5})
+	t.Cleanup(func() { _ = rdb.Close() })
+	sessMgr, err := mw.NewSessionManager(testDB, rdb, "0123456789abcdef")
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	srv, err := New(Deps{DB: testDB, Redis: rdb, Sessions: sessMgr, Now: clock.Real{}})
+	if err != nil {
+		t.Fatalf("control server: %v", err)
+	}
+	mux := http.NewServeMux()
+	srv.Register(mux)
+
+	uid := newRoleUser(t, "OPS")
+	_, cookieValue, err := sessMgr.Issue(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+
+	routes := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/api/console/tickets"},
+		{http.MethodGet, "/api/console/tickets"},
+		{http.MethodGet, "/api/console/tickets/1"},
+		{http.MethodPost, "/api/console/tickets/1/close"},
+		{http.MethodGet, "/api/console/request-ids"},
+	}
+	for _, route := range routes {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			req := httptest.NewRequest(route.method, route.path, bytes.NewReader(nil))
+			req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Fatalf("status=%d body=%s, want 403", rec.Code, rec.Body.String())
+			}
+			var body struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			if err := jsonx.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body: %v", err)
+			}
+			if body.Error.Code != "permission_denied" {
+				t.Fatalf("code=%q, want permission_denied", body.Error.Code)
+			}
+		})
+	}
+}
+
+// Positive control: the same route table answers a PERSONAL session on the
+// console tickets list (the handler then scopes by uid). Without this pair the
+// 403 test above could pass because the whole ticket surface is broken.
+func TestPersonalCanReachConsoleTickets(t *testing.T) {
+	rdb := redisx.New(redisx.Options{Addr: redistest.Addr(), DB: redistest.DB(), PoolSize: 5})
+	t.Cleanup(func() { _ = rdb.Close() })
+	sessMgr, err := mw.NewSessionManager(testDB, rdb, "0123456789abcdef")
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	srv, err := New(Deps{DB: testDB, Redis: rdb, Sessions: sessMgr, Now: clock.Real{}})
+	if err != nil {
+		t.Fatalf("control server: %v", err)
+	}
+	mux := http.NewServeMux()
+	srv.Register(mux)
+
+	uid := newRoleUser(t, "PERSONAL")
+	_, cookieValue, err := sessMgr.Issue(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/console/tickets", nil)
+	req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PERSONAL ticket list status=%d body=%s, want 200", rec.Code, rec.Body.String())
 	}
 }
 

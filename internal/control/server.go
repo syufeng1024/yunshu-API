@@ -26,6 +26,7 @@ import (
 	"yunshu.dev/core/internal/control/model"
 	"yunshu.dev/core/internal/control/mw"
 	"yunshu.dev/core/internal/control/ops"
+	"yunshu.dev/core/internal/control/ticket"
 	"yunshu.dev/core/internal/control/user"
 	"yunshu.dev/core/internal/cryptobox"
 	obslog "yunshu.dev/core/internal/obs/log"
@@ -78,9 +79,10 @@ type Server struct {
 	auth   *auth.Service
 	user   *user.Service
 	keys   *key.Service
-	models *model.Service
-	fund   *fund.Service
-	ops    *ops.Service
+	models  *model.Service
+	fund    *fund.Service
+	ops     *ops.Service
+	tickets *ticket.Service
 }
 
 // New validates the wiring and builds the server.
@@ -120,6 +122,12 @@ func New(d Deps) (*Server, error) {
 		Now:         d.Now.Now,
 		LockTimeout: 5 * time.Second,
 	}
+	// Tickets need no Redis, but they reuse the one outbound seam. fund.Mailer
+	// and ticket.Mailer have identical method sets, so no adapter is needed.
+	tickets := ticket.New(d.DB, d.Audit, d.Now, d.Logger)
+	if d.Mailer != nil {
+		tickets.Mailer = d.Mailer
+	}
 	return &Server{
 		d: d,
 		auth: &auth.Service{
@@ -131,9 +139,10 @@ func New(d Deps) (*Server, error) {
 		},
 		user:   user.New(d.DB, d.Redis, d.Now, d.Logger),
 		keys:   keys,
-		models: model.New(d.DB, d.Now, d.Logger),
-		fund:   funds,
-		ops:    opss,
+		models:  model.New(d.DB, d.Now, d.Logger),
+		fund:    funds,
+		ops:     opss,
+		tickets: tickets,
 	}, nil
 }
 
@@ -241,6 +250,20 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	mux.Handle("GET /api/admin/config", s.authed(mw.PermConfigWrite, s.ops.GetConfig))
 	mux.Handle("PUT /api/admin/config", s.authed(mw.PermConfigWrite, s.ops.PutConfig))
+
+	// T16 ticket centre. The account console holds ticket.read/ticket.write and
+	// sees only its own rows; the operator console answers through ticket.reply.
+	// OPS deliberately does not hold ticket.read: the two consoles never share
+	// a permission (E-31/E-33).
+	mux.Handle("POST /api/console/tickets", s.authed(mw.PermTicketWrite, s.tickets.Create))
+	mux.Handle("GET /api/console/tickets", s.authed(mw.PermTicketRead, s.tickets.List))
+	mux.Handle("GET /api/console/tickets/{id}", s.authed(mw.PermTicketRead, s.tickets.Detail))
+	mux.Handle("POST /api/console/tickets/{id}/close", s.authed(mw.PermTicketWrite, s.tickets.Close))
+	mux.Handle("GET /api/console/request-ids", s.authed(mw.PermTicketRead, s.tickets.Picker))
+
+	mux.Handle("GET /api/admin/tickets", s.authed(mw.PermTicketReply, s.tickets.ListAdmin))
+	mux.Handle("POST /api/admin/tickets/{id}/reply", s.authed(mw.PermTicketReply, s.tickets.Reply))
+	mux.Handle("POST /api/admin/tickets/{id}/state", s.authed(mw.PermTicketReply, s.tickets.State))
 
 	// Unknown /api paths return the shared error envelope instead of net/http's
 	// plain-text 404.

@@ -907,6 +907,399 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/tickets:
+    get:
+      operationId: listConsoleTickets
+      tags: [console, ticket]
+      summary: 我的工单列表（状态/类型筛选；只返回本人）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: state
+          in: query
+          description: 只有 OPEN / RESPONDED / CLOSED 三态；其他值返回 400
+          schema: {type: string, enum: [OPEN, RESPONDED, CLOSED, all]}
+        - name: type
+          in: query
+          schema: {type: string, enum: [BILLING, TECH, CONTENT_APPEAL, OTHER, all]}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at]}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 工单列表；每项带 SLA 展示字段
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketList'
+        '400':
+          description: 查询参数非法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 ticket.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: createConsoleTicket
+      tags: [console, ticket]
+      summary: 提交工单（内容申诉自动带出命中规则 ID 与 request_id）
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTicketRequest'
+      responses:
+        '201':
+          description: 已创建（state=OPEN，first_response_due_at = created_at + 4h）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedTicket'
+        '400':
+          description: 类型/标题/正文非法，或内容申诉既未传 request_id 也未传 policy_hit_id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 ticket.write（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: >-
+            request_id / policy_hit_id 不存在、不属于当前账号或超过 90 天窗口（resource_not_found）。
+            三种情况使用同一个码与同一段文案，不泄露存在性。
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 内容申诉引用的命中记录不在可申诉状态或已超过 30 天（resource_state_conflict）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/tickets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TicketID'
+    get:
+      operationId: getConsoleTicket
+      tags: [console, ticket]
+      summary: 工单详情（含可见往来记录；内部备注不返回）
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 详情；sla.display 为「已响应（用时 xx）」/「剩余 xx」/「已超时 xx」
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 ticket.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 工单不存在或不属于当前账号（resource_not_found；两种情况不可区分）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/tickets/{id}/close:
+    parameters:
+      - $ref: '#/components/parameters/TicketID'
+    post:
+      operationId: closeConsoleTicket
+      tags: [console, ticket]
+      summary: 用户关闭自己的工单（关闭后不能再回复）
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: {type: string, maxLength: 255}
+      responses:
+        '200':
+          description: 关闭后的详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Ticket'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 ticket.write（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 工单不存在或不属于当前账号（resource_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 工单已是 CLOSED（resource_state_conflict）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/request-ids:
+    get:
+      operationId: listConsoleRequestIDs
+      tags: [console, ticket]
+      summary: request_id 选择器（只列本人最近 90 天的请求）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: q
+          in: query
+          description: 按 request_id 或模型名模糊搜索
+          schema: {type: string, maxLength: 64}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 选择器列表；since 为 90 天窗口起点
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RequestIDList'
+        '400':
+          description: 查询参数非法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 ticket.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/tickets:
+    get:
+      operationId: listAdminTickets
+      tags: [admin, ticket]
+      summary: 运营工单队列（overdue=true 为 SLA 告警区，按超时时长升序）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: state
+          in: query
+          schema: {type: string, enum: [OPEN, RESPONDED, CLOSED, all]}
+        - name: type
+          in: query
+          schema: {type: string, enum: [BILLING, TECH, CONTENT_APPEAL, OTHER, all]}
+        - name: overdue
+          in: query
+          description: true = 仅 OPEN 且已过 first_response_due_at 的工单；false 为补集
+          schema: {type: boolean}
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 64}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, first_response_due_at]}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 工单队列
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTicketList'
+        '400':
+          description: 查询参数非法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 ticket.reply（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/tickets/{id}/reply:
+    parameters:
+      - $ref: '#/components/parameters/TicketID'
+    post:
+      operationId: replyAdminTicket
+      tags: [admin, ticket]
+      summary: 运营回复（首次回复置 RESPONDED 并停表、发邮件）或写内部备注（用户不可见）
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketReplyRequest'
+      responses:
+        '200':
+          description: 回复已写入；公开回复附带更新后的工单状态
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TicketReplyResult'
+        '400':
+          description: content 为空或超过 5,000 字（invalid_request_body）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 ticket.reply（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 工单不存在（resource_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 工单已关闭（resource_state_conflict）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/tickets/{id}/state:
+    parameters:
+      - $ref: '#/components/parameters/TicketID'
+    post:
+      operationId: setAdminTicketState
+      tags: [admin, ticket]
+      summary: 运营代用户关闭工单（唯一可达目标 CLOSED）
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TicketStateRequest'
+      responses:
+        '200':
+          description: 更新后的工单
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTicket'
+        '400':
+          description: state 不是 CLOSED（invalid_request_body）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 ticket.reply（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 工单不存在（resource_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 工单已是 CLOSED（resource_state_conflict）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 components:
   securitySchemes:
     sessionCookie:
@@ -921,6 +1314,12 @@ components:
       required: true
       schema: {type: integer, format: int64}
       description: t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found
+    TicketID:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, format: int64}
+      description: t_ticket.id；他人工单与不存在同样返回 404 resource_not_found
   schemas:
     HealthStatus:
       type: object
@@ -1599,3 +1998,156 @@ components:
         bonus_expire_at: {type: string, format: date-time, description: 90 天}
         balance_after_micro: {type: integer, format: int64}
         anti_abuse_checks: {type: string, description: "DEVICE+PHONE+IP_SEGMENT+ACCOUNT"}
+    TicketSLA:
+      type: object
+      required: [first_response_due_at, responded, overdue, remaining_seconds, overdue_seconds, display]
+      properties:
+        first_response_due_at: {type: string, format: date-time, description: created_at + 4h}
+        first_responded_at: {type: string, format: date-time, nullable: true}
+        responded: {type: boolean}
+        overdue: {type: boolean, description: 仅 OPEN 且已过 due；超时只进告警区，不自动关闭}
+        remaining_seconds: {type: integer, format: int64, description: 未响应且未超时的剩余秒数，其余为 0}
+        overdue_seconds: {type: integer, format: int64, description: 已超出的秒数，未超时为 0}
+        display: {type: string, description: 「已响应（用时 xx）」/「剩余 xx」/「已超时 xx」}
+    TicketReply:
+      type: object
+      required: [id, author_type, content, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        author_type: {type: string, enum: [USER, OPS]}
+        content: {type: string, maxLength: 5000}
+        created_at: {type: string, format: date-time}
+    Ticket:
+      type: object
+      required: [id, ticket_no, ticket_type, title, description, state, first_response_due_at, created_at, updated_at, sla, replies]
+      properties:
+        id: {type: integer, format: int64}
+        ticket_no: {type: string, maxLength: 20, description: TK + yyyyMMddHHmmss + 4 位随机数}
+        ticket_type: {type: string, enum: [BILLING, TECH, CONTENT_APPEAL, OTHER]}
+        title: {type: string, maxLength: 120}
+        description: {type: string, maxLength: 5000}
+        request_id: {type: string, maxLength: 36, nullable: true}
+        policy_hit_id: {type: integer, format: int64, nullable: true, description: 内容申诉从 t_content_policy_hit 派生}
+        policy_rule_id: {type: string, nullable: true, description: 命中的规则标识，由服务端带出，用户不可手填}
+        policy_category: {type: string, nullable: true}
+        state: {type: string, enum: [OPEN, RESPONDED, CLOSED], description: 只有三态}
+        first_response_due_at: {type: string, format: date-time}
+        first_responded_at: {type: string, format: date-time, nullable: true}
+        last_replied_at: {type: string, format: date-time, nullable: true}
+        reopen_count: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        sla: {$ref: '#/components/schemas/TicketSLA'}
+        replies:
+          type: array
+          description: 只含 is_internal = 0 的回复；内部备注不会出现在此数组
+          items: {$ref: '#/components/schemas/TicketReply'}
+    TicketListItem:
+      type: object
+      required: [id, ticket_no, ticket_type, title, state, first_response_due_at, created_at, sla]
+      properties:
+        id: {type: integer, format: int64}
+        ticket_no: {type: string}
+        ticket_type: {type: string, enum: [BILLING, TECH, CONTENT_APPEAL, OTHER]}
+        title: {type: string}
+        state: {type: string, enum: [OPEN, RESPONDED, CLOSED]}
+        first_response_due_at: {type: string, format: date-time}
+        first_responded_at: {type: string, format: date-time, nullable: true}
+        last_replied_at: {type: string, format: date-time, nullable: true}
+        created_at: {type: string, format: date-time}
+        sla: {$ref: '#/components/schemas/TicketSLA'}
+    TicketList:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/TicketListItem'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    CreateTicketRequest:
+      type: object
+      required: [ticket_type, title, description]
+      properties:
+        ticket_type: {type: string, enum: [BILLING, TECH, CONTENT_APPEAL, OTHER]}
+        title: {type: string, maxLength: 120}
+        description: {type: string, maxLength: 5000, description: 纯文本；CRLF 归一为 LF，控制字符剔除}
+        request_id: {type: string, maxLength: 36, description: 可选；必须为本人 90 天内的请求}
+        policy_hit_id:
+          type: integer
+          format: int64
+          description: 仅 CONTENT_APPEAL；t_content_policy_hit.id（不是规则标识）。与 request_id 同传时以命中记录为准
+    CreatedTicket:
+      type: object
+      required: [ticket, request_id_source]
+      properties:
+        ticket: {$ref: '#/components/schemas/Ticket'}
+        request_id_source: {type: string, enum: ['', USER, POLICY_HIT], description: POLICY_HIT 表示 request_id 由命中记录带出}
+        notice: {type: string, description: 传了与命中记录不一致的 request_id 时的校正说明}
+    RequestIDItem:
+      type: object
+      required: [request_id, model_name, http_status, result, created_at]
+      properties:
+        request_id: {type: string, maxLength: 36}
+        model_name: {type: string}
+        http_status: {type: integer}
+        result: {type: string, enum: [SUCCESS, PARTIAL, FAILED]}
+        created_at: {type: string, format: date-time}
+    RequestIDList:
+      type: object
+      required: [items, page, page_size, total, since]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/RequestIDItem'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+        since: {type: string, format: date-time, description: 90 天窗口起点}
+    AdminTicket:
+      type: object
+      required: [id, ticket_no, user_id, user_email, ticket_type, title, state, first_response_due_at, created_at, sla]
+      properties:
+        id: {type: integer, format: int64}
+        ticket_no: {type: string}
+        user_id: {type: integer, format: int64}
+        user_email: {type: string}
+        ticket_type: {type: string, enum: [BILLING, TECH, CONTENT_APPEAL, OTHER]}
+        title: {type: string}
+        request_id: {type: string, maxLength: 36, nullable: true}
+        policy_hit_id: {type: integer, format: int64, nullable: true}
+        state: {type: string, enum: [OPEN, RESPONDED, CLOSED]}
+        first_response_due_at: {type: string, format: date-time}
+        first_responded_at: {type: string, format: date-time, nullable: true}
+        last_replied_at: {type: string, format: date-time, nullable: true}
+        created_at: {type: string, format: date-time}
+        sla: {$ref: '#/components/schemas/TicketSLA'}
+    AdminTicketList:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AdminTicket'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    TicketReplyRequest:
+      type: object
+      required: [content]
+      properties:
+        content: {type: string, maxLength: 5000}
+        is_internal: {type: boolean, default: false, description: true = 内部备注，用户不可见，不改状态、不发邮件}
+    TicketReplyResult:
+      type: object
+      required: [reply, ticket]
+      properties:
+        reply: {$ref: '#/components/schemas/TicketReply'}
+        ticket: {$ref: '#/components/schemas/AdminTicket'}
+    TicketStateRequest:
+      type: object
+      required: [state]
+      properties:
+        state: {type: string, enum: [CLOSED], description: 唯一可达目标；RESPONDED 由回复动作写入，OPEN 由用户补充回复重开}
+        reason: {type: string, maxLength: 255, description: 写入审计 reason}

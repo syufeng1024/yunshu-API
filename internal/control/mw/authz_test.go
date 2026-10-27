@@ -14,13 +14,15 @@ func TestRolePermissionMatrix(t *testing.T) {
 		PermUserRead, PermUserWrite, PermKeyRead, PermKeyWrite,
 		PermModelRead, PermModelWrite, PermPriceWrite, PermGroupWrite,
 		PermChannelWrite, PermNoticeWrite, PermRiskWrite, PermConfigWrite,
-		PermFundRead, PermFundWrite, PermFundApprove, PermTicketReply,
+		PermFundRead, PermFundWrite, PermFundApprove,
+		PermTicketRead, PermTicketWrite, PermTicketReply,
 		PermAuditRead, PermAdminRead, PermAdminAll,
 	}
 	want := map[string]map[Permission]bool{
 		"PERSONAL": {
 			PermUserRead: true, PermKeyRead: true, PermKeyWrite: true,
 			PermModelRead: true, PermFundRead: true, PermFundWrite: true,
+			PermTicketRead: true, PermTicketWrite: true,
 		},
 		"OPS": {
 			PermUserRead: true, PermUserWrite: true, PermModelRead: true,
@@ -56,6 +58,18 @@ func TestRolePermissionMatrix(t *testing.T) {
 	}
 	if Allows("OPS", PermAdminAll) || Allows("FINANCE", PermAdminAll) {
 		t.Error("admin.all is SUPER_ADMIN only; concrete permissions must guard admin routes")
+	}
+	// The ticket consoles are split: OPS answers users through ticket.reply but
+	// must not read or write the account-scoped console surface; PERSONAL must
+	// not reach the operator queue.
+	if Allows("OPS", PermTicketRead) || Allows("OPS", PermTicketWrite) {
+		t.Error("OPS holds ticket.reply only; ticket.read/ticket.write belong to the account console")
+	}
+	if Allows("PERSONAL", PermTicketReply) {
+		t.Error("PERSONAL must not hold ticket.reply")
+	}
+	if Allows("FINANCE", PermTicketRead) || Allows("FINANCE", PermTicketWrite) || Allows("FINANCE", PermTicketReply) {
+		t.Error("FINANCE has no ticket permission")
 	}
 
 	// An unknown role grants nothing.

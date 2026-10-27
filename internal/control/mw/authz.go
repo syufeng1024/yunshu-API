@@ -32,6 +32,8 @@ const (
 	PermFundRead     Permission = "fund.read"
 	PermFundWrite    Permission = "fund.write"
 	PermFundApprove  Permission = "fund.approve"
+	PermTicketRead   Permission = "ticket.read"
+	PermTicketWrite  Permission = "ticket.write"
 	PermTicketReply  Permission = "ticket.reply"
 	PermAuditRead    Permission = "audit.read"
 	// admin.read gates the operator console's read routes. model.read cannot
@@ -54,14 +56,22 @@ const (
 //
 // PERSONAL holds fund.read/fund.write because a user buys their own plan and
 // redeems their own code; every fund handler still scopes by session uid.
+//
+// ticket.read / ticket.write are the account's own tickets only. OPS holds
+// ticket.reply instead of either: the operator console has no business reading
+// /api/console/tickets (every row there is scoped to one account), and sharing
+// one permission across both consoles would let a customer open the operator
+// queue (E-31/E-33 pattern).
 var rolePermissions = map[string]map[Permission]bool{
 	"PERSONAL": {
-		PermUserRead:  true,
-		PermKeyRead:   true,
-		PermKeyWrite:  true,
-		PermModelRead: true,
-		PermFundRead:  true,
-		PermFundWrite: true,
+		PermUserRead:    true,
+		PermKeyRead:     true,
+		PermKeyWrite:    true,
+		PermModelRead:   true,
+		PermFundRead:    true,
+		PermFundWrite:   true,
+		PermTicketRead:  true,
+		PermTicketWrite: true,
 	},
 	"OPS": {
 		PermUserRead:     true,
@@ -101,6 +111,8 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermFundRead:     true,
 		PermFundWrite:    true,
 		PermFundApprove:  true,
+		PermTicketRead:   true,
+		PermTicketWrite:  true,
 		PermTicketReply:  true,
 		PermAuditRead:    true,
 		PermAdminRead:    true,

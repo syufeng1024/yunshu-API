@@ -8,7 +8,7 @@
 | 依赖 | T15（用户/模型/资金基础接口）、**T10**（错误码） |
 | 可并行 | 与 T12 / T13 / T14 并行 |
 | 交付根 | `internal/control/ticket/`、`internal/control/review/`、`internal/control/modelmaster/` |
-| 状态 | ⬜ 未开始 |
+| 状态 | 🟨 第一段已交付（2026-10-27）· 工单中心完成；审核中心与模型主数据未派 |
 
 ## 1. 目标
 
@@ -115,3 +115,29 @@ SLA: A11 输出（证明未自动关闭）
 审批副作用: 五类单据各自的副作用落点（文件:函数）
 遗留:
 ```
+
+---
+
+## 9. 第一段交付记录（2026-10-27）· 工单中心
+
+新增 `internal/control/ticket/`（`service/create/picker/list/reply/sla/close` + 7 个测试文件），改 `mw/authz.go`（`ticket.read`/`ticket.write` 仅授 `PERSONAL` 与 `SUPER_ADMIN`，OPS 只用 `ticket.reply`）、`server.go`、`openapi.yaml`。**未新增迁移、未新增配置键、未新增错误码**（复用 `resource_not_found` / `resource_state_conflict`）。
+
+| 验收 | 结果 |
+| :--- | :--- |
+| 三态、无第四态 | ✅ `TestTicketStateEnumHasExactlyThreeValues`；`grep AUTO_CLOSED` 在 `*.go` 零命中（只剩 0015 迁移里那句禁止性注释） |
+| A11 SLA 只提示不处置 | ✅ 假时钟 +5h：`state=OPEN`、`overdue=true`、告警区 1 条、回复 0、邮件 0；+53h 仍未关闭 |
+| A2/F19-1 选择器与越权 | ✅ 只列 90 天内本人；他人 / 不存在 / 100 天前 三种情况**同一响应** 404 `resource_not_found` |
+| A4/F19-3 内容申诉带出 | ✅ 从 `t_content_policy_hit` 取规则 ID 与 `request_id`；命中记录优先于用户传值 |
+| A5/F19-4 注销前校验 | ✅ `CheckAccountCancellable` 列出未结工单号（`CLOSED` 不计入）；仓库无注销接口，未新建 |
+| A10/F21-1 回复置 RESPONDED | ✅ 首次回复才写 `first_responded_at`（SLA 停表）+ 邮件（`Deps.Mailer`，未注入只 WARN） |
+| A12 三条审计 | ✅ `REPLY` / `INTERNAL_NOTE` / `STATE_CHANGE` 各自一条，含前后状态与 `has_internal_note`，与业务同事务 |
+| 内部备注隔离 | ✅ 过滤在 SQL（`is_internal = 0`），用户侧详情看不到；内部备注不置状态、不发邮件、不停 SLA |
+| 越权他人工单 | ✅ 详情/关闭均 404，与不存在不可区分 |
+| 全仓回归 | ✅ `./internal/...` **36 包 ok / 0 FAIL**；lint 8 条通过；`ticket` 覆盖率 74.3% |
+
+### 遗留
+
+1. **用户侧补充回复与重开未实现**：接口表未列用户回复路由，`CLOSED → OPEN` 不可达，`reopen_count` 只读。
+2. **48h 答复倒计时未落**：`t_ticket` 无对应列，且没有用户回复路由，计时基准不存在；本段只落 4h 首次响应。
+3. **运营侧无工单详情路由**：卡面接口表未列 `GET /api/admin/tickets/{id}`，运营目前只能看列表，内部备注只能写不能读回（用户侧已确认不可见）。这是接口表本身的缺口，留待补卡。
+4. 内容申诉额外按 TDS §8.4.5 置 `action='APPEAL_PENDING'`、写 `appeal_at`/`appeal_note`，并拒 30 天外/已复核的命中——卡面只写「自动带出」，此为源文档补充口径。
