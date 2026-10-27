@@ -3,8 +3,11 @@ package jobs
 import (
 	"context"
 	"database/sql"
+	"os"
 	"testing"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
 
 	"yunshu.dev/core/internal/platform/clock"
 )
@@ -176,6 +179,99 @@ func TestRollupBuildsAllFourTables(t *testing.T) {
 	}
 	t.Logf("rollup daily_rows=%d model(req=%d cost=%d gross=%d) channel(total=%d success=%d avg=%d timeout=%d)",
 		dailyRows, requests, cost, gross, attemptTotal, success, avgTotal, timeouts)
+}
+
+// created_at is datetime(3) storing UTC. The bucket query used to call
+// UNIX_TIMESTAMP(), which interprets its argument in the session time zone and
+// shifted every bucket by the server offset. This runs the channel-health leg
+// through a pool pinned to +08:00 and asserts the bucket is still the UTC
+// minute.
+func TestRollupChannelHealthIgnoresSessionTimeZone(t *testing.T) {
+	ctx := context.Background()
+	day := time.Date(2026, 6, 11, 0, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	start, end := day.UTC(), day.UTC().Add(24*time.Hour)
+	const (
+		user    = int64(950011)
+		channel = int64(950013)
+	)
+	at := start.Add(10*time.Hour + 3*time.Minute + 17*time.Second)
+	wantBucket := start.Add(10*time.Hour + 3*time.Minute)
+
+	cleanup := func() {
+		_, _ = testDB.Exec(
+			`DELETE FROM t_metric_channel_health WHERE channel_id = ? AND bucket_ts >= ? AND bucket_ts < ?`,
+			channel, start, end)
+		_, _ = testDB.Exec(`DELETE FROM t_upstream_attempt WHERE user_id = ?`, user)
+	}
+	cleanup()
+	t.Cleanup(cleanup)
+
+	if _, err := testDB.Exec(
+		`INSERT INTO t_upstream_attempt
+		   (request_id, attempt_index, user_id, model_id, route_id, channel_id,
+		    channel_name_snap, protocol_code, upstream_model, phase, result,
+		    error_class, total_ms, created_at)
+		 VALUES (?,1,?,950002,1,?,'fixture','OPENAI_COMPAT','fixture','COMPLETE',
+		         'SUCCESS',NULL,120,?)`,
+		jobRID("rltz", 1), user, channel, at); err != nil {
+		t.Fatalf("insert attempt: %v", err)
+	}
+
+	tzDB := openSessionTimeZone(t, "+08:00")
+	var sessionTZ string
+	if err := tzDB.QueryRowContext(ctx, `SELECT @@session.time_zone`).Scan(&sessionTZ); err != nil {
+		t.Fatalf("read session time_zone: %v", err)
+	}
+	if sessionTZ != "+08:00" {
+		t.Fatalf("session time_zone = %q; the regression needs +08:00", sessionTZ)
+	}
+
+	task := NewRollup(tzDB, nil, clock.Real{})
+	task.Location = day.Location()
+	if _, err := task.rollupChannelHealth(ctx, start, end); err != nil {
+		t.Fatalf("channel health: %v", err)
+	}
+
+	var got time.Time
+	if err := testDB.QueryRow(
+		`SELECT bucket_ts FROM t_metric_channel_health
+		  WHERE channel_id = ? AND bucket_ts >= ? AND bucket_ts < ?`,
+		channel, start, end).Scan(&got); err != nil {
+		t.Fatalf("read bucket: %v", err)
+	}
+	if !got.UTC().Equal(wantBucket) {
+		t.Fatalf("bucket = %s; want %s (a session-timezone shift lands on %s)",
+			got.UTC(), wantBucket, wantBucket.Add(-8*time.Hour))
+	}
+}
+
+// openSessionTimeZone opens a second pool on the test schema whose every
+// connection sets session time_zone. A plain SET on testDB would only affect
+// whichever pooled connection happened to serve it.
+func openSessionTimeZone(t *testing.T, tz string) *sql.DB {
+	t.Helper()
+	dsn := os.Getenv("TEST_DB_DSN")
+	if dsn == "" {
+		dsn = defaultTestDSN
+	}
+	cfg, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("parse DSN: %v", err)
+	}
+	if cfg.Params == nil {
+		cfg.Params = map[string]string{}
+	}
+	cfg.Params["time_zone"] = "'" + tz + "'"
+	db, err := sql.Open("mysql", cfg.FormatDSN())
+	if err != nil {
+		t.Fatalf("open tz pool: %v", err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	if err := db.Ping(); err != nil {
+		t.Fatalf("ping tz pool: %v", err)
+	}
+	return db
 }
 
 func cleanupRollup(t *testing.T, statDate string, start, end time.Time, user, model, channel, rule int64) {

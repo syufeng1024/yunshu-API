@@ -135,16 +135,18 @@ func TestPurgeLogRetentionBoundaries(t *testing.T) {
 		t.Fatal("purge reported truncation on a small fixture")
 	}
 
+	// yunshu_test accumulates rows from other packages; count this fixture's
+	// user only so the assertion stays exact without touching foreign data.
 	if n := countRows(t, `SELECT COUNT(*) FROM t_request_body`); n != 202 {
 		t.Fatalf("body rows = %d; want 202 (181-day row deleted)", n)
 	}
-	if n := countRows(t, `SELECT COUNT(*) FROM t_usage_record`); n != 202 {
+	if n := countRows(t, `SELECT COUNT(*) FROM t_usage_record WHERE user_id = 942001`); n != 202 {
 		t.Fatalf("usage rows = %d; want 202 (366-day row deleted)", n)
 	}
-	if n := countRows(t, `SELECT COUNT(*) FROM t_upstream_attempt`); n != 202 {
+	if n := countRows(t, `SELECT COUNT(*) FROM t_upstream_attempt WHERE user_id = 942001`); n != 202 {
 		t.Fatalf("attempt rows = %d; want 202", n)
 	}
-	if n := countRows(t, `SELECT COUNT(*) FROM t_idempotency_record`); n != 201 {
+	if n := countRows(t, `SELECT COUNT(*) FROM t_idempotency_record WHERE user_id = 942001`); n != 201 {
 		t.Fatalf("idempotency rows = %d; want 201", n)
 	}
 

@@ -1,7 +1,9 @@
 package config
 
 import (
+	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -9,11 +11,25 @@ import (
 	"yunshu.dev/core/internal/jsonx"
 )
 
+// nextVersionFromDB is the version a publish reserves: one above the durable
+// max of t_config_item and t_config_publish. The seed rows are version 1 on a
+// fresh schema, but yunshu_test keeps publish rows from earlier runs, so the
+// baseline is read rather than assumed.
+func nextVersionFromDB(t *testing.T, ctx context.Context) int64 {
+	t.Helper()
+	base, err := readDBVersion(ctx, testDB)
+	if err != nil {
+		t.Fatalf("read baseline version: %v", err)
+	}
+	return base + 1
+}
+
 // TestPublishUpdatesAllStores verifies the fixed release order end to end:
 // t_config_item, t_config_publish, five Redis snapshots, cfg:ver, Pub/Sub.
 func TestPublishUpdatesAllStores(t *testing.T) {
 	resetState(t)
 	ctx := testCtx(t)
+	wantVersion := nextVersionFromDB(t, ctx)
 
 	sub, err := testRedisIface.Subscribe(ctx, RedisInvalidateChannel)
 	if err != nil {
@@ -28,12 +44,12 @@ func TestPublishUpdatesAllStores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish: %v", err)
 	}
-	// The seed rows carry version 1, so the first publish reserves version 2.
-	if result.Version != 2 {
-		t.Fatalf("published version = %d, want 2", result.Version)
+	// The publish reserves exactly one above the durable baseline.
+	if result.Version != wantVersion {
+		t.Fatalf("published version = %d, want %d", result.Version, wantVersion)
 	}
-	if got := redisString(t, RedisVersionKey); got != "2" {
-		t.Fatalf("cfg:ver = %q, want 2", got)
+	if got := redisString(t, RedisVersionKey); got != strconv.FormatInt(wantVersion, 10) {
+		t.Fatalf("cfg:ver = %q, want %d", got, wantVersion)
 	}
 
 	var value string
@@ -48,8 +64,8 @@ func TestPublishUpdatesAllStores(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse stored value: %v", err)
 	}
-	if got, _ := parsed.Int(); got != 8100 || itemVersion != 2 {
-		t.Fatalf("stored value/version = %d/%d, want 8100/2", got, itemVersion)
+	if got, _ := parsed.Int(); got != 8100 || itemVersion != wantVersion {
+		t.Fatalf("stored value/version = %d/%d, want 8100/%d", got, itemVersion, wantVersion)
 	}
 
 	var scope, changed string
@@ -59,7 +75,7 @@ func TestPublishUpdatesAllStores(t *testing.T) {
 		 WHERE publish_id = ?`, result.PublishID).Scan(&scope, &changed, &publishVersion); err != nil {
 		t.Fatalf("read publish record: %v", err)
 	}
-	if scope != string(NsUpstream) || publishVersion != 2 || !strings.Contains(changed, string(KeyGwMaxInflight)) {
+	if scope != string(NsUpstream) || publishVersion != wantVersion || !strings.Contains(changed, string(KeyGwMaxInflight)) {
 		t.Fatalf("publish record = scope %q version %d keys %s", scope, publishVersion, changed)
 	}
 
@@ -69,8 +85,8 @@ func TestPublishUpdatesAllStores(t *testing.T) {
 		if err := jsonx.Unmarshal([]byte(raw), &wire); err != nil {
 			t.Fatalf("decode %s snapshot: %v", ns, err)
 		}
-		if wire.Version != 2 {
-			t.Fatalf("%s snapshot version = %d, want 2", ns, wire.Version)
+		if wire.Version != wantVersion {
+			t.Fatalf("%s snapshot version = %d, want %d", ns, wire.Version, wantVersion)
 		}
 		if raw, ok := wire.Values[string(KeyGwMaxInflight)]; ok && ns == NsUpstream {
 			if string(raw) != "8100" {
@@ -88,7 +104,7 @@ func TestPublishUpdatesAllStores(t *testing.T) {
 		if err := jsonx.Unmarshal([]byte(msg), &invalidate); err != nil {
 			t.Fatalf("decode invalidate message: %v", err)
 		}
-		if invalidate.Version != 2 || invalidate.PublishID != result.PublishID {
+		if invalidate.Version != wantVersion || invalidate.PublishID != result.PublishID {
 			t.Fatalf("invalidate message = %+v", invalidate)
 		}
 	case <-time.After(2 * time.Second):
@@ -110,7 +126,7 @@ func TestRuntimeWriterAllTwelveKeys(t *testing.T) {
 	ctx := testCtx(t)
 	writer := &RuntimeWriter{Publisher: newTestPublisher()}
 
-	version := int64(1)
+	version := nextVersionFromDB(t, ctx) - 1
 	for key, raw := range runtimeTestValues {
 		result, err := writer.Set(ctx, key, jsonx.RawMessage(raw), 0)
 		if err != nil {
@@ -121,8 +137,8 @@ func TestRuntimeWriterAllTwelveKeys(t *testing.T) {
 			t.Fatalf("%s published version = %d, want %d", key, result.Version, version)
 		}
 	}
-	if got := redisString(t, RedisVersionKey); got != "13" {
-		t.Fatalf("cfg:ver = %q, want 13", got)
+	if got := redisString(t, RedisVersionKey); got != strconv.FormatInt(version, 10) {
+		t.Fatalf("cfg:ver = %q, want %d", got, version)
 	}
 
 	loader := newTestLoader(nil)
@@ -249,6 +265,11 @@ func TestPublishRawRouting(t *testing.T) {
 	resetState(t)
 	ctx := testCtx(t)
 	pub := newTestPublisher()
+	wantVersion := nextVersionFromDB(t, ctx)
+	var itemBase int64
+	if err := testDB.QueryRow(`SELECT COALESCE(MAX(version),0) FROM t_config_item`).Scan(&itemBase); err != nil {
+		t.Fatalf("item baseline: %v", err)
+	}
 
 	payload := []byte(`{"namespace":"ROUTING","version":0,"values":{` +
 		`"groups":[{"code":"standard","ratio_bp":10000}],` +
@@ -257,11 +278,11 @@ func TestPublishRawRouting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("publish raw: %v", err)
 	}
-	if result.Version != 2 {
-		t.Fatalf("raw publish version = %d, want 2", result.Version)
+	if result.Version != wantVersion {
+		t.Fatalf("raw publish version = %d, want %d", result.Version, wantVersion)
 	}
 	raw := redisString(t, SnapshotRedisKey(NsRouting))
-	snap, err := decodeSnapshot(NsRouting, []byte(raw), 2, time.Now())
+	snap, err := decodeSnapshot(NsRouting, []byte(raw), wantVersion, time.Now())
 	if err != nil {
 		t.Fatalf("decode routing snapshot: %v", err)
 	}
@@ -279,20 +300,21 @@ func TestPublishRawRouting(t *testing.T) {
 	if err := testDB.QueryRow(`SELECT COALESCE(MAX(version),0) FROM t_config_publish`).Scan(&publishVersion); err != nil {
 		t.Fatalf("publish version: %v", err)
 	}
-	if itemVersion != 1 || publishVersion != 2 {
-		t.Fatalf("versions item=%d publish=%d, want 1/2 (raw does not touch items)", itemVersion, publishVersion)
+	if itemVersion != itemBase || publishVersion != wantVersion {
+		t.Fatalf("versions item=%d publish=%d, want %d/%d (raw does not touch items)",
+			itemVersion, publishVersion, itemBase, wantVersion)
 	}
 
-	// The next key publish must reserve 3 from the publish record, not 2 from
-	// the untouched item rows.
+	// The next key publish must reserve from the publish record, not from the
+	// untouched item rows.
 	next, err := pub.Publish(ctx, []Change{
 		{Key: KeyGwMaxInflight, Raw: jsonx.RawMessage(`8200`)},
 	}, 0)
 	if err != nil {
 		t.Fatalf("publish after raw: %v", err)
 	}
-	if next.Version != 3 {
-		t.Fatalf("version after raw publish = %d, want 3", next.Version)
+	if next.Version != wantVersion+1 {
+		t.Fatalf("version after raw publish = %d, want %d", next.Version, wantVersion+1)
 	}
 }
 

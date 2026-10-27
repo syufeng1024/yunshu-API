@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"yunshu.dev/core/internal/billing"
@@ -60,6 +61,10 @@ type Hanging struct {
 	Cost          CostFunc
 	BatchSize     int
 	RatePerSecond int
+	// UserLo/UserHi limit the scan to [UserLo, UserHi). Zero, zero scans the
+	// whole table, which is the only shape production uses. Tests sharing a
+	// schema set them so unrelated stale holds cannot enter their counters.
+	UserLo, UserHi int64
 
 	backlogRounds  int
 	backlogAlerted bool
@@ -226,13 +231,26 @@ func (h *Hanging) scan(ctx context.Context) ([]string, error) {
 	}
 	defer tx.Rollback() //nolint:errcheck // read-only scan; rollback releases SKIP LOCKED rows
 
-	rows, err := tx.QueryContext(ctx,
-		`SELECT request_id
-		   FROM t_prehold_hold
-		  WHERE state = 'HELD' AND expires_at < UTC_TIMESTAMP(3)
-		  ORDER BY expires_at ASC
-		  LIMIT ?
-		  FOR UPDATE SKIP LOCKED`, h.BatchSize)
+	q := `SELECT request_id
+	        FROM t_prehold_hold
+	       WHERE state = 'HELD' AND expires_at < UTC_TIMESTAMP(3)`
+	args := []any{}
+	if h.UserLo != 0 || h.UserHi != 0 {
+		lo, hi := h.UserLo, h.UserHi
+		if lo < 0 {
+			lo = 0
+		}
+		if hi <= lo {
+			hi = math.MaxInt64
+		}
+		q += ` AND user_id >= ? AND user_id < ?`
+		args = append(args, lo, hi)
+	}
+	q += ` ORDER BY expires_at ASC
+	       LIMIT ?
+	       FOR UPDATE SKIP LOCKED`
+	args = append(args, h.BatchSize)
+	rows, err := tx.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, fmt.Errorf("recon: scan hanging holds: %w", err)
 	}

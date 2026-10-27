@@ -26,6 +26,9 @@ func TestHangingRecoveryThreeStates(t *testing.T) {
 	h.Cost = func(context.Context, int64, int64, int64, time.Time) (int64, error) {
 		return 5000, nil
 	}
+	// yunshu_test retains expired HELD rows from other packages; only this
+	// test's users belong to the round.
+	h.UserLo, h.UserHi = 900000, 900010
 
 	const (
 		userA = int64(900001)

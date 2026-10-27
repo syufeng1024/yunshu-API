@@ -287,8 +287,11 @@ func (r *Rollup) rollupModelDaily(ctx context.Context, statDate string, start, e
 }
 
 func (r *Rollup) rollupChannelHealth(ctx context.Context, start, end time.Time) (int64, error) {
+	// created_at is datetime(3) holding UTC. UNIX_TIMESTAMP() would interpret
+	// the literal in the session time zone, shifting every bucket by the
+	// server's offset; TIMESTAMPDIFF against a literal epoch is zone-free.
 	rows, err := r.DB.QueryContext(ctx,
-		`SELECT (UNIX_TIMESTAMP(created_at) DIV 60) AS min_epoch,
+		`SELECT (TIMESTAMPDIFF(SECOND, '1970-01-01 00:00:00', created_at) DIV 60) AS min_epoch,
 		        channel_id,
 		        COUNT(*) AS attempt_total,
 		        COALESCE(SUM(result = 'SUCCESS'), 0) AS attempt_success,

@@ -253,8 +253,10 @@ func TestMySQLLeaseExpiryTakeoverRotatesFence(t *testing.T) {
 	}
 
 	// 模拟持有者死亡：把租约改为已过期，而不是真的等 15 秒。
+	// datetime(3) 存 UTC；NOW(3) 是会话时区，本机 +08:00 会把租约推到 8 小时
+	// 之后，Begin 的 UTC_TIMESTAMP(3) 判定因此看不到过期。
 	if _, err := testDB.ExecContext(ctx,
-		`UPDATE t_idempotency_record SET lease_expires_at = NOW(3) - INTERVAL 1 SECOND
+		`UPDATE t_idempotency_record SET lease_expires_at = UTC_TIMESTAMP(3) - INTERVAL 1 SECOND
 		  WHERE scope = ? AND api_key_id = ? AND idem_key = ?`,
 		idemTestScope, idemTestAPIKey, key,
 	); err != nil {
@@ -298,7 +300,7 @@ func TestMySQLTakeoverHealsLegacyEmptyFenceRow(t *testing.T) {
 		`INSERT INTO t_idempotency_record
 		   (scope, idem_key, user_id, api_key_id, request_id, state, body_hash, created_at, expires_at)
 		 VALUES (?, ?, ?, ?, 'req-legacy', 'IN_FLIGHT', 'hash-legacy',
-		         NOW(3) - INTERVAL 1 MINUTE, NOW(3) + INTERVAL 1 HOUR)`,
+		         UTC_TIMESTAMP(3) - INTERVAL 1 MINUTE, UTC_TIMESTAMP(3) + INTERVAL 1 HOUR)`,
 		idemTestScope, key, idemTestUser, idemTestAPIKey,
 	); err != nil {
 		t.Fatalf("insert legacy row: %v", err)
@@ -425,7 +427,7 @@ func TestMySQLRenewExtendsLeaseAndRejectsStaleFence(t *testing.T) {
 		t.Fatalf("first begin = %+v err=%v", first, err)
 	}
 	if _, err := testDB.ExecContext(ctx,
-		`UPDATE t_idempotency_record SET lease_expires_at = NOW(3) + INTERVAL 1 SECOND
+		`UPDATE t_idempotency_record SET lease_expires_at = UTC_TIMESTAMP(3) + INTERVAL 1 SECOND
 		  WHERE scope = ? AND api_key_id = ? AND idem_key = ?`,
 		idemTestScope, idemTestAPIKey, key,
 	); err != nil {

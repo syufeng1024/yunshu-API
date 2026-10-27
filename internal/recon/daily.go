@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"strconv"
 	"time"
 
@@ -47,6 +48,27 @@ type Daily struct {
 	IdemThreshold int
 	// Location is the business zone; nil means CST.
 	Location *time.Location
+	// UserLo/UserHi bound the internal checks to [UserLo, UserHi). Zero, zero
+	// means the whole table, which is the only shape production uses. Tests
+	// sharing a schema set them so another fixture's accounts cannot appear in
+	// R-01..R-07.
+	UserLo, UserHi int64
+}
+
+// shardBounds returns the user range the internal checks cover. The unbounded
+// case keeps the historical full-table semantics.
+func (d *Daily) shardBounds() (int64, int64) {
+	if d.UserLo == 0 && d.UserHi == 0 {
+		return 0, math.MaxInt64
+	}
+	lo, hi := d.UserLo, d.UserHi
+	if lo < 0 {
+		lo = 0
+	}
+	if hi <= lo {
+		hi = math.MaxInt64
+	}
+	return lo, hi
 }
 
 // NewDaily builds the daily reconciler.
@@ -250,15 +272,19 @@ func checkR02(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 // TDS shard guidance; the subject is the earlier entry id.
 func checkR03(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]Diff, error) {
 	var diffs []Diff
+	lo, hi := d.shardBounds()
 	maxUser, err := d.maxUser(ctx, "t_ledger_entry", "")
 	if err != nil {
 		return nil, err
 	}
-	for lo := int64(0); lo <= maxUser; lo += d.shardSize() {
-		hi := lo + d.shardSize()
+	for shardLo := lo; shardLo <= maxUser; shardLo += d.shardSize() {
+		shardHi := shardLo + d.shardSize()
+		if shardHi > hi {
+			shardHi = hi
+		}
 		users, err := d.userIDs(ctx,
 			`SELECT user_id FROM t_ledger_entry
-			  WHERE user_id >= ? AND user_id < ? GROUP BY user_id`, lo, hi)
+			  WHERE user_id >= ? AND user_id < ? GROUP BY user_id`, shardLo, shardHi)
 		if err != nil {
 			return nil, err
 		}
@@ -335,16 +361,20 @@ func checkR04(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 // The two thresholds are the TDS values: >100 micro HIGH, >10,000 CRITICAL.
 func checkR05(ctx context.Context, d *Daily, bizDate string, dayStart, dayEnd time.Time) ([]Diff, error) {
 	var diffs []Diff
-	maxUser, err := d.maxUser(ctx, "t_user_daily_quota", "WHERE stat_date = ?", bizDate)
+	lo, hi := d.shardBounds()
+	maxUser, err := d.maxUser(ctx, "t_user_daily_quota", "stat_date = ?", bizDate)
 	if err != nil {
 		return nil, err
 	}
-	for lo := int64(0); lo <= maxUser; lo += d.shardSize() {
-		hi := lo + d.shardSize()
+	for shardLo := lo; shardLo <= maxUser; shardLo += d.shardSize() {
+		shardHi := shardLo + d.shardSize()
+		if shardHi > hi {
+			shardHi = hi
+		}
 		rows, err := d.DB.QueryContext(ctx,
 			`SELECT user_id, used_total_micro
 			   FROM t_user_daily_quota
-			  WHERE stat_date = ? AND user_id >= ? AND user_id < ?`, bizDate, lo, hi)
+			  WHERE stat_date = ? AND user_id >= ? AND user_id < ?`, bizDate, shardLo, shardHi)
 		if err != nil {
 			return nil, fmt.Errorf("recon: R-05 quota page: %w", err)
 		}
@@ -398,11 +428,17 @@ func checkR05(ctx context.Context, d *Daily, bizDate string, dayStart, dayEnd ti
 
 // R-06: expired HELD older than one hour. Any row is HIGH.
 func checkR06(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]Diff, error) {
+	q := `SELECT COUNT(*) FROM t_prehold_hold
+	       WHERE state = 'HELD'
+	         AND expires_at < UTC_TIMESTAMP(3) - INTERVAL 1 HOUR`
+	var args []any
+	if d.UserLo != 0 || d.UserHi != 0 {
+		lo, hi := d.shardBounds()
+		q += ` AND user_id >= ? AND user_id < ?`
+		args = append(args, lo, hi)
+	}
 	var n int64
-	err := d.DB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM t_prehold_hold
-		  WHERE state = 'HELD'
-		    AND expires_at < UTC_TIMESTAMP(3) - INTERVAL 1 HOUR`).Scan(&n)
+	err := d.DB.QueryRowContext(ctx, q, args...).Scan(&n)
 	if err != nil {
 		return nil, fmt.Errorf("recon: R-06: %w", err)
 	}
@@ -418,9 +454,15 @@ func checkR06(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 
 // R-07: expired idempotency rows above the TDS threshold (100,000).
 func checkR07(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]Diff, error) {
+	q := `SELECT COUNT(*) FROM t_idempotency_record WHERE expires_at < UTC_TIMESTAMP(3)`
+	var args []any
+	if d.UserLo != 0 || d.UserHi != 0 {
+		lo, hi := d.shardBounds()
+		q += ` AND user_id >= ? AND user_id < ?`
+		args = append(args, lo, hi)
+	}
 	var n int64
-	err := d.DB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM t_idempotency_record WHERE expires_at < UTC_TIMESTAMP(3)`).Scan(&n)
+	err := d.DB.QueryRowContext(ctx, q, args...).Scan(&n)
 	if err != nil {
 		return nil, fmt.Errorf("recon: R-07: %w", err)
 	}
@@ -475,14 +517,19 @@ func (d *Daily) scanDiffs(
 	scan func(*sql.Rows) (Diff, error),
 ) ([]Diff, error) {
 	var diffs []Diff
+	lo, hi := d.shardBounds()
 	maxUser, err := d.maxUser(ctx, table, "")
 	if err != nil {
 		return nil, err
 	}
-	for lo := int64(0); lo <= maxUser; lo += d.shardSize() {
-		rows, err := d.DB.QueryContext(ctx, q, lo, lo+d.shardSize())
+	for shardLo := lo; shardLo <= maxUser; shardLo += d.shardSize() {
+		shardHi := shardLo + d.shardSize()
+		if shardHi > hi {
+			shardHi = hi
+		}
+		rows, err := d.DB.QueryContext(ctx, q, shardLo, shardHi)
 		if err != nil {
-			return nil, fmt.Errorf("recon: shard %d: %w", lo, err)
+			return nil, fmt.Errorf("recon: shard %d: %w", shardLo, err)
 		}
 		for rows.Next() {
 			diff, err := scan(rows)
@@ -501,13 +548,18 @@ func (d *Daily) scanDiffs(
 	return diffs, nil
 }
 
+// maxUser is the last shard start. where is a condition without the WHERE
+// keyword; the caller's scope is always intersected with it.
 func (d *Daily) maxUser(ctx context.Context, table, where string, args ...any) (int64, error) {
-	q := "SELECT COALESCE(MAX(user_id), 0) FROM " + table
+	lo, hi := d.shardBounds()
+	q := "SELECT COALESCE(MAX(user_id), 0) FROM " + table +
+		" WHERE user_id >= ? AND user_id < ?"
 	if where != "" {
-		q += " " + where
+		q += " AND " + where
 	}
+	qargs := append([]any{lo, hi}, args...)
 	var max int64
-	if err := d.DB.QueryRowContext(ctx, q, args...).Scan(&max); err != nil {
+	if err := d.DB.QueryRowContext(ctx, q, qargs...).Scan(&max); err != nil {
 		return 0, fmt.Errorf("recon: max user from %s: %w", table, err)
 	}
 	return max, nil

@@ -29,6 +29,9 @@ func TestDailyChecksR01toR08(t *testing.T) {
 	dayStart, dayEnd := day, day.AddDate(0, 0, 1)
 	d := NewDaily(testDB, nil, nil, clock.Real{}, "a7")
 	d.IdemThreshold = 1
+	// R-01..R-07 scan whole tables. yunshu_test accumulates fixtures from other
+	// packages, so every case is limited to this test's user band.
+	d.UserLo, d.UserHi = 901000, 901100
 
 	checks := map[string]Check{}
 	for _, c := range d.Checks() {
@@ -229,6 +232,7 @@ func TestDailyRerunConvergesAndKeepsClosedRowsClosed(t *testing.T) {
 	run := func(owner string) DailyResult {
 		t.Helper()
 		d := NewDaily(testDB, locker, nil, clock.Real{}, owner)
+		d.UserLo, d.UserHi = 902000, 902100
 		res, err := d.Run(ctx, day)
 		if err != nil {
 			t.Fatalf("run %s: %v", owner, err)
@@ -348,6 +352,7 @@ func TestDailyThousandRequestsZeroDiffs(t *testing.T) {
 		user, bizDate, day.AddDate(0, 0, 1).UTC(), time.Now().UTC(), time.Now().UTC())
 
 	d := NewDaily(testDB, nil, nil, clock.Real{}, "a14")
+	d.UserLo, d.UserHi = 903000, 903100
 	res, err := d.Run(ctx, day)
 	if err != nil {
 		t.Fatalf("daily run: %v", err)
