@@ -235,7 +235,6 @@ func (s *Store) settleConsumedTx(
 
 	runBalance := afterRelease
 	curBonus := acct.BalanceBonusMicro + bonusCredit
-	curRecharge := acct.BalanceRechargeMicro + rechargeCredit
 	bonusDelta := bonusCredit
 	rechargeDelta := rechargeCredit
 
@@ -249,7 +248,6 @@ func (s *Store) settleConsumedTx(
 		} else {
 			rechargeAmount = -d.AmountMicro
 			rechargeDelta -= d.AmountMicro
-			curRecharge -= d.AmountMicro
 		}
 		after := runBalance - d.AmountMicro
 		batchID := d.BatchID
@@ -315,8 +313,6 @@ func (s *Store) settleConsumedTx(
 		lastEntryID = entryID
 		bonusDelta -= bonusPart
 		rechargeDelta -= rechargePart
-		curBonus -= bonusPart
-		curRecharge -= rechargePart
 		runBalance = after
 	}
 

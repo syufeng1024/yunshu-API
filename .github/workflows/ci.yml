@@ -65,6 +65,12 @@ jobs:
     name: unit (-race, real MySQL 8.0 + Redis 7)
     runs-on: ubuntu-latest
     services:
+      # NOTE: server flags such as --collation-server must NOT be added to
+      # `options`: GitHub Actions splices them into `docker create` before the
+      # image name, where they are parsed as docker flags ("unknown flag").
+      # Test databases are created with an explicit
+      # COLLATE utf8mb4_0900_as_cs by internal/*/testmain_test.go, so the
+      # server default is irrelevant here.
       mysql:
         image: mysql:8.0
         env:
@@ -77,8 +83,6 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=30
-          --character-set-server=utf8mb4
-          --collation-server=utf8mb4_0900_as_cs
       redis:
         image: redis:7
         ports:
@@ -177,8 +181,6 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=30
-          --character-set-server=utf8mb4
-          --collation-server=utf8mb4_0900_as_cs
       redis:
         image: redis:7
         ports:
@@ -216,8 +218,6 @@ jobs:
           --health-interval=5s
           --health-timeout=5s
           --health-retries=30
-          --character-set-server=utf8mb4
-          --collation-server=utf8mb4_0900_as_cs
       redis:
         image: redis:7
         ports:
