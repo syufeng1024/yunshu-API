@@ -171,3 +171,19 @@ export function formatDateTime(iso: string | null | undefined): string {
     minute: '2-digit',
   }).format(date)
 }
+
+/**
+ * ISO timestamp -> local date-time with milliseconds. Request logs are ordered
+ * by millisecond-precision time (PRD §5.7), so dropping the fraction on this
+ * page would make adjacent rows look simultaneous.
+ */
+export function formatDateTimeMs(iso: string | null | undefined): string {
+  if (!iso) return INVALID
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return INVALID
+  const pad = (value: number, width = 2) => String(value).padStart(width, '0')
+  return [
+    `${date.getFullYear()}/${pad(date.getMonth() + 1)}/${pad(date.getDate())}`,
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`,
+  ].join(' ')
+}

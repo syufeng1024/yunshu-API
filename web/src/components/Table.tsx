@@ -48,6 +48,8 @@ export interface TableProps<T> {
   onSortChange?: (sort: TableSort) => void
   pagination?: TablePagination
   className?: string
+  /** Optional per-row classes (e.g. a danger accent for failed request rows). */
+  rowClassName?: (row: T) => string | undefined
 }
 
 const ALIGN: Record<NonNullable<TableColumn<unknown>['align']>, string> = {
@@ -77,6 +79,7 @@ export function Table<T>({
   onSortChange,
   pagination,
   className,
+  rowClassName,
 }: TableProps<T>) {
   const [internalSort, setInternalSort] = useState<TableSort | null>(null)
   const activeSort = sort === undefined ? internalSort : sort
@@ -188,7 +191,10 @@ export function Table<T>({
               visibleRows.map((row) => (
                 <tr
                   key={rowKey(row)}
-                  className="border-t border-border transition-colors duration-fast hover:bg-surface-muted"
+                  className={cn(
+                    'border-t border-border transition-colors duration-fast hover:bg-surface-muted',
+                    rowClassName?.(row),
+                  )}
                 >
                   {columns.map((column) => (
                     <td

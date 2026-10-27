@@ -1030,3 +1030,345 @@ export function useCreateInvoice() {
     },
   })
 }
+
+// ---------------------------------------------------------------------------
+// Request logs (GET /api/console/logs*)
+// ---------------------------------------------------------------------------
+
+export type LogResult = 'SUCCESS' | 'PARTIAL' | 'FAILED'
+/** The API's filter values, not the stored result enum. */
+export type LogStateFilter = 'all' | 'success' | 'failed' | 'partial' | 'rate_limited'
+
+export interface LogItem {
+  request_id: string
+  api_key_id: number
+  api_key_name: string
+  model_id: number | null
+  model_name: string
+  request_model: string
+  inbound_protocol: string
+  channel_id: number | null
+  channel_name: string | null
+  group_code: string
+  is_stream: boolean
+  http_status: number
+  biz_code: string
+  result: LogResult
+  fail_stage: string | null
+  fail_owner: string | null
+  tokens_in: number
+  tokens_out: number
+  consumed_micro: number
+  upstream_attempts: number
+  ttft_ms: number | null
+  total_ms: number
+  upstream_ms: number
+  client_ip: string
+  client_aborted: boolean
+  full_log_saved: boolean
+  created_at: string
+}
+
+export interface LogListResponse extends Page<LogItem> {
+  from: string
+  to: string
+  window_days: number
+}
+
+export interface LogListParams {
+  from: string
+  to: string
+  state?: LogStateFilter
+  /** Exact match against model_name_snap, per the backend. */
+  model?: string
+  page?: number
+  pageSize?: number
+}
+
+/** Detail rows add settlement fields that the list omits. */
+export interface LogDetailRequest extends LogItem {
+  outbound_protocol: string | null
+  prehold_micro: number
+  consumed_recharge_micro: number
+  consumed_bonus_micro: number
+}
+
+export interface LogAttempt {
+  attempt_index: number
+  result: string
+  http_status: number | null
+  phase: string
+  channel_id: number
+  channel_name: string
+  protocol_code: string
+  upstream_model: string
+  connect_ms: number | null
+  first_byte_ms: number | null
+  total_ms: number
+  tokens_in: number
+  tokens_out: number
+  is_retryable: boolean
+  retry_decision: string | null
+  error_class: string | null
+  upstream_code: string | null
+  upstream_msg: string | null
+  created_at: string
+}
+
+export interface LogDetailResponse {
+  request: LogDetailRequest
+  /** The backend key is `timeline`, not `attempts`. */
+  timeline: LogAttempt[]
+}
+
+export interface LogBodyResponse {
+  request_id: string
+  model_name: string
+  created_at: string
+  body: string
+  redacted: boolean
+}
+
+function logsQuery(params: LogListParams): string {
+  const search = new URLSearchParams()
+  search.set('page', String(params.page ?? 1))
+  search.set('page_size', String(params.pageSize ?? 20))
+  search.set('from', params.from)
+  search.set('to', params.to)
+  if (params.state && params.state !== 'all') search.set('state', params.state)
+  const model = params.model?.trim()
+  if (model) search.set('model', model)
+  search.set('sort', 'created_at')
+  search.set('order', 'desc')
+  return search.toString()
+}
+
+export function fetchLogs(params: LogListParams): Promise<LogListResponse> {
+  return api.get<LogListResponse>(`/api/console/logs?${logsQuery(params)}`)
+}
+
+export function fetchLogDetail(requestId: string): Promise<LogDetailResponse> {
+  return api.get<LogDetailResponse>(`/api/console/logs/${encodeURIComponent(requestId)}`)
+}
+
+export function fetchLogBody(requestId: string): Promise<LogBodyResponse> {
+  return api.get<LogBodyResponse>(
+    `/api/console/logs/${encodeURIComponent(requestId)}/body`,
+  )
+}
+
+export function useLogs(params: LogListParams) {
+  return useQuery({
+    queryKey: ['console', 'logs', 'list', params],
+    queryFn: () => fetchLogs(params),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useLogDetail(requestId: string | null) {
+  return useQuery({
+    queryKey: ['console', 'logs', 'detail', requestId],
+    queryFn: () => fetchLogDetail(requestId as string),
+    enabled: Boolean(requestId),
+  })
+}
+
+/**
+ * The body is fetched only after the user asks for it: most requests never
+ * store one, and the 404 copy is meaningful (see PRD F11-3).
+ */
+export function useLogBody(requestId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ['console', 'logs', 'body', requestId],
+    queryFn: () => fetchLogBody(requestId as string),
+    enabled: enabled && Boolean(requestId),
+    retry: false,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Tickets (GET/POST /api/console/tickets*)
+// ---------------------------------------------------------------------------
+
+export type TicketState = 'OPEN' | 'RESPONDED' | 'CLOSED'
+export type TicketType = 'BILLING' | 'TECH' | 'CONTENT_APPEAL' | 'OTHER'
+
+export interface TicketSLA {
+  first_response_due_at: string
+  first_responded_at: string | null
+  responded: boolean
+  overdue: boolean
+  remaining_seconds: number
+  overdue_seconds: number
+  /** Backend-composed copy: 已响应（用时 xx）/ 剩余 xx / 已超时 xx. */
+  display: string
+}
+
+export interface TicketReply {
+  id: number
+  author_type: 'USER' | 'OPS'
+  content: string
+  created_at: string
+}
+
+export interface Ticket {
+  id: number
+  ticket_no: string
+  ticket_type: TicketType
+  title: string
+  description: string
+  request_id: string | null
+  policy_hit_id: number | null
+  policy_rule_id: string | null
+  policy_category: string | null
+  state: TicketState
+  first_response_due_at: string
+  first_responded_at: string | null
+  last_replied_at: string | null
+  reopen_count: number
+  created_at: string
+  updated_at: string
+  sla: TicketSLA
+  /** Internal notes are filtered in SQL; this array never carries them. */
+  replies: TicketReply[]
+}
+
+export interface TicketListItem {
+  id: number
+  ticket_no: string
+  ticket_type: TicketType
+  title: string
+  state: TicketState
+  first_response_due_at: string
+  first_responded_at: string | null
+  last_replied_at: string | null
+  created_at: string
+  sla: TicketSLA
+}
+
+export type TicketList = Page<TicketListItem>
+
+export interface TicketListParams {
+  state?: TicketState | 'all'
+  type?: TicketType | 'all'
+  page?: number
+  pageSize?: number
+}
+
+export interface CreateTicketInput {
+  ticket_type: TicketType
+  title: string
+  description: string
+  request_id?: string
+}
+
+export interface CreatedTicket {
+  ticket: Ticket
+  request_id_source: '' | 'USER' | 'POLICY_HIT'
+  notice?: string
+}
+
+export interface RequestIDItem {
+  request_id: string
+  model_name: string
+  http_status: number
+  result: LogResult
+  created_at: string
+}
+
+export interface RequestIDList extends Page<RequestIDItem> {
+  /** Backend-computed 90-day window start; display it, never recompute. */
+  since: string
+}
+
+export interface RequestIDParams {
+  q?: string
+  page?: number
+  pageSize?: number
+}
+
+function ticketsQuery(params: TicketListParams): string {
+  const search = new URLSearchParams()
+  search.set('page', String(params.page ?? 1))
+  search.set('page_size', String(params.pageSize ?? 20))
+  if (params.state && params.state !== 'all') search.set('state', params.state)
+  if (params.type && params.type !== 'all') search.set('type', params.type)
+  search.set('sort', 'created_at')
+  search.set('order', 'desc')
+  return search.toString()
+}
+
+function requestIdsQuery(params: RequestIDParams): string {
+  const search = new URLSearchParams()
+  search.set('page', String(params.page ?? 1))
+  search.set('page_size', String(params.pageSize ?? 20))
+  const q = params.q?.trim()
+  if (q) search.set('q', q)
+  search.set('order', 'desc')
+  return search.toString()
+}
+
+export function fetchTickets(params: TicketListParams): Promise<TicketList> {
+  return api.get<TicketList>(`/api/console/tickets?${ticketsQuery(params)}`)
+}
+
+export function fetchTicket(id: number): Promise<Ticket> {
+  return api.get<Ticket>(`/api/console/tickets/${id}`)
+}
+
+export function fetchRequestIds(params: RequestIDParams): Promise<RequestIDList> {
+  return api.get<RequestIDList>(`/api/console/request-ids?${requestIdsQuery(params)}`)
+}
+
+export function useTickets(params: TicketListParams) {
+  return useQuery({
+    queryKey: ['console', 'tickets', 'list', params],
+    queryFn: () => fetchTickets(params),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useTicket(id: number | null) {
+  return useQuery({
+    queryKey: ['console', 'tickets', 'detail', id],
+    queryFn: () => fetchTicket(id as number),
+    enabled: id !== null,
+  })
+}
+
+/**
+ * The picker must not fetch until the dialog is open and the selected type
+ * actually uses a linked request. The 90-day window is a backend predicate;
+ * this hook never sends from/to.
+ */
+export function useRequestIds(params: RequestIDParams, enabled = true) {
+  return useQuery({
+    queryKey: ['console', 'request-ids', params],
+    queryFn: () => fetchRequestIds(params),
+    enabled,
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function useCreateTicket() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreateTicketInput) =>
+      api.post<CreatedTicket>('/api/console/tickets', input),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['console', 'tickets'] })
+    },
+  })
+}
+
+export function useCloseTicket() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) =>
+      api.post<Ticket>(`/api/console/tickets/${id}/close`, {}),
+    onSuccess: (ticket) => {
+      client.setQueryData(['console', 'tickets', 'detail', ticket.id], ticket)
+      void client.invalidateQueries({ queryKey: ['console', 'tickets', 'list'] })
+    },
+  })
+}

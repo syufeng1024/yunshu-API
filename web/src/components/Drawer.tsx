@@ -5,6 +5,8 @@ import { cn } from '@/lib/cn'
 import { useFocusTrap } from '@/lib/hooks/useFocusTrap'
 import { Button } from './Button'
 
+export type DrawerSize = 'md' | 'lg' | 'xl'
+
 export interface DrawerProps {
   open: boolean
   onClose: () => void
@@ -12,7 +14,14 @@ export interface DrawerProps {
   description?: string
   children: ReactNode
   footer?: ReactNode
+  size?: DrawerSize
   className?: string
+}
+
+const SIZE: Record<DrawerSize, string> = {
+  md: 'max-w-md',
+  lg: 'max-w-2xl',
+  xl: 'max-w-4xl',
 }
 
 export function Drawer({
@@ -22,6 +31,7 @@ export function Drawer({
   description,
   children,
   footer,
+  size = 'md',
   className,
 }: DrawerProps) {
   const titleId = useId()
@@ -41,7 +51,8 @@ export function Drawer({
         aria-describedby={description ? descriptionId : undefined}
         tabIndex={-1}
         className={cn(
-          'absolute inset-y-0 right-0 flex w-full max-w-md flex-col overflow-hidden bg-surface shadow-overlay',
+          'absolute inset-y-0 right-0 flex w-full flex-col overflow-hidden bg-surface shadow-overlay',
+          SIZE[size],
           className,
         )}
       >

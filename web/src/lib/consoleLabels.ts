@@ -133,3 +133,113 @@ const DIMENSION_LABEL: Record<string, string> = {
 export function dimensionLabel(dimension: string): string {
   return DIMENSION_LABEL[dimension] ?? dimension
 }
+
+// ---------------------------------------------------------------------------
+// Request logs. fail_stage / error_class / retry_decision are open strings in
+// the API; unknown values fall back to the raw code rather than being guessed.
+// ---------------------------------------------------------------------------
+
+const LOG_RESULT_LABEL: Record<string, string> = {
+  SUCCESS: '成功',
+  PARTIAL: '部分成功',
+  FAILED: '失败',
+}
+
+export function logResultLabel(result: string): string {
+  return LOG_RESULT_LABEL[result] ?? result
+}
+
+const FAIL_STAGE_LABEL: Record<string, string> = {
+  REQUEST: '请求接收',
+  AUTH: '鉴权',
+  RATE_LIMIT: '限流检查',
+  ROUTE: '路由选路',
+  UPSTREAM: '上游调用',
+  CONVERT: '协议转换',
+  SETTLE: '结算',
+  CLIENT_ABORT: '客户端中断',
+}
+
+export function failStageLabel(stage: string | null | undefined): string | null {
+  if (!stage) return null
+  return FAIL_STAGE_LABEL[stage] ?? stage
+}
+
+const FAIL_OWNER_LABEL: Record<string, string> = {
+  CLIENT: '客户端',
+  PLATFORM: '平台',
+  UPSTREAM: '上游',
+}
+
+export function failOwnerLabel(owner: string | null | undefined): string | null {
+  if (!owner) return null
+  return FAIL_OWNER_LABEL[owner] ?? owner
+}
+
+const ATTEMPT_RESULT_LABEL: Record<string, string> = {
+  SUCCESS: '成功',
+  FAILED: '失败',
+  ABORTED: '中断',
+}
+
+export function attemptResultLabel(result: string): string {
+  return ATTEMPT_RESULT_LABEL[result] ?? result
+}
+
+const ATTEMPT_PHASE_LABEL: Record<string, string> = {
+  CONNECT: '建立连接',
+  SEND: '发送请求',
+  FIRST_BYTE: '等待首字节',
+  STREAM_BODY: '接收流',
+  COMPLETE: '完成',
+}
+
+export function attemptPhaseLabel(phase: string): string {
+  return ATTEMPT_PHASE_LABEL[phase] ?? phase
+}
+
+const RETRY_DECISION_LABEL: Record<string, string> = {
+  RETRY_NEXT_ROUTE: '切换路由重试',
+  RETRY_SAME_ROUTE: '原路由重试',
+  NO_RETRY: '不重试',
+  RETRY_BLOCKED_STREAMED: '已出流不可重试',
+}
+
+export function retryDecisionLabel(decision: string | null | undefined): string | null {
+  if (!decision) return null
+  return RETRY_DECISION_LABEL[decision] ?? decision
+}
+
+// ---------------------------------------------------------------------------
+// Tickets
+// ---------------------------------------------------------------------------
+
+const TICKET_STATE_LABEL: Record<string, string> = {
+  OPEN: '待响应',
+  RESPONDED: '已响应',
+  CLOSED: '已关闭',
+}
+
+export function ticketStateLabel(state: string): string {
+  return TICKET_STATE_LABEL[state] ?? state
+}
+
+const TICKET_TYPE_LABEL: Record<string, string> = {
+  BILLING: '计费',
+  TECH: '技术故障',
+  CONTENT_APPEAL: '内容申诉',
+  OTHER: '其他',
+}
+
+export function ticketTypeLabel(type: string): string {
+  return TICKET_TYPE_LABEL[type] ?? type
+}
+
+const REPLY_AUTHOR_LABEL: Record<string, string> = {
+  USER: '用户',
+  OPS: '客服',
+}
+
+export function replyAuthorLabel(author: string): string {
+  return REPLY_AUTHOR_LABEL[author] ?? author
+}
