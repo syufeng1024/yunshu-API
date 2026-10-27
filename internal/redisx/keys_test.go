@@ -38,9 +38,12 @@ func TestKeyConstructors(t *testing.T) {
 		{"K25", JobHeartbeatKey("jobsd-1"), "job:heartbeat:jobsd-1"},
 		{"K26", BalanceKey(7), "bal:7"},
 		{"K27", ExportLockKey(7), "exp:user:7"},
+		{"K28", LoginAccountFailKey("alice@example.com"), "auth:fail:acct:ff8d9819fc0e12bf0d24892e45987e249a28dce836a85cad60e28eaaa8c6d976"},
+		{"K29", LoginIPFailKey("192.0.2.1"), "auth:fail:ip:37fcff24bf62035b2b08020afc08b4fecd4fcffce57ab23518e3561ff0fe76b9"},
+		{"K30", AdminUserSessionSetKey(7), "sess:admin:uid:7"},
 	}
-	if len(tests) != 27 {
-		t.Fatalf("key table has %d entries, want 27", len(tests))
+	if len(tests) != 30 {
+		t.Fatalf("key table has %d entries, want 30", len(tests))
 	}
 	for _, tt := range tests {
 		if tt.got != tt.want {

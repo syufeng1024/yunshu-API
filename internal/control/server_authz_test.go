@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +35,47 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// issueSession returns the signed sid cookie value and the CSRF token bound to
+// that session. Every request this package sends through the real mux must
+// carry both; tests that inject mw.WithSession directly bypass the middleware
+// chain and are unaffected.
+func issueSession(t *testing.T, sessMgr *mw.SessionManager, uid int64) (cookieValue, csrfToken string) {
+	t.Helper()
+	sess, cookieValue, err := sessMgr.Issue(context.Background(), uid)
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+	return cookieValue, sessMgr.CSRFToken(sess.SID)
+}
+
+// newAuthedRequest builds a request that satisfies Session + CSRF. The CSRF
+// cookie is non-HttpOnly by design; the header carries the same value.
+func newAuthedRequest(method, path string, body io.Reader, cookieValue, csrfToken string) *http.Request {
+	req := httptest.NewRequest(method, path, body)
+	req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
+	req.AddCookie(&http.Cookie{Name: mw.CSRFCookieName, Value: csrfToken})
+	req.Header.Set(mw.CSRFHeaderName, csrfToken)
+	return req
+}
+
+func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, wantStatus int, wantCode string) {
+	t.Helper()
+	if rec.Code != wantStatus {
+		t.Fatalf("status=%d body=%s, want %d", rec.Code, rec.Body.String(), wantStatus)
+	}
+	var body struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if err := jsonx.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body.Error.Code != wantCode {
+		t.Fatalf("code=%q, want %q", body.Error.Code, wantCode)
+	}
+}
+
 // adminRoutes is the T15 admin surface. The test sends a PERSONAL session to
 // every one of them; the middleware must answer 403 before any handler runs.
 var adminRoutes = []struct {
@@ -41,6 +83,9 @@ var adminRoutes = []struct {
 	path   string
 }{
 	{http.MethodGet, "/api/admin/whoami"},
+	// T11 second segment: audit.read is OPS/FINANCE only; PERSONAL must be 403
+	// before the query runs.
+	{http.MethodGet, "/api/admin/audit-logs"},
 	{http.MethodGet, "/api/admin/channels"},
 	{http.MethodGet, "/api/admin/channels/1"},
 	{http.MethodPost, "/api/admin/channels"},
@@ -103,31 +148,14 @@ func TestPersonalAccountGets403OnEveryAdminRoute(t *testing.T) {
 	srv.Register(mux)
 
 	uid := newRoleUser(t, "PERSONAL")
-	_, cookieValue, err := sessMgr.Issue(context.Background(), uid)
-	if err != nil {
-		t.Fatalf("issue session: %v", err)
-	}
+	cookieValue, csrfToken := issueSession(t, sessMgr, uid)
 
 	for _, route := range adminRoutes {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
-			req := httptest.NewRequest(route.method, route.path, bytes.NewReader(nil))
-			req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
+			req := newAuthedRequest(route.method, route.path, bytes.NewReader(nil), cookieValue, csrfToken)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("status=%d body=%s, want 403", rec.Code, rec.Body.String())
-			}
-			var body struct {
-				Error struct {
-					Code string `json:"code"`
-				} `json:"error"`
-			}
-			if err := jsonx.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-				t.Fatalf("decode body: %v", err)
-			}
-			if body.Error.Code != "permission_denied" {
-				t.Fatalf("code=%q, want permission_denied", body.Error.Code)
-			}
+			assertErrorCode(t, rec, http.StatusForbidden, "permission_denied")
 		})
 	}
 }
@@ -150,17 +178,22 @@ func TestOpsCanReadChannels(t *testing.T) {
 	srv.Register(mux)
 
 	uid := newRoleUser(t, "OPS")
-	_, cookieValue, err := sessMgr.Issue(context.Background(), uid)
-	if err != nil {
-		t.Fatalf("issue session: %v", err)
-	}
-	req := httptest.NewRequest(http.MethodGet, "/api/admin/channels", nil)
-	req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
+	cookieValue, csrfToken := issueSession(t, sessMgr, uid)
+	req := newAuthedRequest(http.MethodGet, "/api/admin/channels", nil, cookieValue, csrfToken)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("OPS channel list status=%d body=%s, want 200", rec.Code, rec.Body.String())
 	}
+
+	// audit.read is the same role's permission on the audit reader.
+	req = newAuthedRequest(http.MethodGet, "/api/admin/audit-logs?module=USER", nil, cookieValue, csrfToken)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("OPS audit list status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	t.Logf("OPS GET /api/admin/audit-logs?module=USER -> %d", rec.Code)
 }
 
 // The ticket consoles are split: OPS answers through ticket.reply but must not
@@ -182,10 +215,7 @@ func TestOpsCannotReachAccountConsole(t *testing.T) {
 	srv.Register(mux)
 
 	uid := newRoleUser(t, "OPS")
-	_, cookieValue, err := sessMgr.Issue(context.Background(), uid)
-	if err != nil {
-		t.Fatalf("issue session: %v", err)
-	}
+	cookieValue, csrfToken := issueSession(t, sessMgr, uid)
 
 	routes := []struct {
 		method string
@@ -207,24 +237,10 @@ func TestOpsCannotReachAccountConsole(t *testing.T) {
 	}
 	for _, route := range routes {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
-			req := httptest.NewRequest(route.method, route.path, bytes.NewReader(nil))
-			req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
+			req := newAuthedRequest(route.method, route.path, bytes.NewReader(nil), cookieValue, csrfToken)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
-			if rec.Code != http.StatusForbidden {
-				t.Fatalf("status=%d body=%s, want 403", rec.Code, rec.Body.String())
-			}
-			var body struct {
-				Error struct {
-					Code string `json:"code"`
-				} `json:"error"`
-			}
-			if err := jsonx.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-				t.Fatalf("decode body: %v", err)
-			}
-			if body.Error.Code != "permission_denied" {
-				t.Fatalf("code=%q, want permission_denied", body.Error.Code)
-			}
+			assertErrorCode(t, rec, http.StatusForbidden, "permission_denied")
 		})
 	}
 }
@@ -247,22 +263,107 @@ func TestPersonalCanReachAccountConsole(t *testing.T) {
 	srv.Register(mux)
 
 	uid := newRoleUser(t, "PERSONAL")
-	_, cookieValue, err := sessMgr.Issue(context.Background(), uid)
-	if err != nil {
-		t.Fatalf("issue session: %v", err)
-	}
+	cookieValue, csrfToken := issueSession(t, sessMgr, uid)
 	for _, path := range []string{
 		"/api/console/tickets", "/api/console/logs",
 		"/api/console/usage", "/api/console/bills", "/api/console/usage/metrics",
 	} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
+		req := newAuthedRequest(http.MethodGet, path, nil, cookieValue, csrfToken)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("PERSONAL %s status=%d body=%s, want 200", path, rec.Code, rec.Body.String())
 		}
 	}
+}
+
+// CSRF double submit: a valid session alone is not enough for a mutation.
+// There is no "skip CSRF in tests" switch — the same middleware runs here.
+func TestSessionMutationRequiresCSRF(t *testing.T) {
+	rdb := redisx.New(redisx.Options{Addr: redistest.Addr(), DB: redistest.DB(), PoolSize: 5})
+	t.Cleanup(func() { _ = rdb.Close() })
+	sessMgr, err := mw.NewSessionManager(testDB, rdb, "0123456789abcdef")
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	srv, err := New(Deps{DB: testDB, Redis: rdb, Sessions: sessMgr, Now: clock.Real{}})
+	if err != nil {
+		t.Fatalf("control server: %v", err)
+	}
+	mux := http.NewServeMux()
+	srv.Register(mux)
+
+	uid := newRoleUser(t, "PERSONAL")
+	cookieValue, csrfToken := issueSession(t, sessMgr, uid)
+
+	// Safe method: no token required.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /me without CSRF status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	}
+	var me struct {
+		CSRFToken string `json:"csrf_token"`
+	}
+	if err := jsonx.Unmarshal(rec.Body.Bytes(), &me); err != nil {
+		t.Fatalf("decode /me: %v", err)
+	}
+	if me.CSRFToken == "" || me.CSRFToken != csrfToken {
+		t.Fatalf("GET /me csrf_token=%q, want the session token", me.CSRFToken)
+	}
+	if got := rec.Header().Get(mw.CSRFHeaderName); got != csrfToken {
+		t.Fatalf("GET /me X-CSRF-Token=%q, want the session token", got)
+	}
+
+	// Reverse case: valid session, no CSRF header or cookie.
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/logout", nil)
+	req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assertErrorCode(t, rec, http.StatusForbidden, "permission_denied")
+	t.Logf("valid sid, no CSRF header/cookie -> %d permission_denied", rec.Code)
+
+	// Matching header/cookie pair that the server never issued: the token is
+	// checked against HMAC(secret, sid), not only against itself.
+	req = newAuthedRequest(http.MethodPost, "/api/v1/auth/logout", nil, cookieValue, "deadbeef")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assertErrorCode(t, rec, http.StatusForbidden, "permission_denied")
+	t.Logf("valid sid, wrong CSRF token -> %d permission_denied", rec.Code)
+
+	// A token issued for another session is also rejected: the expected value
+	// is HMAC(secret, sid), not merely "header equals cookie".
+	_, otherToken := issueSession(t, sessMgr, uid)
+	req = newAuthedRequest(http.MethodPost, "/api/v1/auth/logout", nil, cookieValue, otherToken)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assertErrorCode(t, rec, http.StatusForbidden, "permission_denied")
+	t.Logf("token from another session -> %d permission_denied", rec.Code)
+
+	// Public login is exempt by construction (it is not inside s.authed): the
+	// request reaches the handler and fails on the empty body, not on CSRF.
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request_body")
+
+	// Correct pair succeeds.
+	req = newAuthedRequest(http.MethodPost, "/api/v1/auth/logout", nil, cookieValue, csrfToken)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout with CSRF status=%d body=%s, want 204", rec.Code, rec.Body.String())
+	}
+
+	// Replaying the old token after logout: K20 is gone, so Load answers 401
+	// before the CSRF comparison runs. The token is dead with the session.
+	req = newAuthedRequest(http.MethodPost, "/api/v1/auth/logout", nil, cookieValue, csrfToken)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assertErrorCode(t, rec, http.StatusUnauthorized, "session_expired")
+	t.Logf("old CSRF token after logout -> %d session_expired", rec.Code)
 }
 
 var authzUserSeq int64

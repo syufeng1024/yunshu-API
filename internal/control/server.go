@@ -20,6 +20,7 @@ import (
 	"yunshu.dev/core/internal/apierr"
 	"yunshu.dev/core/internal/config"
 	"yunshu.dev/core/internal/control/audit"
+	"yunshu.dev/core/internal/control/auditq"
 	"yunshu.dev/core/internal/control/auth"
 	"yunshu.dev/core/internal/control/fund"
 	"yunshu.dev/core/internal/control/key"
@@ -94,6 +95,7 @@ type Server struct {
 	reviews *review.Service
 	logs    *logq.Service
 	usage   *usage.Service
+	auditQ  *auditq.Service
 }
 
 // New validates the wiring and builds the server.
@@ -150,6 +152,7 @@ func New(d Deps) (*Server, error) {
 	// snapshots, so the aggregation never joins the log database and never
 	// joins t_model / t_channel.
 	usageSvc := usage.New(d.DB, d.Redis, d.Now, d.Logger)
+	auditSvc := auditq.New(d.DB, d.Now, d.Logger)
 	return &Server{
 		d: d,
 		auth: &auth.Service{
@@ -168,6 +171,7 @@ func New(d Deps) (*Server, error) {
 		reviews: reviews,
 		logs:    logs,
 		usage:   usageSvc,
+		auditQ:  auditSvc,
 	}, nil
 }
 
@@ -182,6 +186,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// Authenticated, no capability required.
 	mux.Handle("GET /api/v1/auth/me", s.authed("", s.auth.Me))
 	mux.Handle("POST /api/v1/auth/logout", s.authed("", s.auth.Logout))
+	// Password change verifies the old password, then revokes every sid the
+	// account owns (K30 → K20). No capability: every signed-in account may
+	// change its own credential.
+	mux.Handle("POST /api/v1/auth/password", s.authed("", s.auth.ChangePassword))
 
 	// Console account.
 	mux.Handle("GET /api/console/overview", s.authed(mw.PermUserRead, s.user.Overview))
@@ -224,6 +232,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// concrete permission instead: OPS may write channels/models, FINANCE may
 	// read models, and neither gets admin.all.
 	mux.Handle("GET /api/admin/whoami", s.authed(mw.PermAdminAll, s.handleAdminWhoami))
+
+	// T11 second segment: audit trail reads. audit.read is held by OPS and
+	// FINANCE; PERSONAL has no route and no permission here.
+	mux.Handle("GET /api/admin/audit-logs", s.authed(mw.PermAuditRead, s.auditQ.List))
 
 	// Operator channels. Reads use admin.read, not model.read: PERSONAL holds
 	// model.read for the console catalog, and these views expose base_url and
@@ -333,13 +345,19 @@ func (s *Server) public(h http.HandlerFunc) http.Handler {
 	return mw.Recover(s.d.Logger)(h)
 }
 
-// authed builds Recover → Session → Require(perm) → handler. An empty perm is
-// the "logged in, no capability" case (me/logout).
+// authed builds Recover → Session → CSRF → Require(perm) → handler. An empty
+// perm is the "logged in, no capability" case (me/logout/password).
+//
+// CSRF sits inside the session middleware because the expected token is
+// derived from the loaded sid. Public routes (login/register/payment callback)
+// never enter this chain, so their exemption is structural rather than a list
+// that a future route can forget to join.
 func (s *Server) authed(perm mw.Permission, h http.HandlerFunc) http.Handler {
 	var chain http.Handler = h
 	if perm != "" {
 		chain = mw.Require(perm)(chain)
 	}
+	chain = s.d.Sessions.CSRF(chain)
 	chain = s.d.Sessions.Middleware()(chain)
 	return mw.Recover(s.d.Logger)(chain)
 }

@@ -1,8 +1,8 @@
 # Redis 键空间运维手册（T06）
 
-26 个键的唯一构造函数在 `internal/redisx/keys.go`。业务代码不得自行拼接键名；同一键的两种拼写会把一个计数器拆成两个，等于放大限额。
+30 个键的唯一构造函数在 `internal/redisx/keys.go`。业务代码不得自行拼接键名；同一键的两种拼写会把一个计数器拆成两个，等于放大限额。
 
-Redis 版本前提 5.0.9：只用 `EVAL`、`PEXPIRE`、`SET NX PX`、`ZADD`、`ZREMRANGEBYSCORE`、`ZCARD`、`TIME`、`PUBLISH`、`HGET`/`HSET`/`HINCRBY`、`INCRBY`、`DEL`、`EXISTS`、`PTTL`、`XADD`/`XREADGROUP`/`XACK`/`XPENDING`/`XCLAIM`。`XAUTOCLAIM`、`ZADD GT/LT`、`FUNCTION`、`GETDEL`、`GETEX`、`COPY` 不可用。
+Redis 版本前提 5.0.9：只用 `EVAL`、`PEXPIRE`、`EXPIRE`、`SET NX PX`、`ZADD`、`ZREMRANGEBYSCORE`、`ZCARD`、`TIME`、`PUBLISH`、`HGET`/`HSET`/`HINCRBY`、`INCR`/`INCRBY`、`DEL`、`EXISTS`、`TTL`/`PTTL`、`MGET`、`SADD`/`SREM`/`SMEMBERS`、`WATCH`、`XADD`/`XREADGROUP`/`XACK`/`XPENDING`/`XCLAIM`。`XAUTOCLAIM`、`ZADD GT/LT`、`FUNCTION`、`GETDEL`、`GETEX`、`COPY` 不可用。
 
 `maxmemory-policy` 必须是 `noeviction`。`internal/redisx.Client.CheckPolicy` 在启动时读取 `CONFIG GET maxmemory-policy`，不是 `noeviction` 即失败。被驱逐的限流计数器会静默放大额度，被驱逐的预扣哨兵会让重放看起来像新请求。
 
@@ -36,6 +36,10 @@ Redis 版本前提 5.0.9：只用 `EVAL`、`PEXPIRE`、`SET NX PX`、`ZADD`、`Z
 | K24 | `log:stream` | `LogStreamKey` | STREAM（`v`、`p`） | `MAXLEN ~ 200000` | `logq.Producer.Add` `XADD` | 近似裁剪；消费端 `XACK` 移出 PEL |
 | K25 | `job:heartbeat:{instance}` | `JobHeartbeatKey` | STRING | 60s | jobsd 每 20s `SET` | 到期；`Alive` 用 `EXISTS` |
 | K26 | `bal:{userID}` | `BalanceKey` | STRING（微积分） | 60s | 镜像缺失时回源后回填 | **失效只用 `DEL`**；再用一次 `SET` 覆盖会盖掉并发结算 |
+| K27 | `exp:user:{user_id}` | `ExportLockKey` | STRING（固定 `1`） | 1h | `usage.StartExport` `SET NX` | 到期；导出完成 `DEL`。同一账号同时只允许一个导出 |
+| K28 | `auth:fail:acct:{sha256(identifier)}` | `LoginAccountFailKey` | STRING（失败次数） | 15m | `auth.recordLoginFailure` `INCR`；首次失败与达到阈值时 `EXPIRE` | 到期；登录成功 `DEL` |
+| K29 | `auth:fail:ip:{sha256(ip)}` | `LoginIPFailKey` | STRING（失败次数） | 10m | `auth.recordLoginFailure` `INCR`；首次失败与达到阈值时 `EXPIRE` | 到期；登录成功不清（IP 预算跨账号，不能被一次正确密码重置） |
+| K30 | `sess:admin:uid:{user_id}` | `AdminUserSessionSetKey` | SET（member=sid） | 2h 滑动，与 K20 同步 | `SessionManager.Issue` `SADD`；`Load` 每次 `SADD` 自愈并续期 | 登出 `SREM`；改密 `DEL`（同时逐个 `DEL` K20） |
 
 ## 时间与日界
 

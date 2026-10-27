@@ -15,11 +15,14 @@ import (
 	"time"
 
 	"yunshu.dev/core/internal/control/audit"
+	"yunshu.dev/core/internal/control/auth"
 	"yunshu.dev/core/internal/control/ctltest"
 	"yunshu.dev/core/internal/control/mw"
 	"yunshu.dev/core/internal/cryptobox"
 	"yunshu.dev/core/internal/jsonx"
 	"yunshu.dev/core/internal/platform/clock"
+	"yunshu.dev/core/internal/redisx"
+	"yunshu.dev/core/internal/redisx/redistest"
 )
 
 var testDB *sql.DB
@@ -34,6 +37,26 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 	_ = db.Close()
 	os.Exit(code)
+}
+
+// newLoginService builds the auth service the way controld does. The login
+// guard reads K28/K29 through the session manager's Redis client, so a bare
+// &auth.Service{DB: ...} would fail closed (auth_unavailable) instead of
+// reaching the account-status branch this package's tests assert on.
+func newLoginService(t *testing.T) *auth.Service {
+	t.Helper()
+	env, err := redistest.Open()
+	if err != nil {
+		t.Fatalf("redis for login guard: %v", err)
+	}
+	t.Cleanup(func() { _ = env.Close() })
+	rdb := redisx.New(redisx.Options{Addr: env.Addr, DB: env.DB, PoolSize: 2})
+	t.Cleanup(func() { _ = rdb.Close() })
+	sessMgr, err := mw.NewSessionManager(testDB, rdb, "0123456789abcdef")
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	return &auth.Service{DB: testDB, Sessions: sessMgr}
 }
 
 func newTestService(t *testing.T) *Service {

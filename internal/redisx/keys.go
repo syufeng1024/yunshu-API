@@ -1,4 +1,4 @@
-// Key constructors for TDS §2.1 K1–K26.
+// Key constructors for TDS §2.1 K1–K30.
 //
 // Every key in this module is built here. A rate-limit key assembled with
 // string concatenation anywhere else is a review reject (T06 hard constraint
@@ -13,6 +13,7 @@ package redisx
 
 import (
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"strconv"
 )
@@ -141,6 +142,43 @@ func BalanceKey(userID int64) string {
 // already holds.
 func ExportLockKey(userID int64) string {
 	return "exp:user:" + strconv.FormatInt(userID, 10)
+}
+
+// K28 auth:fail:acct:{sha256(identifier)}
+//
+// Login failure counter for one account identifier. The identifier is an email
+// or phone — PII that must not appear in MONITOR output or a keyspace dump — so
+// the key carries its SHA-256 instead. The value is an INCR counter; the TTL is
+// the lock window and is refreshed when the threshold is crossed.
+func LoginAccountFailKey(identifier string) string {
+	return "auth:fail:acct:" + sha256Hex(identifier)
+}
+
+// K29 auth:fail:ip:{sha256(ip)}
+//
+// Login failure counter for one client IP. Hashing keeps IPv6 colons out of the
+// colon-separated namespace and keeps the full address out of Redis dumps. A
+// missing/unparseable peer address is not counted: there is nothing to
+// attribute it to, and hashing "" would merge every anonymous caller into one
+// counter.
+func LoginIPFailKey(ip string) string {
+	return "auth:fail:ip:" + sha256Hex(ip)
+}
+
+// K30 sess:admin:uid:{user_id}
+//
+// Set of sid values owned by one account (members are K20 suffixes). Password
+// change enumerates this set and deletes every K20 so all devices are signed
+// out; without it the only way to revoke "all sessions" is a keyspace scan.
+// The TTL matches K20's sliding TTL and is refreshed on every session load, so
+// the index never expires while a session it points at is still alive.
+func AdminUserSessionSetKey(userID int64) string {
+	return "sess:admin:uid:" + strconv.FormatInt(userID, 10)
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 // IdemHash folds the idempotency identity required by §1.6 into the K6/K7

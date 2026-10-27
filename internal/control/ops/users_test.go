@@ -13,7 +13,6 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"yunshu.dev/core/internal/control/auth"
 	"yunshu.dev/core/internal/jsonx"
 )
 
@@ -89,7 +88,7 @@ func TestDisableReasonIsOperatorOnly(t *testing.T) {
 	}
 
 	// User-side login sees the generic copy, with no trace of the category.
-	loginSvc := &auth.Service{DB: testDB}
+	loginSvc := newLoginService(t)
 	payload, _ := jsonx.Marshal(map[string]string{"identifier": email, "password": "Passw0rd!x"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(payload))
 	loginRec := httptest.NewRecorder()

@@ -12,7 +12,7 @@
 | T09 实际建表（0021） | 2 | `t_job_lock`、`t_reconcile_diff` |
 | 当前业务表总量 | 56 | 47 + 7 + 2；0010 / 0011 / 0013 / 0020 / 0023 只改列，0017 另建 1 表（已计入 7） |
 | 当前 `information_schema.tables` | 57 | 56 张业务表 + `schema_migrations` |
-| 当前迁移条数 | 20 | 0001–0006（6）、0009（1）、0010–0020（11）、0021（1）、0023（1）；0007 / 0008 空缺、0022 为 D-20 预留，均不计 |
+| 当前迁移条数 | 21 | 0001–0006（6）、0009（1）、0010–0020（11）、0021（1）、0023（1）、0024（1）；0007 / 0008 空缺、0022 为 D-20 预留，均不计 |
 
 任务卡 §1 / §7 A2 写「46 张」，与卡内 §4 逐表清单（8 + 11 + 26 + 2 = 47）相差 1；差的是 `t_config_publish`。本表按逐表清单登记，未删表凑数。`information_schema` 计数含迁移记录表，因此比业务表多 1。
 
@@ -49,6 +49,8 @@
 | 0019 | 本地联调种子（仅 `ENV=local`） | 已落盘（T03），其他环境跳过并打 WARN |
 | 0020 | 幂等租约 Expand：`t_idempotency_record` 加 `fence_token` / `lease_expires_at`（只加不删） | 已落盘（T06 遗留 #2，方案 A） |
 | 0021 | `t_job_lock` / `t_reconcile_diff` 建表 | 已落盘（T09） |
+| 0023 | `t_admin_audit_log.result` 放宽到 `varchar(24)` | 已落盘（E-28） |
+| 0024 | `t_admin_audit_log` 补 `idx_aal_created (created_at, id)` 与 `idx_aal_action_created (action, created_at, id)` | 已落盘（T11 第二段） |
 
 > **需回写 TDS §8.6**：0018 / 0019 / 0020 / 0021 是 TDS §8.6 裁定表之外的新增占用，由交付总监统一改源文档；实现方未改 TDS。
 
@@ -130,6 +132,7 @@
 | 0018 | `t_config_item` / `t_price_group` / `t_protocol` / `t_rate_limit_policy` / `t_plan` | 34 配置键、3 分组、3 协议、5 档限流模板；`t_rate_limit_policy.daily_quota_micro` 改可空；付费三档 `invoice_supported=1` + SLA 文案 |
 | 0019 | `t_channel` / `t_model` / `t_model_alias` / `t_route` / `t_price_rule` | 仅 `ENV=local`：1 渠道、2 文本模型、2 别名、2 路由、2 价目规则 |
 | 0023 | `t_admin_audit_log` | `result` 改 `varchar(24) NOT NULL DEFAULT 'OK'`（E-28：`REJECTED_BY_GUARD` 17 字符超出原 `varchar(16)`）；回滚前校验超长值，有则 SIGNAL 拒绝 |
+| 0024 | `t_admin_audit_log` | 加 `idx_aal_created (created_at, id)`、`idx_aal_action_created (action, created_at, id)`；只加索引，不改列、不回填；down 直接 DROP INDEX |
 
 `t_arrears.amount_micro` / `settled_micro` 对应 TDS §1.5 的 `due_micro` / `repaid_micro`；列名按 T03 卡落地，语义不变（欠费额 / 已抵扣额）。
 

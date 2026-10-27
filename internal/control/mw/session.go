@@ -143,8 +143,16 @@ func (m *SessionManager) Issue(ctx context.Context, uid int64) (*Session, string
 
 	cctx, cancel := m.Redis.CommandContext(ctx)
 	defer cancel()
-	if err := m.Redis.Raw().Set(cctx, redisx.AdminSessionKey(sid), strconv.FormatInt(uid, 10), m.ttl()).Err(); err != nil {
-		return nil, "", fmt.Errorf("control: write K20: %w", err)
+	// K20 and the K30 uid index are written together: a session that exists in
+	// K20 but not in K30 would survive a password change, which is the exact
+	// bug this index exists to prevent.
+	if _, err := m.Redis.Raw().TxPipelined(cctx, func(pipe goredis.Pipeliner) error {
+		pipe.Set(cctx, redisx.AdminSessionKey(sid), strconv.FormatInt(uid, 10), m.ttl())
+		pipe.SAdd(cctx, redisx.AdminUserSessionSetKey(uid), sid)
+		pipe.Expire(cctx, redisx.AdminUserSessionSetKey(uid), m.ttl())
+		return nil
+	}); err != nil {
+		return nil, "", fmt.Errorf("control: write K20/K30: %w", err)
 	}
 	return &Session{
 		SID:       sid,
@@ -256,9 +264,16 @@ func (m *SessionManager) Load(ctx context.Context, r *http.Request) (*Session, *
 		return nil, apierr.New(apierr.CodeAccountDisabled)
 	}
 
-	// Sliding renewal, bounded by IssueAt above.
+	// Sliding renewal, bounded by IssueAt above. SAdd re-indexes sessions
+	// issued before K30 existed (deploy window) and heals a missing set after a
+	// Redis flush; both TTLs move together so K30 can never outlive K20 or
+	// expire while a session is still active.
 	ecctx, ecancel := m.Redis.CommandContext(ctx)
-	_ = m.Redis.Raw().Expire(ecctx, redisx.AdminSessionKey(sid), m.ttl()).Err()
+	pipe := m.Redis.Raw().Pipeline()
+	pipe.SAdd(ecctx, redisx.AdminUserSessionSetKey(uid), sid)
+	pipe.Expire(ecctx, redisx.AdminSessionKey(sid), m.ttl())
+	pipe.Expire(ecctx, redisx.AdminUserSessionSetKey(uid), m.ttl())
+	_, _ = pipe.Exec(ecctx)
 	ecancel()
 	return sess, nil
 }
@@ -288,7 +303,48 @@ func (m *SessionManager) revoke(ctx context.Context, sid string) {
 	}
 	cctx, cancel := m.Redis.CommandContext(ctx)
 	defer cancel()
-	_ = m.Redis.Raw().Del(cctx, redisx.AdminSessionKey(sid)).Err()
+	// Read the uid before deleting K20 so the K30 member can be removed in the
+	// same round trip. A logout that leaves the sid in K30 is harmless (the
+	// password-change delete is idempotent) but accumulates dead members.
+	uidRaw, _ := m.Redis.Raw().Get(cctx, redisx.AdminSessionKey(sid)).Result()
+	pipe := m.Redis.Raw().Pipeline()
+	if uid, err := strconv.ParseInt(strings.TrimSpace(uidRaw), 10, 64); err == nil && uid > 0 {
+		pipe.SRem(cctx, redisx.AdminUserSessionSetKey(uid), sid)
+	}
+	pipe.Del(cctx, redisx.AdminSessionKey(sid))
+	_, _ = pipe.Exec(cctx)
+}
+
+// revokeAllScript deletes every K20 named by the K30 member set and then the
+// set itself in one atomic step. A WATCH/retry loop would abort on every
+// concurrent Load (which refreshes K30's TTL) and could fail under normal
+// traffic; the script has no abort window. KEYS[1] is K30, ARGV[1] is the K20
+// prefix ("sess:admin:").
+var revokeAllScript = goredis.NewScript(`
+local sids = redis.call('SMEMBERS', KEYS[1])
+for i = 1, #sids do
+  redis.call('DEL', ARGV[1] .. sids[i])
+end
+redis.call('DEL', KEYS[1])
+return #sids
+`)
+
+// RevokeAll deletes every session owned by uid. It is the password-change
+// path: K30 is the only index from uid to sid, and the alternative (scan the
+// keyspace for sess:admin:*) is not acceptable at production size.
+func (m *SessionManager) RevokeAll(ctx context.Context, uid int64) error {
+	if uid <= 0 {
+		return nil
+	}
+	cctx, cancel := m.Redis.LuaContext(ctx)
+	defer cancel()
+	if err := revokeAllScript.Run(cctx, m.Redis.Raw(),
+		[]string{redisx.AdminUserSessionSetKey(uid)},
+		redisx.AdminSessionKey(""),
+	).Err(); err != nil {
+		return fmt.Errorf("control: revoke all sessions: %w", err)
+	}
+	return nil
 }
 
 func (m *SessionManager) cookieValue(sid string, issued time.Time) string {

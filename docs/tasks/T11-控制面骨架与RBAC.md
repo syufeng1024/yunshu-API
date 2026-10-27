@@ -175,3 +175,60 @@ openapi: lint 输出
 
 **遗留（第二段 / T12 / T15 / T21）**：10 角色矩阵、CSRF、登录限流与锁定、验证码/找回、设备指纹、体验积分领取、审计全量前后值、`api/openapi.yaml`、`docs/control-api.md`、`GET /api/admin/audit-logs`；`-race` 留待 T21 的 Linux CI。
 **生产化缺口**：审计 IP 不信任 `X-Forwarded-For`（需可信代理列表）、CORS 白名单、改密即踢出所有 sid。
+
+---
+
+## 10. 第二段交付记录（2026-10-27）· 安全硬化
+
+补的是第一段明确留给第二段的「生产化缺口」。**未新增配置键；新增 1 个错误码（75→76）；新增 1 个迁移（0024，仅索引）。**
+
+### CSRF 双提交
+
+- 签发：`mw/csrf.go` 写非 HttpOnly `csrf` cookie（`SameSite=Lax`，8h）；登录/注册响应体带 `csrf_token`，`GET /auth/me` 同时下发 cookie + 响应头 + body
+- 校验：挂在 authed 链 `Recover → Session → CSRF → Require → handler`；只校验 `POST/PATCH/PUT/DELETE` 且路径以 `/api/` 开头；`X-CSRF-Token` 与 cookie、与服务端按当前 sid 重算的 HMAC 三者**常量时间**比较
+- token 与会话绑定：登出后旧 token 立即失效
+- 豁免：`/api/v1/auth/login`、`/api/v1/auth/register`（无会话）、`/api/v1/pay/callback/*`（公开 + HMAC 验签）
+- 拒绝码用 `permission_denied`（403）：请求体合法，改 body 修不好，缺的是「请求来自本站」的授权证明
+- **没有加「测试环境跳过 CSRF」的开关**；靠改测试助手（`server_authz_test.go` 的 `issueSession`/`newAuthedRequest`）统一带上 token。多数包直接 `mw.WithSession` 注入 principal 不走中间件链，因此不受影响
+- 反向用例：合法会话不带 token → 403；错 token → 403；他人会话的 token → 403；登出后旧 token → 401
+
+### 登录限流与账号锁定
+
+| 维度 | 阈值 | Redis 键 | 码 |
+| :--- | :--- | :--- | :--- |
+| 账号 | 5 次失败 / 15 分钟 | **K28** `auth:fail:acct:{sha256(identifier)}` | **`login_locked`**（新，第 76 码） |
+| IP | 20 次失败 / 10 分钟 | **K29** `auth:fail:ip:{sha256(ip)}` | `rpm_limit_exceeded` |
+
+两个维度**刻意用不同的码**：账号锁定是状态（重试多少次都没用，得等窗口或找回），IP 限额是频率（降频有效）。初版统一借用 `rpm_limit_exceeded`，客户端会去降频而不是等待，已纠正。阈值用包内常量（45 个配置键冻结）。
+
+锁定判定在密码校验**之前**，所以第 6 次即使密码正确也返回 429。登录成功清除该账号的失败计数，不清 IP 计数。
+
+### 改密 + 踢出全部会话
+
+- 新增 `POST /api/v1/auth/password`（旧密码校验 → 改哈希 → 撤销全部会话）
+- 会话管理补按 uid 的索引 **K30** `sess:admin:uid:{uid}`：`Issue` 用 MULTI 同时写 K20 + SADD，`Load` 自愈续期，登出 SREM，改密用 Lua 原子 `SMEMBERS → 逐个 DEL K20 → DEL K30`（避免并发登录留下无索引的 K20）
+- 哈希复用 `register.go` 的 bcrypt cost 12，未另造
+- 实测：同账号开两个 sid → 改密 → 两个都 401 `session_expired`；旧密码错 → 不改任何东西、会话不掉
+
+### 审计查询 `GET /api/admin/audit-logs`
+
+权限 `audit.read`；筛选 operator_id / module / action / result / 时间区间；分页 ≤100；`created_at DESC, id DESC`。迁移 **0024** 补两个索引：`idx_aal_created(created_at, id)`、`idx_aal_action_created(action, created_at, id)`。四种典型组合 `EXPLAIN` 全部 `type=range` + `Backward index scan`，无 `ALL`。
+
+（初版因为缺索引，把 `action`/`result` 单独筛选直接判 400 —— 这是把索引缺口转嫁给用户。补索引后取消该限制。）
+
+### `docs/control-api.md`
+
+权限点总表 23 行、角色×权限矩阵（4 角色）、控制面错误码映射 25 行，另附「会话与 CSRF 约定」。
+
+### 收尾时修的两个问题
+
+1. **`internal/recon` 全套测试不可重入**：清理是逐行手写 `remove:`，上一轮残留会污染下一轮（实测 R01 多出 4 条、R06 多 2 条）。改为 `cleanReconScope` 按每个用例自己的 `UserLo/UserHi` band 批量清理，开头与 `t.Cleanup` 各一次；`-count=3` 连续通过。
+2. **登录锁定借用 `rpm_limit_exceeded`**：与本项目「状态类拒绝要有自己的码」的规矩冲突，改为新增 `login_locked`（第 76 码），并加用例证明两个码确实分开。
+
+### 遗留
+
+1. **找回密码 / 短信验证码 / 图形验证码**：仓库无邮件与短信投递（`Mailer` 只是未注入的 seam），做出来就是「提交了但永远收不到」。等有投递通道再开卡。
+2. 审计 IP 只信 `RemoteAddr`，不信任 `X-Forwarded-For`；部署在反向代理后 IP 维度会退化成代理 IP 共享预算，需可信代理列表。
+3. CORS 白名单未实现（T11 §8 遗留）。
+4. `t_reconcile_diff` 无 `subject` 列（subject 折进 `diff_key`），清理只能按 `biz_date` 限定。
+5. 本机无 gcc，`-race` 未跑（T21 的 Linux CI 补）。

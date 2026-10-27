@@ -46,6 +46,104 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/HealthStatus'
+  /api/v1/auth/register:
+    post:
+      operationId: postRegister
+      tags: [auth]
+      summary: 邮箱/手机号 + 密码注册
+      description: |
+        验证码字段 `code` 当前只接受空值：非空即 400（验证码属第二段交付）。
+        注册在单个事务内写 t_user、空的 t_credit_account 与审计行；
+        成功返回会话 cookie、可读的 `csrf` cookie 与响应体中的 `csrf_token`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: 注册成功并已登录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionResponse'
+        '400':
+          description: 请求体或字段不合法（invalid_request_body / invalid_field）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 邮箱或手机号已注册（account_exists）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: 会话存储不可用（auth_unavailable）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/v1/auth/login:
+    post:
+      operationId: postLogin
+      tags: [auth]
+      summary: 邮箱/手机号 + 密码登录
+      description: |
+        连续失败达到阈值后按 identifier + IP 锁定，锁定期内正确密码同样返回 429。
+        账号维度返回 `login_locked`，IP 维度返回 `rpm_limit_exceeded`。
+        成功返回会话 cookie、可读的 `csrf` cookie 与响应体中的 `csrf_token`。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSessionResponse'
+        '400':
+          description: 请求体或字段不合法（invalid_request_body / invalid_field）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 账号或密码错误（invalid_credentials，不区分账号是否存在）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '402':
+          description: 账号因欠费冻结（account_frozen_due_to_overdraft）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 账号已禁用（account_disabled）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '429':
+          description: 失败次数过多（账号维度 `login_locked`；同一 IP 维度 `rpm_limit_exceeded`。均带 retry_after_seconds / reset_at，retry_after_seconds 为剩余锁定秒数）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: 会话存储或风控依赖不可用（auth_unavailable）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/v1/auth/me:
     get:
       operationId: getCurrentUser
@@ -84,6 +182,52 @@ paths:
           description: 会话已清除
         '401':
           description: 未登录
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/v1/auth/password:
+    post:
+      operationId: postPasswordChange
+      tags: [auth]
+      summary: 修改本人密码并吊销全部会话
+      description: |
+        old_password 必须匹配当前 bcrypt 哈希；new_password 与注册同一规则
+        （8..72 字节，不允许纯空白）。改密成功后在事务内写审计行，再删除该
+        uid 的全部 K20 会话；吊销失败返回 503 而不是 204，避免旧会话继续可用。
+        校验旧密码失败返回 401，且不吊销现有会话、不写成功审计。
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PasswordChangeRequest'
+      responses:
+        '204':
+          description: 密码已更新，所有会话已吊销，cookie 已清除
+        '400':
+          description: 请求体或字段不合法（invalid_request_body / invalid_field）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 未登录、会话失效或旧密码错误（session_expired / invalid_credentials）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: CSRF token 缺失或不匹配（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: 会话存储不可用，密码可能已更新（auth_unavailable）
           content:
             application/json:
               schema:
@@ -1138,6 +1282,88 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/audit-logs:
+    get:
+      operationId: listAdminAuditLogs
+      tags: [admin, audit]
+      summary: 运营审计日志（按时间窗口、操作者、模块、动作、结果筛选）
+      description: |
+        固定 created_at DESC, id DESC（补录行也按真实时间排序），order 只接受 desc。
+        默认窗口为最近 7 天，最大分页 100。action / result 可单独过滤：
+        0024 的 idx_aal_created 与 idx_aal_action_created 保证时间窗口始终是
+        索引范围扫描，不会退化成全表扫描。module / action / result 入参先
+        trim 再转大写，与库中存储的枚举一致；超长值按 invalid_query_parameter 拒绝。
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: operator_id
+          in: query
+          required: false
+          schema: {type: integer, format: int64, minimum: 1}
+          description: t_admin_audit_log.operator_id；0 与负数拒绝
+        - name: module
+          in: query
+          required: false
+          schema: {type: string, maxLength: 32}
+          description: 如 USER / CHANNEL / FUND / TICKET / REFUND / QUOTA；大小写不敏感
+        - name: action
+          in: query
+          required: false
+          schema: {type: string, maxLength: 32}
+          description: 如 LOGIN / CREATE / UPDATE / ORDER_PAID；可单独使用
+        - name: result
+          in: query
+          required: false
+          schema: {type: string, maxLength: 24}
+          description: 如 OK / REJECTED_BY_GUARD / REJECTED；可单独使用
+        - name: from
+          in: query
+          required: false
+          schema: {type: string}
+          description: RFC3339 或 YYYY-MM-DD（含当日 00:00:00）；省略则取 to 前 7 天
+        - name: to
+          in: query
+          required: false
+          schema: {type: string}
+          description: RFC3339 或 YYYY-MM-DD（date-only 表示当日 23:59:59.999）；省略则为当前时刻
+        - name: page
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: order
+          in: query
+          required: false
+          schema: {type: string, enum: [desc], default: desc}
+          description: 只接受 desc；asc 返回 400，避免升序分页永远不前进
+      responses:
+        '200':
+          description: 审计日志分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditLogListResponse'
+        '400':
+          description: 参数不合法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 audit.read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/admin/tickets:
     get:
       operationId: listAdminTickets
@@ -1689,6 +1915,13 @@ components:
       in: cookie
       name: sid
       description: mw.SessionCookieName；服务端 K20 sess:admin:{sid}
+    csrfHeader:
+      type: apiKey
+      in: header
+      name: X-CSRF-Token
+      description: |
+        与 `csrf` cookie 同值；所有 /api/ 下的非 GET 请求（login/register 与
+        支付回调除外）都必须携带。缺失或不匹配返回 403 permission_denied。
   parameters:
     KeyID:
       name: id
@@ -1758,6 +1991,27 @@ components:
           description: 仅限限流类与 402。
     CurrentUser:
       type: object
+      required: [id, email, display_name, role, status, csrf_token]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        display_name:
+          type: string
+        role:
+          $ref: '#/components/schemas/UserRole'
+        status:
+          $ref: '#/components/schemas/UserStatus'
+        csrf_token:
+          type: string
+          description: |
+            HMAC(secret, "csrf|"+sid)，与可读的 `csrf` cookie 同值；
+            写请求回传到 X-CSRF-Token 头。GET /api/v1/auth/me 每次下发新 cookie
+            并在响应头重复一次。
+    AuthUser:
+      type: object
       required: [id, email, display_name, role, status]
       properties:
         id:
@@ -1771,6 +2025,113 @@ components:
           $ref: '#/components/schemas/UserRole'
         status:
           $ref: '#/components/schemas/UserStatus'
+    LoginRequest:
+      type: object
+      required: [identifier, password]
+      properties:
+        identifier:
+          type: string
+          description: 邮箱或手机号；手机号支持 +86 前缀
+        password:
+          type: string
+          format: password
+          minLength: 1
+        code:
+          type: string
+          description: 验证码；第一段只接受空值，非空返回 400
+    RegisterRequest:
+      type: object
+      required: [identifier, password]
+      properties:
+        identifier:
+          type: string
+          description: 邮箱或手机号；手机号支持 +86 前缀
+        password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          description: 8..72 字节，不可为纯空白
+        code:
+          type: string
+          description: 验证码；第一段只接受空值，非空返回 400
+        nickname:
+          type: string
+          maxLength: 64
+          description: 去首尾空格后按 rune 计数；空则回退到 email/phone
+        agreement_version:
+          type: string
+          maxLength: 16
+    AuthSessionResponse:
+      type: object
+      required: [user, csrf_token]
+      properties:
+        user:
+          $ref: '#/components/schemas/AuthUser'
+        csrf_token:
+          type: string
+          description: 与本响应 Set-Cookie 的 `csrf` 同值，见 CurrentUser.csrf_token
+    PasswordChangeRequest:
+      type: object
+      required: [old_password, new_password]
+      properties:
+        old_password:
+          type: string
+          format: password
+          minLength: 1
+        new_password:
+          type: string
+          format: password
+          minLength: 8
+          maxLength: 72
+          description: 8..72 字节，不可为纯空白
+    AuditLogItem:
+      type: object
+      required: [id, trace_id, operator_id, operator_role, operator_ip, module, action, target_type, target_id, before, after, result, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        trace_id:
+          type: string
+          maxLength: 32
+          description: 与结构化日志的 Trace ID 一致
+        operator_id:
+          type: string
+          description: t_admin_audit_log.operator_id 的十进制字符串
+        operator_role:
+          type: string
+          description: PERSONAL / OPS / FINANCE / SUPER_ADMIN
+        operator_ip:
+          type: string
+          description: varbinary(16) 还原后的字符串；无法解析时为空串
+        module: {type: string, maxLength: 32}
+        action: {type: string, maxLength: 32}
+        target_type: {type: string, maxLength: 32}
+        target_id: {type: string, maxLength: 64}
+        before:
+          nullable: true
+          description: 操作前快照，任意 JSON；数据库为 NULL 时响应为 null
+        after:
+          nullable: true
+          description: 操作后快照，任意 JSON；数据库为 NULL 时响应为 null
+        reason:
+          type: string
+          maxLength: 255
+          description: 调额 / 禁用 / 定价变更必填
+        result: {type: string, maxLength: 24}
+        created_at: {type: string, format: date-time}
+    AuditLogListResponse:
+      type: object
+      required: [items, page, page_size, total, from, to]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditLogItem'
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+        from: {type: string, format: date-time, description: 实际生效的窗口起点（UTC）}
+        to: {type: string, format: date-time, description: 实际生效的窗口终点（UTC）}
     UserRole:
       type: string
       description: 与后端 t_user.role 同名。

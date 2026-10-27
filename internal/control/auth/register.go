@@ -37,6 +37,8 @@ type registerRequest struct {
 
 type registerResponse struct {
 	User userView `json:"user"`
+	// CSRFToken mirrors the readable `csrf` cookie; see loginResponse.
+	CSRFToken string `json:"csrf_token"`
 }
 
 // Register implements POST /api/v1/auth/register.
@@ -85,16 +87,18 @@ func (s *Service) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, cookie, err := s.Sessions.Issue(r.Context(), uid)
+	sess, cookie, err := s.Sessions.Issue(r.Context(), uid)
 	if err != nil {
 		s.errorLog(r.Context(), "session_issue_failed: "+err.Error())
 		mw.WriteError(w, r, apierr.New(apierr.CodeAuthUnavailable))
 		return
 	}
 	s.Sessions.SetCookie(w, cookie)
+	csrfToken := s.Sessions.SetCSRFCookie(w, sess.SID)
 	_ = mw.WriteJSON(w, http.StatusCreated, registerResponse{
 		User: view(uid, ident.valueFor(KindEmail), ident.valueFor(KindPhone),
 			nickname, "PERSONAL", "NORMAL"),
+		CSRFToken: csrfToken,
 	})
 }
 

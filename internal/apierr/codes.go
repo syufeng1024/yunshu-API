@@ -1,6 +1,6 @@
 // Package apierr is the only writer of error responses for the API data plane.
 //
-// The 75 codes, their HTTP statuses and retry semantics are copied from PRD
+// The 76 codes, their HTTP statuses and retry semantics are copied from PRD
 // V1.2 appendix E.1 (the single source of truth). Four codes were added by
 // errata E-21 because the console's session, credential, duplicate-account and
 // query-parameter conditions had no semantically correct row:
@@ -39,6 +39,16 @@
 // 不在可用列表"): reusing it for GET /api/admin/models/{id} told an operator that
 // their request body was wrong when the row had simply been deleted. Channel
 // detail keeps channel_not_found because that code is more specific.
+//
+// T11 adds one code for the console login lockout:
+//
+//	login_locked            429  the account's password-failure budget is spent
+//
+// The lockout used to answer 429 rpm_limit_exceeded with a rewritten message.
+// That code names a request-rate refusal, so a client honouring it backs off
+// and retries — but the account is locked until the window ends and a correct
+// password still fails. The IP-dimension failure budget keeps
+// rpm_limit_exceeded: that refusal really is about request frequency.
 //
 // TDS §6.2 still carries older values for seven rows; those rows are
 // deliberately not followed:
@@ -103,7 +113,7 @@ const (
 	OptionalBilling
 )
 
-// The 75 codes. One constant per code; Codes() returns the same set in the
+// The 76 codes. One constant per code; Codes() returns the same set in the
 // order below. Adding or removing one requires updating codes_test.go's
 // fixture and the generated markdown table in the same change.
 const (
@@ -178,6 +188,7 @@ const (
 	CodeKeyNotFound        = "key_not_found"
 	CodeKeyLimitReached    = "key_limit_reached"
 	CodeAccountExists      = "account_exists"
+	CodeLoginLocked        = "login_locked"
 	CodeAccountNotVerified = "account_not_verified"
 	CodePermissionDenied   = "permission_denied"
 	CodeChannelNotFound    = "channel_not_found"
@@ -210,7 +221,7 @@ type Spec struct {
 	Optional          OptionalFields
 }
 
-// specs is the metadata table: exactly 75 rows.
+// specs is the metadata table: exactly 76 rows.
 var specs = []Spec{
 	// E.1.1 鉴权与账号 (9)
 	{
@@ -590,8 +601,9 @@ var specs = []Spec{
 		Hint:    "携 request_id 联系客服",
 	},
 
-	// E.1.9 控制面 (14; E-21 added account_exists, T12 added key_limit_reached,
-	// T15 added the four state/entitlement conflict codes and resource_not_found)
+	// E.1.9 控制面 (15; E-21 added account_exists, T11 added login_locked,
+	// T12 added key_limit_reached, T15 added the four state/entitlement conflict
+	// codes and resource_not_found)
 	{
 		Code: CodeKeyNotFound, Type: TypeInvalidRequest, HTTPStatus: 404,
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台接口",
@@ -611,6 +623,17 @@ var specs = []Spec{
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台注册",
 		Message: "该账号已注册",
 		Hint:    "直接登录，或通过找回密码重置",
+	},
+	{
+		Code: CodeLoginLocked, Type: TypeRateLimit, HTTPStatus: 429,
+		// The default is the full account lock window; the call site always
+		// overrides it with the remaining TTL of the dimension that locked.
+		RetryAfterSeconds: 900, Retry: RetryDuration, Owner: OwnerBusiness, Stage: "控制台登录",
+		// The message names the account, not the request rate: logging in again
+		// with the correct password inside the window still fails.
+		Message:  "登录失败次数过多，账号已临时锁定，请 %d 秒后重试",
+		Hint:     "等待锁定结束后重试；忘记密码请使用找回密码（待开放）",
+		Optional: OptionalRateLimit,
 	},
 	{
 		Code: CodeAccountNotVerified, Type: TypeAuthorization, HTTPStatus: 403,
@@ -716,7 +739,7 @@ var codeIndex = func() map[string]Spec {
 	return idx
 }()
 
-// Codes returns the 75 code strings in E.1 order.
+// Codes returns the 76 code strings in E.1 order.
 func Codes() []string {
 	out := make([]string, len(specs))
 	for i, s := range specs {

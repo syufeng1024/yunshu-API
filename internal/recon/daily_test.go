@@ -19,6 +19,68 @@ type wantDiff struct {
 	Local, Upstream, Delta              int64
 }
 
+// cleanReconScope removes every row the daily fixtures can leave behind for
+// the half-open user range [lo, hi). It runs before every case and again from
+// t.Cleanup, so a case that fails halfway through cannot poison the next run.
+//
+// The table list is the union of every table this package's fixtures insert
+// into — insertAccount, insertLedgerEntry, insertUsage, insertAttempt, the
+// inline R-04..R-08 inserts — plus the two tables a Daily run writes. Metric
+// tables are keyed by dimension id, not user_id, so they get their own
+// predicates. t_reconcile_diff has neither user_id nor subject columns; it is
+// bounded by biz_date (see the comment at the DELETE).
+func cleanReconScope(t *testing.T, lo, hi int64, bizDates ...string) {
+	t.Helper()
+	ctx := context.Background()
+	for _, table := range []string{
+		"t_upstream_attempt",
+		"t_usage_record",
+		"t_settle_task",
+		"t_prehold_hold",
+		"t_ledger_entry",
+		"t_credit_batch",
+		"t_credit_account",
+		"t_user_daily_quota",
+		"t_idempotency_record",
+		"t_notification",
+	} {
+		if _, err := testDB.ExecContext(ctx,
+			`DELETE FROM `+table+` WHERE user_id >= ? AND user_id < ?`, lo, hi); err != nil {
+			t.Fatalf("cleanReconScope %s: %v", table, err)
+		}
+	}
+	for _, q := range []string{
+		`DELETE FROM t_metric_model_daily WHERE model_id >= ? AND model_id < ?`,
+		`DELETE FROM t_metric_minute WHERE scope_id >= ? AND scope_id < ?`,
+		`DELETE FROM t_metric_daily WHERE scope_id >= ? AND scope_id < ?`,
+		`DELETE FROM t_metric_channel_health WHERE channel_id >= ? AND channel_id < ?`,
+	} {
+		if _, err := testDB.ExecContext(ctx, q, lo, hi); err != nil {
+			t.Fatalf("cleanReconScope metrics: %v\nquery: %s", err, q)
+		}
+	}
+	for _, bizDate := range bizDates {
+		// t_reconcile_diff has no subject column: the subject is folded into
+		// diff_key = sha256(biz_date|diff_type|subject), and R-03's subject is
+		// a ledger entry id, not a user id, so no numeric range exists to
+		// filter on. Only this package writes the table and every test owns a
+		// distinct biz_date, so the date is the tightest usable bound.
+		if _, err := testDB.ExecContext(ctx,
+			`DELETE FROM t_reconcile_diff WHERE biz_date = ?`, bizDate); err != nil {
+			t.Fatalf("cleanReconScope t_reconcile_diff: %v", err)
+		}
+		// Daily writes its alert rows with user_id = 0 and puts biz_date first
+		// in the body. Matching both keeps another package's notifications.
+		if _, err := testDB.ExecContext(ctx,
+			`DELETE FROM t_notification
+			  WHERE user_id = 0
+			    AND event_code IN ('RECONCILE_ALERT', 'RECONCILE_P0')
+			    AND body LIKE CONCAT('biz_date=', ?, ' %')`, bizDate); err != nil {
+			t.Fatalf("cleanReconScope t_notification: %v", err)
+		}
+	}
+}
+
 // A7: R-01..R-08 are table-driven. Each case seeds exactly one violation,
 // runs its check, asserts the stored shape (diff_type / match_mode / level /
 // delta) and removes the fixture before the next case.
@@ -39,10 +101,9 @@ func TestDailyChecksR01toR08(t *testing.T) {
 	}
 
 	cases := []struct {
-		name   string
-		code   string
-		setup  func(t *testing.T) []wantDiff
-		remove func(t *testing.T)
+		name  string
+		code  string
+		setup func(t *testing.T) []wantDiff
 	}{
 		{
 			name: "R01 balance != ledger sum", code: DiffR01,
@@ -50,7 +111,6 @@ func TestDailyChecksR01toR08(t *testing.T) {
 				insertAccount(t, 901001, 1000, 0)
 				return []wantDiff{{DiffR01, "901001", MatchModeInternal, LevelCritical, 1000, 0, 1000}}
 			},
-			remove: func(t *testing.T) { deleteAccount(t, 901001) },
 		},
 		{
 			name: "R02 balance != recharge+bonus", code: DiffR02,
@@ -58,7 +118,6 @@ func TestDailyChecksR01toR08(t *testing.T) {
 				insertAccountValues(t, 901002, 600, 300, 1000)
 				return []wantDiff{{DiffR02, "901002", MatchModeInternal, LevelCritical, 1000, 900, 100}}
 			},
-			remove: func(t *testing.T) { deleteAccount(t, 901002) },
 		},
 		{
 			name: "R03 ledger continuity break", code: DiffR03,
@@ -75,7 +134,6 @@ func TestDailyChecksR01toR08(t *testing.T) {
 				}
 				return []wantDiff{{DiffR03, fmt.Sprintf("%d", prevID), MatchModeInternal, LevelCritical, 5000, 4000, -1000}}
 			},
-			remove: func(t *testing.T) { deleteAccount(t, 901003) },
 		},
 		{
 			name: "R04 batch remaining != face - consumed", code: DiffR04,
@@ -95,7 +153,6 @@ func TestDailyChecksR01toR08(t *testing.T) {
 				}
 				return []wantDiff{{DiffR04, fmt.Sprintf("%d", id), MatchModeInternal, LevelHigh, 5000, 7000, -2000}}
 			},
-			remove: func(t *testing.T) { deleteAccount(t, 901004) },
 		},
 		{
 			name: "R05 quota vs usage two tiers", code: DiffR05,
@@ -124,11 +181,6 @@ func TestDailyChecksR01toR08(t *testing.T) {
 					{DiffR05, "901007", MatchModeInternal, LevelCritical, 20000, 0, 20000},
 				}
 			},
-			remove: func(t *testing.T) {
-				for _, u := range []int64{901005, 901007, 901008} {
-					deleteAccount(t, u)
-				}
-			},
 		},
 		{
 			name: "R06 expired HELD older than one hour", code: DiffR06,
@@ -141,7 +193,6 @@ func TestDailyChecksR01toR08(t *testing.T) {
 					rid("r06x", 1), time.Now().UTC().Add(-2*time.Hour), time.Now().UTC().Add(-2*time.Hour))
 				return []wantDiff{{DiffR06, "GLOBAL", MatchModeInternal, LevelHigh, 1, 0, 1}}
 			},
-			remove: func(t *testing.T) { execFixture(t, `DELETE FROM t_prehold_hold WHERE user_id = 901006`) },
 		},
 		{
 			name: "R07 expired idempotency above threshold", code: DiffR07,
@@ -156,7 +207,6 @@ func TestDailyChecksR01toR08(t *testing.T) {
 				}
 				return []wantDiff{{DiffR07, "GLOBAL", MatchModeInternal, LevelMedium, 2, 1, 1}}
 			},
-			remove: func(t *testing.T) { execFixture(t, `DELETE FROM t_idempotency_record WHERE user_id = 901009`) },
 		},
 		{
 			name: "R08 gross != consumed - cost", code: DiffR08,
@@ -168,17 +218,17 @@ func TestDailyChecksR01toR08(t *testing.T) {
 					 VALUES (?, 901010, 1, 10000, 3000, 1, 8000)`, bizDate)
 				return []wantDiff{{DiffR08, "901010", MatchModeInternal, LevelHigh, 8000, 7000, 1000}}
 			},
-			remove: func(t *testing.T) {
-				execFixture(t, `DELETE FROM t_metric_model_daily WHERE model_id = 901010`)
-			},
 		},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			// Every case starts from an empty band and leaves one behind, so
+			// -count=3 and a run that dies mid-case both start clean.
+			cleanReconScope(t, d.UserLo, d.UserHi, bizDate)
+			t.Cleanup(func() { cleanReconScope(t, d.UserLo, d.UserHi, bizDate) })
 			wants := tc.setup(t)
-			t.Cleanup(func() { tc.remove(t) })
 			check, ok := checks[tc.code]
 			if !ok {
 				t.Fatalf("check %s not registered", tc.code)
@@ -220,13 +270,10 @@ func TestDailyRerunConvergesAndKeepsClosedRowsClosed(t *testing.T) {
 	})
 
 	const user = int64(902001)
-	deleteAccount(t, user)
+	cleanReconScope(t, 902000, 902100, bizDate)
 	insertAccount(t, user, 5000, 0)
 	key := DiffKey(bizDate, DiffR01, "902001")
-	t.Cleanup(func() {
-		deleteAccount(t, user)
-		_, _ = testDB.Exec(`DELETE FROM t_reconcile_diff WHERE diff_key = ?`, key)
-	})
+	t.Cleanup(func() { cleanReconScope(t, 902000, 902100, bizDate) })
 
 	locker := lock.New(rdb, nil)
 	run := func(owner string) DailyResult {
@@ -314,13 +361,9 @@ func TestDailyThousandRequestsZeroDiffs(t *testing.T) {
 	bizDate := day.Format("2006-01-02")
 	const user = int64(903001)
 
-	deleteAccount(t, user)
+	cleanReconScope(t, 903000, 903100, bizDate)
 	insertAccount(t, user, 300000, 0)
-	t.Cleanup(func() {
-		deleteAccount(t, user)
-		_, _ = testDB.Exec(`DELETE FROM t_reconcile_diff WHERE biz_date = ?`, bizDate)
-		_, _ = testDB.Exec(`DELETE FROM t_notification WHERE event_code IN ('RECONCILE_ALERT','RECONCILE_P0')`)
-	})
+	t.Cleanup(func() { cleanReconScope(t, 903000, 903100, bizDate) })
 
 	// Opening balance must itself be a ledger row; otherwise R-01 cannot hold.
 	insertLedgerEntry(t, user, entryNo("A14", 0), "RECHARGE", "CREDIT",

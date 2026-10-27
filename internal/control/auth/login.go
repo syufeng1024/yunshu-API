@@ -24,6 +24,10 @@ type loginRequest struct {
 
 type loginResponse struct {
 	User userView `json:"user"`
+	// CSRFToken mirrors the readable `csrf` cookie. A SPA that stores the
+	// response before reading document.cookie can use either copy; both are
+	// bound to this session.
+	CSRFToken string `json:"csrf_token"`
 }
 
 // Login implements POST /api/v1/auth/login with email/phone + password.
@@ -45,12 +49,30 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The lock is checked before the user lookup and before bcrypt. A correct
+	// password during the window still gets 429; otherwise an attacker who
+	// guesses right on attempt six would make the lock meaningless. Malformed
+	// input above is not counted: it never reached a credential comparison.
+	ip := clientIP(r)
+	lock, lockErr := s.loginLockState(r.Context(), ident, ip)
+	if lockErr != nil {
+		s.errorLog(r.Context(), "login_lock_check_failed: "+lockErr.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeAuthUnavailable))
+		return
+	}
+	if lock.locked() {
+		s.auditLogin(r.Context(), r, 0, "ANONYMOUS", "-", "REJECTED_BY_GUARD")
+		mw.WriteError(w, r, s.lockError(lock))
+		return
+	}
+
 	row, findErr := s.findUser(r.Context(), ident)
 	if findErr != nil {
 		if errors.Is(findErr, sql.ErrNoRows) {
 			// Equalize the timing with a real bcrypt comparison so the response
 			// time does not reveal whether the account exists.
 			_ = bcrypt.CompareHashAndPassword(dummyPasswordHash(), []byte(req.Password))
+			s.recordLoginFailure(r.Context(), ident, ip)
 			s.auditLogin(r.Context(), r, 0, "ANONYMOUS", "-", "REJECTED_BY_GUARD")
 			mw.WriteError(w, r, apierr.New(apierr.CodeInvalidCredentials))
 			return
@@ -69,6 +91,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := bcrypt.CompareHashAndPassword([]byte(row.hash), []byte(req.Password)); err != nil {
+		s.recordLoginFailure(r.Context(), ident, ip)
 		s.auditLogin(r.Context(), r, row.uid, row.role, strconv.FormatInt(row.uid, 10), "REJECTED_BY_GUARD")
 		mw.WriteError(w, r, apierr.New(apierr.CodeInvalidCredentials))
 		return
@@ -90,17 +113,28 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, cookie, err := s.Sessions.Issue(r.Context(), row.uid)
+	sess, cookie, err := s.Sessions.Issue(r.Context(), row.uid)
 	if err != nil {
 		s.errorLog(r.Context(), "login_session_issue_failed: "+err.Error())
 		mw.WriteError(w, r, apierr.New(apierr.CodeAuthUnavailable))
 		return
 	}
+	s.clearAccountFailures(r.Context(), ident)
 	s.Sessions.SetCookie(w, cookie)
+	csrfToken := s.Sessions.SetCSRFCookie(w, sess.SID)
 	s.auditLogin(r.Context(), r, row.uid, row.role, strconv.FormatInt(row.uid, 10), "OK")
 	_ = mw.WriteJSON(w, http.StatusOK, loginResponse{
-		User: view(row.uid, row.email, row.phone, row.nickname, row.role, row.status),
+		User:      view(row.uid, row.email, row.phone, row.nickname, row.role, row.status),
+		CSRFToken: csrfToken,
 	})
+}
+
+// meResponse is CurrentUser plus the CSRF token. The token is additive: the
+// existing CurrentUser consumer (web/src/api/types.ts) ignores unknown fields,
+// and the readable cookie remains the primary source.
+type meResponse struct {
+	userView
+	CSRFToken string `json:"csrf_token"`
 }
 
 // Me implements GET /api/v1/auth/me.
@@ -110,8 +144,15 @@ func (s *Service) Me(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, mw.SessionMissing())
 		return
 	}
-	_ = mw.WriteJSON(w, http.StatusOK, view(
-		sess.UID, sess.Email, sess.Phone, sess.Nickname, sess.Role, sess.Status))
+	// Re-issue the readable cookie on every whoami, and repeat the token in the
+	// body and X-CSRF-Token header so a SPA that hydrated from an older tab can
+	// recover without a hard reload.
+	token := s.Sessions.SetCSRFCookie(w, sess.SID)
+	w.Header().Set(mw.CSRFHeaderName, token)
+	_ = mw.WriteJSON(w, http.StatusOK, meResponse{
+		userView:  view(sess.UID, sess.Email, sess.Phone, sess.Nickname, sess.Role, sess.Status),
+		CSRFToken: token,
+	})
 }
 
 // Logout implements POST /api/v1/auth/logout. Deleting K20 makes the old sid
@@ -122,6 +163,7 @@ func (s *Service) Logout(w http.ResponseWriter, r *http.Request) {
 		s.Sessions.Revoke(r.Context(), sess.SID)
 	}
 	s.Sessions.ClearCookie(w)
+	s.Sessions.ClearCSRFCookie(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
