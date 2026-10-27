@@ -7,7 +7,10 @@ info:
     其余业务接口按任务卡扩充后重新生成，禁止在 web/src 手写响应类型。
 
     T12 已登记：/api/console/overview、/api/console/keys（列表/创建/详情/更新/删除/
-    操作日志/轮换）、/api/console/models。运营后台与官网公开数据接口待 T15/T18。
+    操作日志/轮换）、/api/console/models。
+    T13 第一段已登记：/api/console/plans、/api/console/orders（列表/创建）、
+    /api/console/redeem、公开回调 /api/v1/pay/callback/{channel}。退款/发票/提额随第二段。
+    运营后台与官网公开数据接口待 T15/T18。
 servers:
   - url: /
 paths:
@@ -384,6 +387,194 @@ paths:
                 $ref: '#/components/schemas/ModelCatalog'
         '400':
           description: 查询参数非法
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/plans:
+    get:
+      operationId: listConsolePlans
+      tags: [console, fund]
+      summary: 套餐档位（四档 + 默认档；全部读 t_plan，禁止硬编码）
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 档位列表与默认档元数据
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PlanList'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/orders:
+    get:
+      operationId: listConsoleOrders
+      tags: [console, fund]
+      summary: 充值订单列表（状态筛选 + 订单号搜索，交集）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: status
+          in: query
+          schema: {type: string, enum: [pending, paid, closed, refunding, refunded]}
+        - name: q
+          in: query
+          description: 订单号片段
+          schema: {type: string, maxLength: 32}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, paid_at]}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 订单列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderList'
+        '400':
+          description: 查询参数非法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: createConsoleOrder
+      tags: [console, fund]
+      summary: 创建充值/套餐订单（金额由服务端按 t_plan 计算；PENDING 不入账）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: 10s 去重窗口（idem.duplicate_window_seconds）；窗口内重放返回同一订单
+          schema: {type: string, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        '201':
+          description: 新建订单（PENDING，积分未变）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedOrder'
+        '200':
+          description: 同一 Idempotency-Key 的重放，返回首次创建的订单
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedOrder'
+        '400':
+          description: 字段非法（invalid_request_body）：order_type / plan_id / pay_amount_fen / pay_channel
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 同一 Idempotency-Key 的首次请求仍在处理中（request_in_flight）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/redeem:
+    post:
+      operationId: redeemCode
+      tags: [console, fund]
+      summary: 兑换码兑换积分（单次有效；不可退的赠送批次 + REDEEM 流水）
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RedeemRequest'
+      responses:
+        '200':
+          description: 兑换成功
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RedeemResult'
+        '400':
+          description: 兑换码不可用（已用 / 过期 / 不存在），message 指明 code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/v1/pay/callback/{channel}:
+    parameters:
+      - name: channel
+        in: path
+        required: true
+        schema: {type: string, enum: [wechat, alipay]}
+    post:
+      operationId: payCallback
+      tags: [public, fund]
+      summary: 支付回调（无会话；HMAC 验签 + 状态 CAS 幂等）
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayCallbackRequest'
+      responses:
+        '200':
+          description: 已处理（首次入账 / 重放 / 语义异常，见 reason）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayCallbackAck'
+        '400':
+          description: 字段非法或验签失败（invalid_request_body，message 指明字段）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 未知渠道（unknown_endpoint）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: 验签密钥未配置（config_unavailable）；渠道应退避重试
           content:
             application/json:
               schema:
@@ -808,3 +999,121 @@ components:
         cache_write_ratio_bp: {type: [integer, "null"]}
         cache_hit_price_credits_per_k: {type: [string, "null"]}
         cache_write_price_credits_per_k: {type: [string, "null"]}
+
+    # ---------------------------------------------------------------------
+    # T13 第一段：套餐 / 订单 / 兑换 / 支付回调
+    # ---------------------------------------------------------------------
+    Plan:
+      type: object
+      required: [id, code, name, price_fen, price_yuan, grant_recharge_micro, grant_bonus_micro,
+                 bonus_valid_days, rpm, tpm, concurrency, permanent, purchasable, sort_order]
+      description: 一个档位；全部数值来自 t_plan（PRD §3.2.1 为唯一来源）
+      properties:
+        id: {type: integer, format: int64}
+        code: {type: string, description: "TRIAL / STANDARD / PRO / ENTERPRISE / FREE_DEFAULT"}
+        name: {type: string}
+        price_fen: {type: integer, format: int64, description: 售价（分）}
+        price_yuan: {type: integer, format: int64, description: 售价（元，整数展示）}
+        grant_recharge_micro: {type: integer, format: int64, description: 充值积分（微积分）}
+        grant_bonus_micro: {type: integer, format: int64, description: 赠送积分（微积分）}
+        grant_recharge: {type: integer, format: int64, description: 充值积分（积分）}
+        grant_bonus: {type: integer, format: int64, description: 赠送积分（积分）}
+        bonus_valid_days: {type: integer, format: int64}
+        rpm: {type: integer, format: int64}
+        tpm: {type: integer, format: int64}
+        concurrency: {type: integer, format: int64}
+        daily_quota_micro: {type: [integer, "null"], format: int64, description: "null = 无上限（默认档）"}
+        daily_quota: {type: [integer, "null"], format: int64, description: "账户日额度（积分）"}
+        permanent: {type: boolean, description: "权益有效期永久（付费三档为 true）"}
+        purchasable: {type: boolean, description: "price_fen > 0；默认档与体验档为 false"}
+        sort_order: {type: integer, format: int64, description: 档位顺序：体验 < 标准 < 专业 < 企业}
+    PlanList:
+      type: object
+      required: [items, default_tier, default_tier_label, trial_days, bonus_expire_days, micro_per_credit]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Plan'}
+        default_tier: {type: string, description: 未购套餐时的档位 code（FREE_DEFAULT）}
+        default_tier_label: {type: string, description: plan.default_tier 配置值}
+        trial_days: {type: integer, format: int64, description: plan.trial_days}
+        bonus_expire_days: {type: integer, format: int64, description: billing.bonus_expire_days}
+        micro_per_credit: {type: integer, format: int64, description: 恒为 10000}
+    Order:
+      type: object
+      required: [id, order_no, order_type, pay_amount_fen, pay_amount_yuan,
+                 recharge_micro, bonus_micro, pay_channel, state, expire_at, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        order_no: {type: string, description: yyyymmddHHmmss + 14 位随机（28 字符）}
+        order_type: {type: string, enum: [CUSTOM, PLAN]}
+        plan_code: {type: string}
+        pay_amount_fen: {type: integer, format: int64, description: 实付（分）}
+        pay_amount_yuan: {type: integer, format: int64}
+        recharge_micro: {type: integer, format: int64}
+        bonus_micro: {type: integer, format: int64}
+        recharge: {type: integer, format: int64}
+        bonus: {type: integer, format: int64}
+        pay_channel: {type: string, enum: [WECHAT, ALIPAY]}
+        state: {type: string, enum: [PENDING, PAID, CLOSED, REFUNDING, REFUNDED, PARTIAL_REFUNDED]}
+        paid_at: {type: [string, "null"], format: date-time}
+        expire_at: {type: string, format: date-time, description: 下单 + 30 分钟}
+        created_at: {type: string, format: date-time}
+    OrderList:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Order'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    CreateOrderRequest:
+      type: object
+      required: [order_type, pay_channel]
+      properties:
+        order_type: {type: string, enum: [CUSTOM, PLAN]}
+        plan_id: {type: integer, format: int64, description: "PLAN 必填；CUSTOM 不得出现"}
+        pay_amount_fen: {type: integer, format: int64, description: "CUSTOM 必填（1~5000000）；PLAN 若传必须等于档位价"}
+        pay_channel: {type: string, enum: [WECHAT, ALIPAY], description: "OFFLINE（对公转账）不走自动回调，V1.0 不开放"}
+        idempotency_key: {type: string, maxLength: 128, description: "也可用同名请求头；10s 窗口"}
+    CreatedOrder:
+      type: object
+      required: [order, idempotent_replay]
+      properties:
+        order: {$ref: '#/components/schemas/Order'}
+        idempotent_replay: {type: boolean, description: true = 同一 Idempotency-Key 的重放，未新建订单}
+    RedeemRequest:
+      type: object
+      required: [code]
+      properties:
+        code: {type: string, minLength: 6, maxLength: 64, description: 兑换码明文；服务端只存 SHA-256}
+    RedeemResult:
+      type: object
+      required: [batch_name, amount_micro, amount, credit_target, expire_at, balance_after_micro]
+      properties:
+        batch_name: {type: string}
+        amount_micro: {type: integer, format: int64}
+        amount: {type: integer, format: int64, description: 积分}
+        credit_target: {type: string, enum: [BONUS, RECHARGE], description: "B-44 A 档固定 BONUS（不可退）"}
+        expire_at: {type: string, format: date-time}
+        balance_after_micro: {type: integer, format: int64}
+    PayCallbackRequest:
+      type: object
+      required: [out_trade_no, trade_no, amount_fen, status, sign]
+      properties:
+        out_trade_no: {type: string, maxLength: 28, description: 本平台订单号}
+        trade_no: {type: string, maxLength: 64, description: 渠道流水号（uk_ro_pay_txn 幂等键）}
+        amount_fen: {type: integer, format: int64, description: 实付（分），必须与订单一致且参与验签}
+        status: {type: string, enum: [SUCCESS, FAILED]}
+        sign: {type: string, description: "hex(HMAC-SHA256(secret, out_trade_no|trade_no|amount_fen|status))"}
+    PayCallbackAck:
+      type: object
+      required: [code, credited, replayed]
+      properties:
+        code: {type: string, description: 固定 SUCCESS（渠道约定，非统一错误体）}
+        order_no: {type: string}
+        credited: {type: boolean, description: true = 本次或此前已入账}
+        replayed: {type: boolean, description: true = 重复通知，未重复入账}
+        reason: {type: string, description: "ORDER_NOT_FOUND / ORDER_CLOSED / ORDER_REFUNDED / PAY_TXN_MISMATCH / CHANNEL_REPORTED_FAILURE"}

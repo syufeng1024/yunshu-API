@@ -19,6 +19,7 @@ import (
 	"yunshu.dev/core/internal/apierr"
 	"yunshu.dev/core/internal/control/audit"
 	"yunshu.dev/core/internal/control/auth"
+	"yunshu.dev/core/internal/control/fund"
 	"yunshu.dev/core/internal/control/key"
 	"yunshu.dev/core/internal/control/model"
 	"yunshu.dev/core/internal/control/mw"
@@ -44,6 +45,13 @@ type Deps struct {
 	// all), which would make a fresh whitelist ineffective. Nil is allowed in
 	// unit tests and degrades to the timer's four-minute refresh.
 	PublishRoutes func(ctx context.Context) error
+
+	// PaySecrets maps a payment channel (WECHAT / ALIPAY) to its callback
+	// signing secret. It comes from the process environment: the 45 frozen
+	// configuration keys carry no payment credential, and a secret stored in
+	// t_config_item would be readable by every process that reads config.
+	// A channel with no secret answers 503 and never skips verification.
+	PaySecrets map[string]string
 }
 
 // Server holds the route table and its dependencies.
@@ -53,6 +61,7 @@ type Server struct {
 	user   *user.Service
 	keys   *key.Service
 	models *model.Service
+	fund   *fund.Service
 }
 
 // New validates the wiring and builds the server.
@@ -68,6 +77,9 @@ func New(d Deps) (*Server, error) {
 	}
 	keys := key.New(d.DB, d.Redis, d.Now, d.Logger)
 	keys.PublishRoutes = d.PublishRoutes
+	funds := fund.New(d.DB, d.Redis, nil, d.Audit, d.Now, d.Logger)
+	funds.PaySecrets = d.PaySecrets
+	funds.PublishRoutes = d.PublishRoutes
 	return &Server{
 		d: d,
 		auth: &auth.Service{
@@ -80,6 +92,7 @@ func New(d Deps) (*Server, error) {
 		user:   user.New(d.DB, d.Redis, d.Now, d.Logger),
 		keys:   keys,
 		models: model.New(d.DB, d.Now, d.Logger),
+		fund:   funds,
 	}, nil
 }
 
@@ -109,6 +122,17 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	// Console model catalog.
 	mux.Handle("GET /api/console/models", s.authed(mw.PermModelRead, s.models.List))
+
+	// Console fund: plans (read), orders (read/write), redeem (write).
+	mux.Handle("GET /api/console/plans", s.authed(mw.PermFundRead, s.fund.Plans))
+	mux.Handle("GET /api/console/orders", s.authed(mw.PermFundRead, s.fund.ListOrders))
+	mux.Handle("POST /api/console/orders", s.authed(mw.PermFundWrite, s.fund.CreateOrder))
+	mux.Handle("POST /api/console/redeem", s.authed(mw.PermFundWrite, s.fund.Redeem))
+
+	// Payment callback: public by design. The payment platform has no console
+	// session; the HMAC signature over the body is the authentication, so this
+	// route must never be wired through s.authed (no cookie, no sid).
+	mux.Handle("POST /api/v1/pay/callback/{channel}", s.public(s.fund.Callback))
 
 	// Admin: the first segment wires one read-only diagnostic. The business
 	// admin endpoints arrive with T15 and inherit the same admin.all gate.

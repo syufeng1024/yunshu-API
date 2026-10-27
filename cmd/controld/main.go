@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -85,6 +86,21 @@ func main() {
 	}
 
 	auditWriter := &audit.Writer{DB: mainDB, Now: clock.Real{}}
+
+	// Payment callback signing secrets. They are read from the environment,
+	// not from t_config_item: the frozen configuration table carries no payment
+	// credential, and a secret in that table would be readable by every process
+	// that loads configuration. A missing secret is announced loudly here and
+	// turns the channel's callback into a 503 — never a skipped verification.
+	paySecrets := payCallbackSecrets()
+	for _, channel := range []string{"WECHAT", "ALIPAY"} {
+		if paySecrets[channel] == "" {
+			logger.Warn(rootCtx,
+				"payment callback secret missing for "+channel+": callbacks will answer 503 until YUNSHU_PAY_CALLBACK_SECRET_"+channel+" is set",
+				obslog.Fields{Stage: "startup"})
+		}
+	}
+
 	ctl, err := control.New(control.Deps{
 		DB:       mainDB,
 		Redis:    rdb,
@@ -96,6 +112,7 @@ func main() {
 			_, _, err := routeBuilder.Publish(ctx)
 			return err
 		},
+		PaySecrets: paySecrets,
 	})
 	if err != nil {
 		logger.Error(rootCtx, "control server: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
@@ -151,6 +168,19 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info(rootCtx, "shutdown complete", obslog.Fields{Stage: "shutdown", Status: 0})
+}
+
+// payCallbackSecrets reads the per-channel callback signing secrets. An unset
+// variable is left out of the map so the service can report "not configured"
+// instead of verifying with an empty key.
+func payCallbackSecrets() map[string]string {
+	out := make(map[string]string, 2)
+	for _, channel := range []string{"WECHAT", "ALIPAY"} {
+		if secret := strings.TrimSpace(os.Getenv("YUNSHU_PAY_CALLBACK_SECRET_" + channel)); secret != "" {
+			out[channel] = secret
+		}
+	}
+	return out
 }
 
 func installSignalHandling(rootCtx context.Context, logger *obslog.Logger, cancel context.CancelFunc) {

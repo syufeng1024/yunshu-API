@@ -10,13 +10,16 @@ import (
 type Permission string
 
 // T11 shipped three permissions. T12 adds the two read capabilities its
-// console routes need; the rest of the role matrix (fund.approve /
-// price.write / model.write / ticket.reply ...) remains T15's.
+// console routes need, T13 adds the two fund capabilities; the rest of the
+// role matrix (fund.approve / price.write / model.write / ticket.reply ...)
+// remains T15's.
 const (
 	PermUserRead  Permission = "user.read"
 	PermKeyRead   Permission = "key.read"
 	PermKeyWrite  Permission = "key.write"
 	PermModelRead Permission = "model.read"
+	PermFundRead  Permission = "fund.read"
+	PermFundWrite Permission = "fund.write"
 	PermAdminAll  Permission = "admin.all"
 )
 
@@ -24,12 +27,19 @@ const (
 // admin.all because the permission vocabulary has no finer admin split yet;
 // T15 replaces this table with the 10-role matrix. Keeping the table here
 // means a handler can never decide on its own.
+//
+// T13 grants fund.read / fund.write to PERSONAL (a user buys their own plan
+// and redeems their own code) and to SUPER_ADMIN. OPS and FINANCE are left
+// untouched on purpose: the finance-side matrix is T15's deliverable, and
+// widening it here would pre-empt that review.
 var rolePermissions = map[string]map[Permission]bool{
 	"PERSONAL": {
 		PermUserRead:  true,
 		PermKeyRead:   true,
 		PermKeyWrite:  true,
 		PermModelRead: true,
+		PermFundRead:  true,
+		PermFundWrite: true,
 	},
 	"OPS": {
 		PermModelRead: true,
@@ -44,6 +54,8 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermKeyRead:   true,
 		PermKeyWrite:  true,
 		PermModelRead: true,
+		PermFundRead:  true,
+		PermFundWrite: true,
 		PermAdminAll:  true,
 	},
 }
