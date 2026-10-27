@@ -244,6 +244,10 @@ func (s *Service) activeKeyCount(ctx context.Context, q rowQueryer, uid int64, n
 // checkFreeLimit runs inside the creation transaction, after the user row is
 // locked FOR UPDATE. Locking is what makes the check correct under concurrency:
 // without it two requests both read 2 and both insert.
+//
+// A breach returns key_limit_reached (409, conflict) rather than a request-body
+// error; callers reach this from create (count keys at once) and from rotate
+// (one key, when the old one is not active).
 func (s *Service) checkFreeLimit(ctx context.Context, tx *sql.Tx, uid int64, adding int64, now time.Time) *apierr.APIError {
 	free, err := isFreeTier(ctx, tx, uid)
 	if err != nil {
@@ -260,10 +264,13 @@ func (s *Service) checkFreeLimit(ctx context.Context, tx *sql.Tx, uid int64, add
 		return apierr.New(apierr.CodeInternalError)
 	}
 	if active+adding > limit {
-		// The unified error body has no field for "upgrade". The nearest 400
-		// carries the field path; the console renders the free-tier copy from
-		// (code, message field). Recorded as a residual in the T12 receipt.
-		return mw.InvalidField("count")
+		// A quota shortfall is a state conflict, not a malformed body: the
+		// request may be perfectly valid and still be refused. Answering
+		// invalid_request_body with a field path sent callers to edit `count`,
+		// a change that can never lift a ceiling (T12 P0). key_limit_reached
+		// (409) carries the quota copy required by T12 hard constraint 2, with
+		// the ceiling interpolated from quota.free_max_active_keys.
+		return apierr.Newf(apierr.CodeKeyLimitReached, limit, active, adding)
 	}
 	return nil
 }

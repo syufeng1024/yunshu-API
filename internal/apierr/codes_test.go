@@ -99,8 +99,9 @@ var prdE1Fixture = []fixtureRow{
 	{CodeAuthUnavailable, TypeServiceUnavailable, 503, 5, RetryYes, OwnerPlatform},
 	{CodeInternalError, TypeInternal, 500, 0, RetryNo, OwnerPlatform},
 
-	// E.1.9 控制面 (8; E-21 added account_exists)
+	// E.1.9 控制面 (9; E-21 added account_exists, T12 added key_limit_reached)
 	{CodeKeyNotFound, TypeInvalidRequest, 404, 0, RetryNo, OwnerBusiness},
+	{CodeKeyLimitReached, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
 	{CodeAccountExists, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
 	{CodeAccountNotVerified, TypeAuthorization, 403, 0, RetryNo, OwnerBusiness},
 	{CodePermissionDenied, TypeAuthorization, 403, 0, RetryNo, OwnerBusiness},
@@ -116,25 +117,25 @@ var prdE1Fixture = []fixtureRow{
 	{CodeContentPolicyViolation, TypeInvalidRequest, 403, 0, RetryNo, OwnerBusiness},
 }
 
-func TestCodeCountIs69(t *testing.T) {
-	if got := len(Codes()); got != 69 {
-		t.Fatalf("len(Codes()) = %d, want 69", got)
+func TestCodeCountIs70(t *testing.T) {
+	if got := len(Codes()); got != 70 {
+		t.Fatalf("len(Codes()) = %d, want 70", got)
 	}
-	if got := len(Specs()); got != 69 {
-		t.Fatalf("len(Specs()) = %d, want 69", got)
+	if got := len(Specs()); got != 70 {
+		t.Fatalf("len(Specs()) = %d, want 70", got)
 	}
-	if got := len(prdE1Fixture); got != 69 {
-		t.Fatalf("fixture rows = %d, want 69", got)
+	if got := len(prdE1Fixture); got != 70 {
+		t.Fatalf("fixture rows = %d, want 70", got)
 	}
 	rows := strings.Split(strings.TrimSpace(MarkdownTable()), "\n")
-	if len(rows) != 2+69 {
-		t.Fatalf("markdown rows = %d, want 2 header + 69 = 71", len(rows))
+	if len(rows) != 2+70 {
+		t.Fatalf("markdown rows = %d, want 2 header + 70 = 72", len(rows))
 	}
 }
 
 // counting the constants from source, not from the registry, catches a code
 // that was added as a constant but never entered specs (or vice versa).
-func TestCodeConstantsCountIs69(t *testing.T) {
+func TestCodeConstantsCountIs70(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -162,8 +163,8 @@ func TestCodeConstantsCountIs69(t *testing.T) {
 			}
 		}
 	}
-	if count != 69 {
-		t.Fatalf("Code* constants = %d, want 69", count)
+	if count != 70 {
+		t.Fatalf("Code* constants = %d, want 70", count)
 	}
 }
 
@@ -264,6 +265,36 @@ func TestRequiredTemplatesArePresent(t *testing.T) {
 		if s.Hint == "" {
 			t.Errorf("%s: hint template is empty", s.Code)
 		}
+	}
+}
+
+// T12 P0: the free-tier ceiling is a state conflict, not a malformed body. The
+// diagnostic must tell the caller what to do (release a slot or upgrade), so
+// neither message nor hint may mention JSON: editing the body cannot help.
+func TestKeyLimitReachedIsStateConflict(t *testing.T) {
+	e := Newf(CodeKeyLimitReached, 3, 3, 1)
+	if e.HTTPStatus != 409 {
+		t.Fatalf("HTTP = %d, want 409", e.HTTPStatus)
+	}
+	if e.Type != TypeConflict {
+		t.Fatalf("type = %q, want %q", e.Type, TypeConflict)
+	}
+	if e.RetryAfterSeconds != 0 {
+		t.Fatalf("retry_after_seconds = %d, want 0 (retrying cannot lift a quota)", e.RetryAfterSeconds)
+	}
+	if !strings.Contains(e.Message, "免费档最多 3 个 Key，升级套餐可扩容") {
+		t.Fatalf("message must carry the T12 hard constraint 2 copy: %q", e.Message)
+	}
+	if strings.Contains(e.Message, "JSON") {
+		t.Fatalf("message must not mention JSON: %q", e.Message)
+	}
+	if strings.Contains(e.Hint, "JSON") {
+		t.Fatalf("hint must not mention JSON: %q", e.Hint)
+	}
+	// The ceiling comes from quota.free_max_active_keys, so the template must
+	// interpolate it instead of spelling 3.
+	if raised := Newf(CodeKeyLimitReached, 5, 5, 1); !strings.Contains(raised.Message, "免费档最多 5 个 Key") {
+		t.Fatalf("limit is not interpolated: %q", raised.Message)
 	}
 }
 

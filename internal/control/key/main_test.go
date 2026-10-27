@@ -183,14 +183,22 @@ type apiErrorBody struct {
 		Type    string `json:"type"`
 		Code    string `json:"code"`
 		Message string `json:"message"`
+		Hint    string `json:"hint"`
 	} `json:"error"`
 }
 
 func errorCode(t *testing.T, rec *httptest.ResponseRecorder) string {
 	t.Helper()
+	return errorBody(t, rec).Error.Code
+}
+
+// errorBody decodes the unified error envelope so a test can assert on the
+// message and hint as well as the code.
+func errorBody(t *testing.T, rec *httptest.ResponseRecorder) apiErrorBody {
+	t.Helper()
 	var body apiErrorBody
 	decodeBody(t, rec, &body)
-	return body.Error.Code
+	return body
 }
 
 func mustCreate(t *testing.T, svc *Service, uid int64, name string, modelIDs []int64) createdKey {

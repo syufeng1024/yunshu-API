@@ -174,7 +174,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/CreatedKeys'
         '400':
-          description: 字段非法、group_code 出现、免费档已达 3 个活跃 Key
+          description: 字段非法（invalid_request_body）：含 group_code、count 超出 1–10、expire_at 不是未来时刻等
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 免费档活跃 Key 已达 quota.free_max_active_keys 上限（key_limit_reached）；message 给出上限、当前活跃数与本次新增数，hint 指向停用或升级套餐
           content:
             application/json:
               schema:
@@ -329,7 +335,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/RotatedKey'
         '400':
-          description: 旧 Key 已过期且未提供新的 expire_at、或出现 group_code
+          description: 旧 Key 已过期且未提供新的 expire_at、或出现 group_code（invalid_request_body）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 旧 Key 非活跃时轮换会新占一个名额，免费档已满（key_limit_reached）
           content:
             application/json:
               schema:

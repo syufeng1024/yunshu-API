@@ -126,7 +126,7 @@
 | 卡 | 标题 | 依赖 | 交付根 | 状态 |
 | :--- | :--- | :--- | :--- | :--- |
 | [T11](T11-控制面骨架与RBAC.md) | 控制面骨架·会话鉴权·RBAC | T03,T05 | `cmd/controld/`、`internal/control/` | 🟨 第一段 ✅ |
-| [T12](T12-用户密钥与模型域API.md) | 用户 / 密钥 / 模型域 API | T11 | `internal/control/user/`、`.../key/`、`.../model/` | 🟨 有条件通过 |
+| [T12](T12-用户密钥与模型域API.md) | 用户 / 密钥 / 模型域 API | T11 | `internal/control/user/`、`.../key/`、`.../model/` | ✅ |
 | [T13](T13-资金域API.md) | 资金域 API（订单/退款/发票/提额/套餐） | T11,T04 | `internal/control/fund/` | ⬜ |
 | [T14](T14-用量账单与日志API.md) | 用量·账单·请求日志 API | T11 | `internal/control/usage/` | ⬜ |
 | [T15](T15-运营后台API.md) | 运营后台 API（渠道/模型/定价/分组/公告/风控） | T11,T05 | `internal/control/ops/` | ⬜ |
@@ -219,7 +219,7 @@ flowchart LR
 | T08 | 2026-10-26 | 2026-10-26 | ✅ **通过** | 5 项（真实上游与 ROUTING 快照待 T11） | relaykit + dispatch + stream；149 turns / 833s / $9.97 |
 | T09 | 2026-10-26 | 2026-10-26 | ✅ **通过**（两段） | 4 项（1 项须 T22 建表） | 0021 两表 + 结算闭环 + 对账内核；327+307 turns / 3158s / $40.75 |
 | T11 第一段 | 2026-10-27 | 2026-10-27 | ✅ **通过**（D-22 最小闭环） | 6 项 R-07 待回写源文档；第二段未派 | 控制面骨架 + 快照/K19/K13 生产方 + seedctl；**首次真实 curl 打通并扣钱**；248 turns / 1983s / $20.94 |
-| T12 | 2026-10-27 | 2026-10-27 | 🟨 **有条件通过** | 1 项 P0 必修（免费档拒绝文案）+ 12 项偏离 | 用户/密钥/模型域 9 个接口；E-21 码表 65→69 落地；A1–A14 独立复跑，A7/A11 仅单测；277 turns / 2204s / $29.43 |
+| T12 | 2026-10-27 | 2026-10-27 | ✅ **通过**（含一次 P0 修复） | 12 项非阻塞 | 用户/密钥/模型域 9 个接口；E-21 码表 65→69 落地、P0 修复追加第 70 码 `key_limit_reached`；A1–A14 独立复跑，A7/A11 仅单测；277+44 turns / 2204s / $29.43 |
 
 ### T01 验收记录（交付总监独立复核，2026-10-26）
 
@@ -518,6 +518,51 @@ flowchart LR
 **验收时我改的一处代码（D-16）**：`Proxy: http.ProxyFromEnvironment` → `nil`。理由是生产语义问题而非测试便利：客户请求体不该穿过运维环境里随手 export 的代理。详见回执。
 
 **五项遗留**：① 真实境内上游未联调（`local.invalid` 占位）；② ROUTING 快照与 API Key 都还没有生产方，真实端到端要等 T11；③ 本轮实际交付超出派单范围（只派了 relaykit 一段，交付了整张卡），内容复核通过但口径不一致；④ Anthropic 错误对象内部 Extra 未保留；⑤ `image_url.detail` 等字段上提层级，已在契约文档标注。
+
+---
+
+### T12 验收记录（交付总监独立复核，2026-10-27）
+
+首轮 277 turns / $29.43，判定「有条件通过」并挂 1 项 P0 必修；本轮 44 turns 修复后转「通过」。
+
+**首轮复核（摘要）**
+
+| 复核项 | 结果 | 证据 |
+| :--- | :--- | :--- |
+| 空库重来 + 四进程 | ✅ | 清空开发库与 Redis 后 seedctl 起链路 |
+| 9 个接口在位 | ✅ | `server.go` 路由逐条声明权限点，无 `role ==` 旁路 |
+| A2 脱敏 | ✅ | 详情仅 `key_masked`；`t_api_key` 明文列 0 |
+| A4 越权 | ✅ | 他人 key 的 GET/PATCH/audit/rotate/delete → 全 404 `key_not_found` |
+| A5 `group_code` | ✅ | 创建/PATCH 携带 → 400，DB 仍 `standard` |
+| A8 排序 / A10 价格 / A12 写穿 / A13 审计 / A14 分页 | ✅ | 逐条实测 |
+| **A3 免费档** | ❌ | 第 4 个 Key 返回 400 `invalid_request_body` +「请求体不是合法 JSON：count」——见必修 |
+
+**必修项（P0）与修复**
+
+| 项 | 裁定 |
+| :--- | :--- |
+| 免费档超限复用 `invalid_request_body` | 违反硬约束 2 文案要求，且属误导性诊断（合法 body 被报成非法 JSON）。根因：`mw.InvalidField()` 被当通用拒绝出口 |
+| 修复 | 新增第 70 码 `key_limit_reached`（409 / `conflict_error` / `BUSINESS` / 不可重试），上限从 `quota.free_max_active_keys` 运行时取；`InvalidField` 文档收窄为 body 专用 |
+| 29 处 `InvalidField` 审计 | 改造 1 处（免费档），保留 38 处（均为真·body：`confirm` 缺失、`count` 越界、`expire_at` 非未来、`ip_allowlist` 非法、`group_code` 注入等） |
+
+**本轮复核（不采信成员转述）**
+
+| 复核项 | 结果 | 证据 |
+| :--- | :--- | :--- |
+| 改动面 | ✅ 8 文件 | `git status --short` 与回执逐条一致，无未跟踪文件 |
+| `go build` / `go vet` | ✅ | 零错误 |
+| `go test -count=1 ./internal/control/... ./internal/apierr/... ./internal/apikey/...` | ✅ | 8 个包全绿（禁用缓存） |
+| `lint.sh` 8 条 | ✅ | `all hard constraints hold` |
+| 码表一致性 | ✅ 70 | `TestCodeCountIs70` / `TestCodeConstantsCountIs70` / `TestEveryCodeMatchesPRDE1` / `TestEveryCodeBodyShape` 全 PASS；`docs/error-codes.md` 71 行 `\| \`` 命中 = 1 表头 + **70 数据行** |
+| **反向验证** | ✅ | 出口临时改回 `mw.InvalidField("count")` → 3 条用例变红（`want 409, got 400`）、`TestBodyErrorsStayInvalidRequestBody` 仍绿；还原后 SHA256 `52548e3cff72…` 与改动前逐字节一致（我独立复核该指纹，与 QA 报告一致） |
+| 真实 HTTP E2E | ✅ | 独立库 `yunshu_e2e` + 真实 `controld:8081`：3×201 → 第 4 个 **409**（body 见卡内回执）→ 停用 1 个 → **201** → 轮换已停用 Key **409** → `count=11` 仍 **400** |
+| 配置驱动 | ✅ | `quota.free_max_active_keys` 3→5 → 可建 5、第 6 个 409 且文案变「最多 5 个」→ 已还原 3 |
+| 拒后副作用 | ✅ | 被拒创建 3→3、被拒轮换 4→4；越权仍 404（新码不泄露他人 key 存在性） |
+| 环境清理 | ✅ | `:8081` 无监听；`yunshu_e2e` 已 DROP；未污染 `yunshu_test` |
+
+**十二项偏离（全部成立，按卡内表处置）**：`count` 1–20→1–10、用户不可选永不过期、软删截断 58 字符、响应形状 `{items,count,warning}`、OpenAPI cookie 名 `yunshu_session`→`sid`、IP 白名单与快照 4 分钟缺口（已加 `PublishRoutes`）、`gofmt` CRLF 遗留等。其中 TDS 待回写 2 处（审计 `RENAME`/`EXPIRE_CHANGE`、软删截断），列入 T23 前的文档回写清单。
+
+**遗留（均非阻塞）**：A7 批量 10 与 A11 触顶预测仍只有单测证据（免费档上限 3 挡住批量、`FREE_DEFAULT` 无日额度使 ETA 走 `NO_DAILY_QUOTA`，后者是正确行为）；`-race` 留 T21 Linux CI；`TestFreeTierThreeActiveKeys` 的「3」是固化预期值。
 
 ---
 

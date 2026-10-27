@@ -1,6 +1,6 @@
 // Package apierr is the only writer of error responses for the API data plane.
 //
-// The 69 codes, their HTTP statuses and retry semantics are copied from PRD
+// The 70 codes, their HTTP statuses and retry semantics are copied from PRD
 // V1.2 appendix E.1 (the single source of truth). Four codes were added by
 // errata E-21 because the console's session, credential, duplicate-account and
 // query-parameter conditions had no semantically correct row:
@@ -9,6 +9,14 @@
 //	invalid_credentials     401  wrong identifier/password (not a bad API key)
 //	account_exists          409  registration collision
 //	invalid_query_parameter 400  bad page / page_size / sort / order
+//
+// A fifth code was added after E-21 for a condition PRD E.1 has no row for at
+// all: the free tier's active-key ceiling (T12 hard constraint 2). Answering
+// that refusal with invalid_request_body told a caller whose body was perfectly
+// valid that its "count" member "was not valid JSON" — a diagnosis the caller
+// can never act on, because editing count cannot lift a quota ceiling:
+//
+//	key_limit_reached       409  free tier already at its active-key ceiling
 //
 // TDS §6.2 still carries older values for seven rows; those rows are
 // deliberately not followed:
@@ -73,7 +81,7 @@ const (
 	OptionalBilling
 )
 
-// The 69 codes. One constant per code; Codes() returns the same set in the
+// The 70 codes. One constant per code; Codes() returns the same set in the
 // order below. Adding or removing one requires updating codes_test.go's
 // fixture and the generated markdown table in the same change.
 const (
@@ -146,6 +154,7 @@ const (
 	CodeInternalError              = "internal_error"
 
 	CodeKeyNotFound        = "key_not_found"
+	CodeKeyLimitReached    = "key_limit_reached"
 	CodeAccountExists      = "account_exists"
 	CodeAccountNotVerified = "account_not_verified"
 	CodePermissionDenied   = "permission_denied"
@@ -173,7 +182,7 @@ type Spec struct {
 	Optional          OptionalFields
 }
 
-// specs is the metadata table: exactly 69 rows.
+// specs is the metadata table: exactly 70 rows.
 var specs = []Spec{
 	// E.1.1 鉴权与账号 (9)
 	{
@@ -550,12 +559,20 @@ var specs = []Spec{
 		Hint:    "携 request_id 联系客服",
 	},
 
-	// E.1.9 控制面 (8)
+	// E.1.9 控制面 (9; E-21 added account_exists, T12 added key_limit_reached)
 	{
 		Code: CodeKeyNotFound, Type: TypeInvalidRequest, HTTPStatus: 404,
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台接口",
 		Message: "密钥不存在",
 		Hint:    "控制台 → 密钥管理页刷新列表",
+	},
+	{
+		Code: CodeKeyLimitReached, Type: TypeConflict, HTTPStatus: 409,
+		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台接口",
+		// The ceiling is interpolated from quota.free_max_active_keys, never
+		// hard-coded: operations may raise it without a code change.
+		Message: "免费档最多 %d 个 Key，升级套餐可扩容（当前已启用 %d 个，本次需新增 %d 个）",
+		Hint:    "停用一个已有 Key 释放名额后重试；付费套餐不限 Key 数量，可在控制台 → 套餐页升级",
 	},
 	{
 		Code: CodeAccountExists, Type: TypeConflict, HTTPStatus: 409,
@@ -627,7 +644,7 @@ var codeIndex = func() map[string]Spec {
 	return idx
 }()
 
-// Codes returns the 69 code strings in E.1 order.
+// Codes returns the 70 code strings in E.1 order.
 func Codes() []string {
 	out := make([]string, len(specs))
 	for i, s := range specs {

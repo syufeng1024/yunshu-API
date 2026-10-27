@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -66,8 +67,9 @@ func TestCreatePlaintextOnceAndDetailMasked(t *testing.T) {
 	}
 }
 
-// A3 / F6-7: the free tier stops at three active keys, and disabling one frees
-// a slot. The check runs inside the creation transaction.
+// A3 / F6-7 / T12 hard constraint 2: the free tier stops at three active keys,
+// disabling one frees a slot, and the refusal carries the quota copy — not a
+// request-body diagnosis the caller could never act on.
 func TestFreeTierThreeActiveKeys(t *testing.T) {
 	svc, _ := newTestService(t)
 	uid := newTestUser(t, nil)
@@ -80,11 +82,25 @@ func TestFreeTierThreeActiveKeys(t *testing.T) {
 
 	rec := call(t, svc.Create, http.MethodPost, "/api/console/keys",
 		createBody("free-4", []int64{modelID}, 0), uid, "")
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("fourth create status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("fourth create status = %d, want 409; body=%s", rec.Code, rec.Body.String())
 	}
-	if code := errorCode(t, rec); code != "invalid_request_body" {
-		t.Fatalf("fourth create code = %q, want invalid_request_body", code)
+	body := errorBody(t, rec)
+	t.Logf("fourth create → %d %s", rec.Code, rec.Body.String())
+	if body.Error.Code != "key_limit_reached" {
+		t.Fatalf("fourth create code = %q, want key_limit_reached", body.Error.Code)
+	}
+	if body.Error.Type != "conflict_error" {
+		t.Fatalf("fourth create type = %q, want conflict_error", body.Error.Type)
+	}
+	if !strings.Contains(body.Error.Message, "免费档最多 3 个 Key，升级套餐可扩容") {
+		t.Fatalf("fourth create message lacks the quota copy: %q", body.Error.Message)
+	}
+	if strings.Contains(body.Error.Message, "JSON") {
+		t.Fatalf("fourth create message must not mention JSON: %q", body.Error.Message)
+	}
+	if strings.Contains(body.Error.Hint, "JSON") {
+		t.Fatalf("fourth create hint must not mention JSON: %q", body.Error.Hint)
 	}
 
 	rec = call(t, svc.Update, http.MethodPatch, "/api/console/keys/"+idStr(created[0].ID),
@@ -100,7 +116,8 @@ func TestFreeTierThreeActiveKeys(t *testing.T) {
 	}
 }
 
-// Hard constraint 2: a batch may not bypass the free-tier ceiling.
+// Hard constraint 2: a batch may not bypass the free-tier ceiling, and the
+// refusal names the ceiling instead of accusing the body of being malformed.
 func TestBatchCannotBypassFreeTier(t *testing.T) {
 	svc, _ := newTestService(t)
 	uid := newTestUser(t, nil)
@@ -109,8 +126,15 @@ func TestBatchCannotBypassFreeTier(t *testing.T) {
 
 	rec := call(t, svc.Create, http.MethodPost, "/api/console/keys",
 		createBody("batch-free", []int64{modelID}, 3), uid, "")
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("batch status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("batch status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	body := errorBody(t, rec)
+	if body.Error.Code != "key_limit_reached" {
+		t.Fatalf("batch code = %q, want key_limit_reached", body.Error.Code)
+	}
+	if !strings.Contains(body.Error.Message, "免费档最多 3 个 Key") {
+		t.Fatalf("batch message lacks the quota copy: %q", body.Error.Message)
 	}
 	var n int
 	if err := testDB.QueryRowContext(context.Background(),
@@ -560,6 +584,110 @@ func TestRotateRevokesOldKey(t *testing.T) {
 	newHash, _ := apikey.HashPrefix16(apikey.Hash(rotated.Key))
 	if rec13, err := cache.Lookup(context.Background(), newHash); err != nil || rec13.ST != "ENABLED" {
 		t.Fatalf("new K13 = %+v err=%v, want ENABLED", rec13, err)
+	}
+}
+
+// T12 P0 regression: rotating an inactive key manufactures a new active key,
+// so the free-tier ceiling still applies. Before the fix this returned
+// invalid_request_body pointing at "count", a field a rotate request cannot
+// even carry.
+func TestRotateInactiveKeyHitsFreeLimit(t *testing.T) {
+	svc, _ := newTestService(t)
+	uid := newTestUser(t, nil)
+	modelID := newTestModel(t)
+
+	var created []createdKey
+	for i := 0; i < 3; i++ {
+		created = append(created, mustCreate(t, svc, uid, "rot-free-"+strconv.Itoa(i), []int64{modelID}))
+	}
+	rec := call(t, svc.Update, http.MethodPatch, "/api/console/keys/"+idStr(created[0].ID),
+		map[string]any{"status": "DISABLED", "confirm": true}, uid, idStr(created[0].ID))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	// Refill the freed slot: three active keys plus one disabled.
+	mustCreate(t, svc, uid, "rot-free-3", []int64{modelID})
+
+	rec = call(t, svc.Rotate, http.MethodPost,
+		"/api/console/keys/"+idStr(created[0].ID)+"/rotate", nil, uid, idStr(created[0].ID))
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("rotate status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	body := errorBody(t, rec)
+	if body.Error.Code != "key_limit_reached" {
+		t.Fatalf("rotate code = %q, want key_limit_reached", body.Error.Code)
+	}
+	if !strings.Contains(body.Error.Message, "免费档最多 3 个 Key，升级套餐可扩容") {
+		t.Fatalf("rotate message lacks the quota copy: %q", body.Error.Message)
+	}
+	if strings.Contains(body.Error.Message, "JSON") || strings.Contains(body.Error.Hint, "JSON") {
+		t.Fatalf("rotate message/hint must not mention JSON: %q / %q",
+			body.Error.Message, body.Error.Hint)
+	}
+	var rows int
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM t_api_key WHERE user_id = ? AND deleted_at IS NULL`, uid).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if rows != 4 {
+		t.Fatalf("key rows = %d after rejected rotate, want 4 (no replacement inserted)", rows)
+	}
+}
+
+// The counterpart of the quota split: a genuine body problem keeps
+// invalid_request_body, hint included. These are the two cases the T12 residual
+// cited as the model for "the caller can fix this by editing the body".
+func TestBodyErrorsStayInvalidRequestBody(t *testing.T) {
+	svc, _ := newTestService(t)
+	uid := newTestUser(t, nil)
+	modelID := newTestModel(t)
+	item := mustCreate(t, svc, uid, "body-err", []int64{modelID})
+
+	cases := []struct {
+		name string
+		call func() *httptest.ResponseRecorder
+		path string
+	}{
+		{
+			name: "count above the 1-10 batch range",
+			path: "count",
+			call: func() *httptest.ResponseRecorder {
+				return call(t, svc.Create, http.MethodPost, "/api/console/keys",
+					createBody("body-err", []int64{modelID}, 11), uid, "")
+			},
+		},
+		{
+			name: "delete without confirm",
+			path: "confirm",
+			call: func() *httptest.ResponseRecorder {
+				return call(t, svc.Delete, http.MethodDelete,
+					"/api/console/keys/"+idStr(item.ID), map[string]any{}, uid, idStr(item.ID))
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := tc.call()
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
+			}
+			body := errorBody(t, rec)
+			if body.Error.Code != "invalid_request_body" {
+				t.Fatalf("code = %q, want invalid_request_body", body.Error.Code)
+			}
+			if !strings.Contains(body.Error.Message, tc.path) {
+				t.Fatalf("message %q must name the field path %q", body.Error.Message, tc.path)
+			}
+		})
+	}
+	// The rejected delete left the key intact.
+	var deleted sql.NullTime
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT deleted_at FROM t_api_key WHERE id = ?`, item.ID).Scan(&deleted); err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Valid {
+		t.Fatal("key was soft-deleted despite the rejected confirm")
 	}
 }
 

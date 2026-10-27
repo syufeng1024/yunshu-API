@@ -8,7 +8,7 @@
 | 依赖 | T11（+ T03 表结构、T06 `KeyAuthWriter`、**T10** 错误码） |
 | 可并行 | 与 T13 / T14 / T15 并行 |
 | 交付根 | `internal/control/user/`、`internal/control/key/`、`internal/control/model/` |
-| 状态 | 🟨 有条件通过（2026-10-27）· 1 项必修 |
+| 状态 | ✅ 通过（2026-10-27）· P0 必修已关闭 |
 
 ## 1. 目标
 
@@ -128,9 +128,9 @@ group_code 拒绝: A5 输出
 | :--- | :--- |
 | `go build` / `go vet` / `gofmt`(交付路径) / `lint.sh`(8 条) | 全过 |
 | `go test ./internal/control/... ./internal/apikey/... ./internal/apierr/...` | 全绿 |
-| **E-21 码表** | `TestCodeCountIs69` 通过；`docs/error-codes.md` 69 数据行；新码已在线上生效（`page_size=1000` → 400 `invalid_query_parameter`，未登录 → 401 `session_expired`） |
+| **E-21 码表** | `TestCodeCountIs70` 通过；`docs/error-codes.md` 70 数据行；新码已在线上生效（`page_size=1000` → 400 `invalid_query_parameter`，未登录 → 401 `session_expired`） |
 | A2 脱敏 | 详情无 `key` 字段，只有 `key_masked`；`t_api_key` 明文列扫描 **0** |
-| A3 免费档 | 1 → 建到 3（201）→ 第 4 个 **400**；停用 1 个后（活跃 2）再建 **201** |
+| A3 免费档 | 1 → 建到 3（201）→ 第 4 个 **409 `key_limit_reached`**（首轮为 400，见下方必修项，已修复）；停用 1 个后（活跃 2）再建 **201** |
 | A4 越权 | 他人 GET/PATCH/audit/rotate/delete key 1 → 全部 **404 `key_not_found`**，key 未被改动 |
 | A5 group_code | 创建/PATCH 带 `group_code` → **400**，DB 仍 `standard` |
 | A8 排序 | 造权重 deepseek=100 / qwen=50 → 顺序正确；加 `model_type=TEXT` 筛选后顺序不变 |
@@ -142,7 +142,9 @@ group_code 拒绝: A5 输出
 | 轮换 | 旧 Key `DISABLED`、新 Key `ENABLED`、明文只返回一次 |
 | 回归 B1–B6 | seedctl 3 表各 1；`cfg:snap:ROUTING` 含 keyModels；非流式 200 + `X-Credits-Consumed: 116`；usage/ledger（PREHOLD→RELEASE→SETTLE）落库、余额 100000→99748；流式有 `X-Credits-Preheld` 无 `X-Credits-Consumed`；无 Key/错 Key 401、越权模型 403 |
 
-### 必修 1 项（P0，派 T13 前完成）
+### 必修 1 项（P0，派 T13 前完成）—— ✅ 已关闭（2026-10-27）
+
+> **关闭说明**：本轮修复已由工程师交付、QA 三层验证、交付总监独立复跑后通过。证据见本节末尾「修复交付与验证」。以下保留原始问题描述，不删改，以便追溯「为什么会有第 70 个码」。
 
 **免费档超限与状态类拒绝复用了 `invalid_request_body`，文案是错的。**
 
@@ -164,13 +166,32 @@ group_code 拒绝: A5 输出
 **A7（批量 10）与 A11（触顶预测）未做线上验证**：免费档上限 3 挡住批量、FREE_DEFAULT 无日额度使 ETA 返回
 `NO_DAILY_QUOTA`（这本身是对的）。两项只有单测证据，记录在案。
 
+#### 修复交付与验证（2026-10-27）
+
+**实现**：`checkFreeLimit` 出口由 `mw.InvalidField("count")` 改为 `apierr.Newf(apierr.CodeKeyLimitReached, limit, active, adding)`；新增第 70 码 `key_limit_reached`（409 / `conflict_error` / 不可重试 / `BUSINESS`），上限值取自 `quota.free_max_active_keys` 运行时配置（`service.go:201` 的 `freeMaxActiveKeys()`），文案内不出现字面量 3；`mw.InvalidField` 的文档收窄为「body 形状专用」并写明状态类拒绝的正确去向，防复发。
+
+**改动 8 个文件**：`internal/apierr/{codes,codes_test}.go`、`internal/control/key/{service,key_test,main_test}.go`、`internal/control/mw/errs.go`、`docs/error-codes.md`（`MarkdownTable()` 重生成）、`api/openapi.yaml`（`POST /keys` 与 `POST /keys/{id}/rotate` 各补 409，400 描述收窄）。
+
+**三层验证**：
+
+| 层 | 内容 | 结果 |
+| :--- | :--- | :--- |
+| 静态与单测 | `go build` / `go vet` / `go test -count=1 ./internal/control/... ./internal/apierr/... ./internal/apikey/...` / `lint.sh` 8 条 / `TestCodeCountIs70` 等 4 条码表用例 | 全绿 |
+| 断言质量 | `TestFreeTierThreeActiveKeys` 断言 409 + code + type + message 含「免费档最多 3 个 Key」+ message/hint 均不含 JSON（6 项，非只看状态码） | 通过 |
+| **反向验证** | 把出口临时改回 `mw.InvalidField("count")` → 3 条用例变红（`want 409, got 400`）、`TestBodyErrorsStayInvalidRequestBody` 仍绿 → 证明断言有判别力且两组出口确实分离；改回后 SHA256 与改动前逐字节一致（`52548e3c…`） | 通过 |
+| 配置驱动 | 库里把 `quota.free_max_active_keys` 3→5 → 可建到 5 个、第 6 个 409 且 message 变「最多 5 个」 → 还原 3 | 通过 |
+| 真实 HTTP E2E | 独立库 `yunshu_e2e` + 真实 `controld:8081`：建 3（201×3）→ 第 4 个 **409** 全文 `{"type":"conflict_error","code":"key_limit_reached","message":"免费档最多 3 个 Key，升级套餐可扩容（当前已启用 3 个，本次需新增 1 个）","retry_after_seconds":0,"hint":"停用一个已有 Key 释放名额后重试；付费套餐不限 Key 数量，可在控制台 → 套餐页升级"}` → 停用 1 个后 **201** → 轮换已停用 Key **409** → `count=11` 仍 **400 `invalid_request_body`** | 通过 |
+| 拒后副作用 | 被拒的创建/轮换均未残留行（3→3、4→4）；`t_api_key` 无明文列；越权仍 404 `key_not_found`（不因新码泄露存在性） | 通过 |
+
+**遗留（不影响通过）**：`TestFreeTierThreeActiveKeys` 里的「3」是测试固化预期值，依赖测试库配置行；防硬编码由 `TestKeyLimitReachedIsStateConflict`（Newf 传 5 验 5）与配置 3→5 实证保证。若后续其它接口也会撞限额，需按同一模式补 409 与用例。
+
 ### 实现方上报的偏离（12 条，均已复核成立）
 
 | # | 内容 | 处置 |
 | :--- | :--- | :--- |
 | 1 | 批量 `count` 卡写 1–20，PRD 写 1–10 | **按 PRD 取 1–10**，卡待改 |
 | 2 | PRD 要求用户不可自选「永不过期」，T12 卡未写；实现为创建必须给未来 `expire_at` | 采纳，卡待补 |
-| 3 | 免费档拒绝无专用码 | **升级为本卡必修项**（见上） |
+| 3 | 免费档拒绝无专用码 | ✅ **已修**：第 70 码 `key_limit_reached`（409），见上 |
 | 4 | 审计新增 `RENAME` / `EXPIRE_CHANGE` 两个动作值 | TDS 注释待回写 |
 | 5 | TDS 软删 `CONCAT(key_name,' (已删除)')` 会撑破 `varchar(64)`，实现截断到 58 字符 | 采纳，TDS 待回写 |
 | 6 | `POST /api/console/keys` 响应形状改为 `{items,count,warning}` | T17/T18 必须按新形状生成类型 |
@@ -181,4 +202,4 @@ group_code 拒绝: A5 输出
 | 11 | ROUTING 快照保留已软删 Key 的 IP 规则 | 待 T15/T11 重构发布器时过滤 |
 | 12 | A1 未跑 `-race`（本机无 gcc） | 留 T21 Linux CI |
 
-**遗留**：T13 充值/订单/体验积分领取；T14 用量账单；T15 Key 分组升降、永久 Key、配置发布端点、`key_limit_reached` 码；T17/T18 按新响应形状生成类型；T21 `-race` 与 CVE 审计。
+**遗留**：T13 充值/订单/体验积分领取；T14 用量账单；T15 Key 分组升降、永久 Key、配置发布端点；T17/T18 按新响应形状生成类型；T21 `-race` 与 CVE 审计。（原列的「`key_limit_reached` 码」已在本轮 P0 修复中落地，不再遗留）

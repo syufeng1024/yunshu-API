@@ -50,6 +50,13 @@ func PermissionDenied() *apierr.APIError { return apierr.New(apierr.CodePermissi
 
 // InvalidField maps a bad body field to invalid_request_body. The field path
 // travels in the message so the client can point at the exact member.
+//
+// This is a body-shape exit only. Use it when correcting the named field would
+// make the request succeed: a missing confirm, a wrong type, a count outside
+// its 1–10 range, an expire_at in the past. A refusal the caller cannot fix by
+// editing the body — a quota ceiling, a lifecycle state — must use its own
+// code (see apierr.CodeKeyLimitReached), because "请求体不是合法 JSON：count"
+// sends users to a field that is not the problem and can never be the fix.
 func InvalidField(path string) *apierr.APIError {
 	return apierr.Newf(apierr.CodeInvalidRequestBody, path)
 }
