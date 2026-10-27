@@ -99,7 +99,8 @@ var prdE1Fixture = []fixtureRow{
 	{CodeAuthUnavailable, TypeServiceUnavailable, 503, 5, RetryYes, OwnerPlatform},
 	{CodeInternalError, TypeInternal, 500, 0, RetryNo, OwnerPlatform},
 
-	// E.1.9 控制面 (9; E-21 added account_exists, T12 added key_limit_reached)
+	// E.1.9 控制面 (13; E-21 added account_exists, T12 added key_limit_reached,
+	// T15 added the four state/entitlement conflict codes)
 	{CodeKeyNotFound, TypeInvalidRequest, 404, 0, RetryNo, OwnerBusiness},
 	{CodeKeyLimitReached, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
 	{CodeAccountExists, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
@@ -109,6 +110,10 @@ var prdE1Fixture = []fixtureRow{
 	{CodeChannelInUse, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
 	{CodeConfigItemNotFound, TypeInvalidRequest, 404, 0, RetryNo, OwnerBusiness},
 	{CodeConfigValueInvalid, TypeInvalidRequest, 400, 0, RetryNo, OwnerBusiness},
+	{CodeResourceStateConflict, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
+	{CodeTrialAlreadyClaimed, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
+	{CodeInvoiceAlreadyIssued, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
+	{CodePriceConflict, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
 
 	// E.1.10 登记但不实现 (1)
 	{CodeAccountRPMExceeded, TypeRateLimit, 429, 60, RetryDuration, OwnerBusiness},
@@ -117,25 +122,25 @@ var prdE1Fixture = []fixtureRow{
 	{CodeContentPolicyViolation, TypeInvalidRequest, 403, 0, RetryNo, OwnerBusiness},
 }
 
-func TestCodeCountIs70(t *testing.T) {
-	if got := len(Codes()); got != 70 {
-		t.Fatalf("len(Codes()) = %d, want 70", got)
+func TestCodeCountIs74(t *testing.T) {
+	if got := len(Codes()); got != 74 {
+		t.Fatalf("len(Codes()) = %d, want 74", got)
 	}
-	if got := len(Specs()); got != 70 {
-		t.Fatalf("len(Specs()) = %d, want 70", got)
+	if got := len(Specs()); got != 74 {
+		t.Fatalf("len(Specs()) = %d, want 74", got)
 	}
-	if got := len(prdE1Fixture); got != 70 {
-		t.Fatalf("fixture rows = %d, want 70", got)
+	if got := len(prdE1Fixture); got != 74 {
+		t.Fatalf("fixture rows = %d, want 74", got)
 	}
 	rows := strings.Split(strings.TrimSpace(MarkdownTable()), "\n")
-	if len(rows) != 2+70 {
-		t.Fatalf("markdown rows = %d, want 2 header + 70 = 72", len(rows))
+	if len(rows) != 2+74 {
+		t.Fatalf("markdown rows = %d, want 2 header + 74 = 76", len(rows))
 	}
 }
 
 // counting the constants from source, not from the registry, catches a code
 // that was added as a constant but never entered specs (or vice versa).
-func TestCodeConstantsCountIs70(t *testing.T) {
+func TestCodeConstantsCountIs74(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -163,8 +168,8 @@ func TestCodeConstantsCountIs70(t *testing.T) {
 			}
 		}
 	}
-	if count != 70 {
-		t.Fatalf("Code* constants = %d, want 70", count)
+	if count != 74 {
+		t.Fatalf("Code* constants = %d, want 74", count)
 	}
 }
 
@@ -295,6 +300,36 @@ func TestKeyLimitReachedIsStateConflict(t *testing.T) {
 	// interpolate it instead of spelling 3.
 	if raised := Newf(CodeKeyLimitReached, 5, 5, 1); !strings.Contains(raised.Message, "免费档最多 5 个 Key") {
 		t.Fatalf("limit is not interpolated: %q", raised.Message)
+	}
+}
+
+// T15: the four new codes are state/entitlement refusals, so none of them may
+// tell the caller to edit a field. Retrying does not help either.
+func TestStateConflictCodesAre409RetryNo(t *testing.T) {
+	cases := []struct {
+		code string
+		args []any
+		want string // fragment that must appear in the rendered message
+	}{
+		{CodeResourceStateConflict, []any{"订单当前状态为 CLOSED"}, "当前状态不允许该操作：订单当前状态为 CLOSED"},
+		{CodeTrialAlreadyClaimed, nil, "该账号或设备已领取过体验额度"},
+		{CodeInvoiceAlreadyIssued, nil, "该订单已开具发票，不可重复申请"},
+		{CodePriceConflict, []any{"t_price_rule#1 / t_price_rule#9"}, "该模型存在多处配置且价格不一致：t_price_rule#1 / t_price_rule#9"},
+	}
+	for _, tc := range cases {
+		e := Newf(tc.code, tc.args...)
+		if e.HTTPStatus != 409 || e.Type != TypeConflict {
+			t.Errorf("%s: HTTP/type = %d/%s, want 409/%s", tc.code, e.HTTPStatus, e.Type, TypeConflict)
+		}
+		if e.RetryAfterSeconds != 0 || e.Owner != OwnerBusiness {
+			t.Errorf("%s: retry/owner = %d/%s, want 0/BUSINESS", tc.code, e.RetryAfterSeconds, e.Owner)
+		}
+		if !strings.Contains(e.Message, tc.want) {
+			t.Errorf("%s: message = %q, want %q", tc.code, e.Message, tc.want)
+		}
+		if strings.Contains(e.Hint, "JSON") || strings.Contains(e.Hint, "请求体") {
+			t.Errorf("%s: hint tells the caller to edit the body: %q", tc.code, e.Hint)
+		}
 	}
 }
 

@@ -8,7 +8,7 @@
 | 依赖 | T11、T05、**T10**（错误码） |
 | 可并行 | 与 T12 / T13 / T14 并行 |
 | 交付根 | `internal/control/ops/` |
-| 状态 | ⬜ 未开始 |
+| 状态 | 🟨 第一段已交付（2026-10-27）· 交付物 1–7 + 状态码收敛；第二段（定价/分组/公告/风控/用户/配置）未派 |
 
 ## 1. 目标
 
@@ -124,3 +124,72 @@ F 覆盖: F14-1..6、F16-1..7、F17-1..3 → 用例名
 配置白名单: A15 输出
 遗留:
 ```
+
+---
+
+## 9. 第一段交付记录（2026-10-27）
+
+**范围**：交付物 1–7（渠道 + 模型主数据）+ 技术债清偿（状态类错误码收敛、权限矩阵扩容）。定价/分组/公告/风控/用户/配置留第二段。
+
+### 步骤 A · 状态类错误码收敛（技术债清偿）
+
+上一轮立的规矩：**「用户照 hint 改请求体能否成功」——改得成功是 body 问题，改不成功是状态/配额问题，必须有自己的码**。T12 已建 `key_limit_reached`，但 T13 为控制改动面把 12 处状态类拒绝暂堆在 `invalid_request_body` 上。
+
+本轮新增 4 码（均 409 / `conflict_error` / `BUSINESS` / 不可重试），总数 **70 → 74**：
+
+| 码 | 覆盖场景 |
+| :--- | :--- |
+| `resource_state_conflict` | 退款单/订单/提额单状态迁移不合法（订单非 `PAID`、已有进行中退款、CAS 失败、套餐无日额度可提额等） |
+| `trial_already_claimed` | 体验版防刷命中（设备指纹 / 手机号 / IP 段 / 账号已领），四因子共用一条 message，**不披露命中项** |
+| `invoice_already_issued` | 同订单 `ISSUED` 后再申请 |
+| `price_conflict` | 价格唯一真相源冲突（第二段使用，本段建档） |
+
+12 处调用点逐处判定：**10 处改专用码，2 处保留 `invalid_request_body`**——`invoice.go:294`（改小 `amount_fen` 即可成功）与 `quota_apply.go:136`（改小目标额度即可成功）确属 body 类。
+
+### 步骤 B · 权限矩阵
+
+权限点扩到 **19 个**：`user.read/write`、`key.read/write`、`model.read/write`、`price.write`、`group.write`、`channel.write`、`notice.write`、`risk.write`、`config.write`、`fund.read/write/approve`、`ticket.reply`、`audit.read`、`admin.read`、`admin.all`。
+
+| 角色 | 关键权限 |
+| :--- | :--- |
+| `PERSONAL` | `user.read`、`key.*`、`model.read`、`fund.read/write`（仅自己的数据） |
+| `OPS` | 运营全集，**不含** `fund.approve` |
+| `FINANCE` | `fund.read`、`fund.approve`、`audit.read`、`model.read`、`admin.read`，**不含** `price.write`/`channel.write` |
+| `SUPER_ADMIN` | 全部 + `admin.all` |
+
+**`admin.read` 是本次新增**（E-31）：后台读接口若复用 `model.read`，`PERSONAL` 就能读到 `cost_*` 成本价与渠道 `base_url`，违反 B-48。已实测 13 条 `/api/admin/*` 路由对 `PERSONAL` 全 403 `permission_denied`（`server_authz_test.go`，13 个子测试）。
+
+**「10 个角色」是文档笔误**（E-30）：PRD §6.3、TDS 1209 行、openapi `UserRole` 均只有 4 个角色。按 4 个实现，未编造角色名。
+
+### 步骤 C · 渠道（交付物 1–4）
+
+6 条路由（读 `admin.read`，写 `channel.write`）：`GET /api/admin/channels`、`GET/PATCH/DELETE /api/admin/channels/{id}`、`POST /api/admin/channels`、`POST /api/admin/channels/{id}/disable`。
+
+四条硬约束实测：
+
+| 约束 | 证据 |
+| :--- | :--- |
+| 来源地拒绝 | `region=OVERSEAS` → 400「V1.0 仅支持境内渠道」，DB 计数 0 |
+| 删除查引用 | 被 `t_route` 引用 → 409 `channel_in_use` + hint；解引用后 200；软删后详情 404 `channel_not_found`（不 500） |
+| 上游 Key 密文 | `HEX(LEFT(upstream_key_enc,3))=76313A`（`v1:` 前缀的信封本体，**未二次 base64**，E-17）；`upstream_key_mask=sk-****1234`；`Box.Open` 回原文；响应结构体 `channelView` **无** `upstream_key` 字段，明文只存在于入站请求 DTO |
+| 权重即时生效 | 改权重后 `PublishRoutes` 调用 1 次；审计 before/after 含 `weight` 100→10 |
+
+专属名单表 `t_channel_dedicated_user`（0017）已存在，切回 `ALL` 时清空。
+
+### 步骤 D · 模型主数据（交付物 5–7）
+
+`GET /api/admin/models`、`GET/POST/PATCH /api/admin/models/{id}`、`POST .../listing-state`、`POST .../recommend-weight`。
+
+- `LISTED → CATALOG_ONLY`：不需公示期，权重**自动清零**并留痕，生成「成本调整」公告草稿（`t_announcement` 仅 INSERT `DRAFT`）
+- `CATALOG_ONLY → LISTED`：生成「上新」草稿
+- `CATALOG_ONLY` 设非 0 权重 → 409 `resource_state_conflict`
+- 模型 `region=OVERSEAS` → 400 拒绝
+- 单价/缓存倍率/阶梯本段**只读**（属第二段定价域）
+
+### 遗留
+
+1. **模型详情 404 语义**：现有码表只有数据面 400 的 `model_not_found`，后台详情复用它返回 400。若要求 404，需再加码或复用一个 404 通用码，留第二段裁定。
+2. 专属用户 ID 未校验存在性（表无外键），仅校验 `> 0` 与去重。
+3. `price_conflict` 已建档但实际使用在第二段（定价唯一真相源）。
+4. 未新增迁移（`0022`/`0023` 之外无占用）、未新增配置键。
+5. 本机无 gcc，`-race` 未跑；`gofmt` 未重排既有 CRLF 文件。

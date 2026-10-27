@@ -123,7 +123,7 @@ func (s *Service) CreateQuotaApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !quotaSource.limited {
-		mw.WriteError(w, r, apierr.Newf(apierr.CodeInvalidRequestBody,
+		mw.WriteError(w, r, apierr.Newf(apierr.CodeResourceStateConflict,
 			"当前套餐没有日额度上限，无需申请提额"))
 		return
 	}

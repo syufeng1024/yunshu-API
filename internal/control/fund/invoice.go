@@ -259,8 +259,8 @@ func (s *Service) insertInvoice(ctx context.Context, r *http.Request, uid int64,
 		return invoiceView{}, apierr.New(apierr.CodeInternalError)
 	}
 	if state != OrderStatePaid {
-		return invoiceView{}, apierr.Newf(apierr.CodeInvalidRequestBody,
-			fmt.Sprintf("订单状态为 %s，只有已支付订单可以开票", state))
+		return invoiceView{}, apierr.Newf(apierr.CodeResourceStateConflict,
+			fmt.Sprintf("订单当前状态为 %s，只有已支付订单可以开票", state))
 	}
 
 	var existingState string
@@ -271,10 +271,9 @@ func (s *Service) insertInvoice(ctx context.Context, r *http.Request, uid int64,
 		 ORDER BY id DESC LIMIT 1`, in.RechargeOrderID, uid).Scan(&existingState)
 	if err == nil {
 		if existingState == InvoiceStateIssued {
-			return invoiceView{}, apierr.Newf(apierr.CodeInvalidRequestBody,
-				"该订单已开具发票，不可重复申请")
+			return invoiceView{}, apierr.New(apierr.CodeInvoiceAlreadyIssued)
 		}
-		return invoiceView{}, apierr.Newf(apierr.CodeInvalidRequestBody,
+		return invoiceView{}, apierr.Newf(apierr.CodeResourceStateConflict,
 			fmt.Sprintf("该订单已有处理中的开票申请（%s）", existingState))
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -284,7 +283,7 @@ func (s *Service) insertInvoice(ctx context.Context, r *http.Request, uid int64,
 
 	remaining := payAmount - invoicedFen
 	if remaining <= 0 {
-		return invoiceView{}, apierr.Newf(apierr.CodeInvalidRequestBody,
+		return invoiceView{}, apierr.Newf(apierr.CodeResourceStateConflict,
 			"该订单可开票金额为 0 分")
 	}
 	amount := remaining

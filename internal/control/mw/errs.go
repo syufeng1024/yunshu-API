@@ -54,9 +54,11 @@ func PermissionDenied() *apierr.APIError { return apierr.New(apierr.CodePermissi
 // This is a body-shape exit only. Use it when correcting the named field would
 // make the request succeed: a missing confirm, a wrong type, a count outside
 // its 1–10 range, an expire_at in the past. A refusal the caller cannot fix by
-// editing the body — a quota ceiling, a lifecycle state — must use its own
-// code (see apierr.CodeKeyLimitReached), because pointing at a field that is
-// not the problem (and cannot be the fix) sends users to edit the wrong thing.
+// editing the body — a quota ceiling, a lifecycle state, an entitlement already
+// consumed — must use its own code (apierr.CodeKeyLimitReached,
+// apierr.CodeResourceStateConflict, apierr.CodeTrialAlreadyClaimed,
+// apierr.CodeInvoiceAlreadyIssued), because pointing at a field that is not the
+// problem (and cannot be the fix) sends users to edit the wrong thing.
 func InvalidField(path string) *apierr.APIError {
 	return apierr.Newf(apierr.CodeInvalidRequestBody, path)
 }

@@ -180,7 +180,7 @@ func (s *Service) insertRefund(ctx context.Context, r *http.Request, uid, rechar
 		 WHERE user_id = ? AND state IN ('APPLIED','APPROVED','PAYING')
 		 LIMIT 1`, uid).Scan(&activeID)
 	if err == nil {
-		return refundView{}, apierr.Newf(apierr.CodeInvalidRequestBody,
+		return refundView{}, apierr.Newf(apierr.CodeResourceStateConflict,
 			"该账号已有进行中的退款单，请等待处理完成后再申请")
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -200,8 +200,8 @@ func (s *Service) insertRefund(ctx context.Context, r *http.Request, uid, rechar
 		return refundView{}, apierr.New(apierr.CodeInternalError)
 	}
 	if orderState != OrderStatePaid {
-		return refundView{}, apierr.Newf(apierr.CodeInvalidRequestBody,
-			fmt.Sprintf("订单状态为 %s，只有已支付订单可以退款", orderState))
+		return refundView{}, apierr.Newf(apierr.CodeResourceStateConflict,
+			fmt.Sprintf("订单当前状态为 %s，只有已支付订单可以退款", orderState))
 	}
 
 	quote, err := s.Ledger.QuoteRefundTx(ctx, tx, ledger.RefundQuoteParams{
@@ -213,7 +213,7 @@ func (s *Service) insertRefund(ctx context.Context, r *http.Request, uid, rechar
 		return refundView{}, apierr.New(apierr.CodeInternalError)
 	}
 	if !quote.Eligible {
-		return refundView{}, apierr.Newf(apierr.CodeInvalidRequestBody, quote.Reason)
+		return refundView{}, apierr.Newf(apierr.CodeResourceStateConflict, quote.Reason)
 	}
 
 	refundNO := orderNo(now, randomDigits)
@@ -252,7 +252,7 @@ func (s *Service) insertRefund(ctx context.Context, r *http.Request, uid, rechar
 		return refundView{}, apierr.New(apierr.CodeInternalError)
 	}
 	if n, _ := upd.RowsAffected(); n != 1 {
-		return refundView{}, apierr.Newf(apierr.CodeInvalidRequestBody,
+		return refundView{}, apierr.Newf(apierr.CodeResourceStateConflict,
 			"订单状态已变化，请刷新后重试")
 	}
 

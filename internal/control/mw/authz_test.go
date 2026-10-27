@@ -6,28 +6,73 @@ import (
 	"testing"
 )
 
+// T15: the matrix is keyed by the PRD §6.3 four-role enum. This table states
+// each cell explicitly instead of deriving it from rolePermissions, so a typo
+// in the matrix fails here rather than agreeing with itself.
 func TestRolePermissionMatrix(t *testing.T) {
-	cases := []struct {
-		role string
-		perm Permission
-		want bool
-	}{
-		{"PERSONAL", PermModelRead, true},
-		{"PERSONAL", PermKeyWrite, true},
-		{"PERSONAL", PermAdminAll, false},
-		{"OPS", PermAdminAll, true},
-		{"OPS", PermKeyWrite, false},
-		{"FINANCE", PermAdminAll, true},
-		{"SUPER_ADMIN", PermAdminAll, true},
-		{"SUPER_ADMIN", PermKeyWrite, true},
-		{"", PermAdminAll, false},
-		{"NOT_A_ROLE", PermModelRead, false},
+	all := []Permission{
+		PermUserRead, PermUserWrite, PermKeyRead, PermKeyWrite,
+		PermModelRead, PermModelWrite, PermPriceWrite, PermGroupWrite,
+		PermChannelWrite, PermNoticeWrite, PermRiskWrite, PermConfigWrite,
+		PermFundRead, PermFundWrite, PermFundApprove, PermTicketReply,
+		PermAuditRead, PermAdminRead, PermAdminAll,
 	}
-	for _, c := range cases {
-		if got := Allows(c.role, c.perm); got != c.want {
-			t.Fatalf("Allows(%q, %q) = %v, want %v", c.role, c.perm, got, c.want)
+	want := map[string]map[Permission]bool{
+		"PERSONAL": {
+			PermUserRead: true, PermKeyRead: true, PermKeyWrite: true,
+			PermModelRead: true, PermFundRead: true, PermFundWrite: true,
+		},
+		"OPS": {
+			PermUserRead: true, PermUserWrite: true, PermModelRead: true,
+			PermModelWrite: true, PermPriceWrite: true, PermGroupWrite: true,
+			PermChannelWrite: true, PermNoticeWrite: true, PermRiskWrite: true,
+			PermConfigWrite: true, PermTicketReply: true, PermAuditRead: true,
+			PermAdminRead: true,
+		},
+		"FINANCE": {
+			PermFundRead: true, PermFundApprove: true, PermAuditRead: true,
+			PermModelRead: true, PermAdminRead: true,
+		},
+	}
+	for _, p := range all {
+		want["SUPER_ADMIN"] = setOn(want["SUPER_ADMIN"], p)
+	}
+
+	for _, role := range []string{"PERSONAL", "OPS", "FINANCE", "SUPER_ADMIN"} {
+		for _, p := range all {
+			if got := Allows(role, p); got != want[role][p] {
+				t.Errorf("Allows(%q, %q) = %v, want %v", role, p, got, want[role][p])
+			}
 		}
 	}
+
+	// The separation that protects money: OPS cannot approve fund movements,
+	// FINANCE cannot change prices or channels.
+	if Allows("OPS", PermFundApprove) || Allows("OPS", PermFundWrite) {
+		t.Error("OPS must not hold fund.approve / fund.write")
+	}
+	if Allows("FINANCE", PermPriceWrite) || Allows("FINANCE", PermChannelWrite) {
+		t.Error("FINANCE must not hold price.write / channel.write")
+	}
+	if Allows("OPS", PermAdminAll) || Allows("FINANCE", PermAdminAll) {
+		t.Error("admin.all is SUPER_ADMIN only; concrete permissions must guard admin routes")
+	}
+
+	// An unknown role grants nothing.
+	for _, p := range all {
+		if Allows("", p) || Allows("NOT_A_ROLE", p) {
+			t.Errorf("unknown role granted %q", p)
+		}
+	}
+}
+
+// setOn is a test helper: mark one permission true in a fresh map copy.
+func setOn(m map[Permission]bool, p Permission) map[Permission]bool {
+	if m == nil {
+		m = make(map[Permission]bool)
+	}
+	m[p] = true
+	return m
 }
 
 func TestRequireWithoutSessionIs401(t *testing.T) {
@@ -61,7 +106,7 @@ func TestRequireAllowedRole(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	r := httptest.NewRequest("GET", "/api/admin/whoami", nil)
-	r = r.WithContext(WithSession(r.Context(), &Session{UID: 1, Role: "OPS"}))
+	r = r.WithContext(WithSession(r.Context(), &Session{UID: 1, Role: "SUPER_ADMIN"}))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
 	if !called || rec.Code != http.StatusNoContent {

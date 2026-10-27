@@ -200,8 +200,11 @@ func TestQuotaApplyRejectedWithoutDailyCeiling(t *testing.T) {
 		"target_quota_micro": 100_000_000,
 		"apply_reason":       "无额度账户",
 	}, uid)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	if code := errorBody(t, rec).Error.Code; code != "resource_state_conflict" {
+		t.Fatalf("code=%q, want resource_state_conflict", code)
 	}
 	if msg := errorBody(t, rec).Error.Message; !strings.Contains(msg, "没有日额度上限") {
 		t.Fatalf("message=%q", msg)

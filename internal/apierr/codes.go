@@ -1,6 +1,6 @@
 // Package apierr is the only writer of error responses for the API data plane.
 //
-// The 70 codes, their HTTP statuses and retry semantics are copied from PRD
+// The 74 codes, their HTTP statuses and retry semantics are copied from PRD
 // V1.2 appendix E.1 (the single source of truth). Four codes were added by
 // errata E-21 because the console's session, credential, duplicate-account and
 // query-parameter conditions had no semantically correct row:
@@ -17,6 +17,19 @@
 // never act on, because editing count cannot lift a quota ceiling:
 //
 //	key_limit_reached       409  free tier already at its active-key ceiling
+//
+// T15 adds four conflict codes for refusals the caller cannot fix by editing
+// the request body. The rule is: if correcting the hinted field could make the
+// request succeed, the refusal is a body error (invalid_request_body); if no
+// edit to the body can help — an order moved on, an entitlement is spent, an
+// operator-side duplicate exists — it needs its own code. T13 had parked twelve
+// such refusals on invalid_request_body for a smaller diff; this change moves
+// ten of them (the other two really are body-value errors):
+//
+//	resource_state_conflict 409  illegal order/refund/quota-apply transition
+//	trial_already_claimed   409  device, phone, IP segment or account already claimed
+//	invoice_already_issued  409  the order already has an ISSUED invoice
+//	price_conflict          409  one model has conflicting price sources (T15 pricing)
 //
 // TDS §6.2 still carries older values for seven rows; those rows are
 // deliberately not followed:
@@ -81,7 +94,7 @@ const (
 	OptionalBilling
 )
 
-// The 70 codes. One constant per code; Codes() returns the same set in the
+// The 74 codes. One constant per code; Codes() returns the same set in the
 // order below. Adding or removing one requires updating codes_test.go's
 // fixture and the generated markdown table in the same change.
 const (
@@ -163,6 +176,11 @@ const (
 	CodeConfigItemNotFound = "config_item_not_found"
 	CodeConfigValueInvalid = "config_value_invalid"
 
+	CodeResourceStateConflict = "resource_state_conflict"
+	CodeTrialAlreadyClaimed   = "trial_already_claimed"
+	CodeInvoiceAlreadyIssued  = "invoice_already_issued"
+	CodePriceConflict         = "price_conflict"
+
 	CodeContentPolicyViolation = "content_policy_violation"
 )
 
@@ -182,7 +200,7 @@ type Spec struct {
 	Optional          OptionalFields
 }
 
-// specs is the metadata table: exactly 70 rows.
+// specs is the metadata table: exactly 74 rows.
 var specs = []Spec{
 	// E.1.1 鉴权与账号 (9)
 	{
@@ -559,7 +577,8 @@ var specs = []Spec{
 		Hint:    "携 request_id 联系客服",
 	},
 
-	// E.1.9 控制面 (9; E-21 added account_exists, T12 added key_limit_reached)
+	// E.1.9 控制面 (13; E-21 added account_exists, T12 added key_limit_reached,
+	// T15 added the four state/entitlement conflict codes)
 	{
 		Code: CodeKeyNotFound, Type: TypeInvalidRequest, HTTPStatus: 404,
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台接口",
@@ -616,6 +635,37 @@ var specs = []Spec{
 		Message: "配置值未通过校验：%s",
 		Hint:    "按 message 修正取值",
 	},
+	{
+		Code: CodeResourceStateConflict, Type: TypeConflict, HTTPStatus: 409,
+		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台接口 / 运营后台",
+		// Never a bare "conflict": the argument names the state that blocked
+		// the action (当前状态为 CLOSED / 已有进行中的退款单 / ...).
+		Message: "当前状态不允许该操作：%s",
+		Hint:    "刷新后重试；若单据状态异常请联系客服",
+	},
+	{
+		Code: CodeTrialAlreadyClaimed, Type: TypeConflict, HTTPStatus: 409,
+		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台接口",
+		// The four anti-abuse factors (device fingerprint, phone, IP segment,
+		// account) are deliberately not told apart: naming the matched factor
+		// would help an abuser probe which one to change.
+		Message: "该账号或设备已领取过体验额度",
+		Hint:    "每个设备、手机号与网络仅可领取一次；如有异议请联系客服",
+	},
+	{
+		Code: CodeInvoiceAlreadyIssued, Type: TypeConflict, HTTPStatus: 409,
+		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台接口",
+		Message: "该订单已开具发票，不可重复申请",
+		Hint:    "在发票记录中查看已开票据",
+	},
+	{
+		Code: CodePriceConflict, Type: TypeConflict, HTTPStatus: 409,
+		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "运营后台",
+		// The argument names both sources (table + row id) so operations can
+		// clear the duplicate instead of guessing which row is authoritative.
+		Message: "该模型存在多处配置且价格不一致：%s",
+		Hint:    "先清理冲突来源，再保存新单价",
+	},
 
 	// E.1.10 登记但不实现 (1)
 	{
@@ -644,7 +694,7 @@ var codeIndex = func() map[string]Spec {
 	return idx
 }()
 
-// Codes returns the 70 code strings in E.1 order.
+// Codes returns the 74 code strings in E.1 order.
 func Codes() []string {
 	out := make([]string, len(specs))
 	for i, s := range specs {

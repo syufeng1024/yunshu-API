@@ -129,7 +129,7 @@
 | [T12](T12-用户密钥与模型域API.md) | 用户 / 密钥 / 模型域 API | T11 | `internal/control/user/`、`.../key/`、`.../model/` | ✅ |
 | [T13](T13-资金域API.md) | 资金域 API（订单/退款/发票/提额/套餐） | T11,T04 | `internal/control/fund/` | 🟨 有条件通过（缺 QA） |
 | [T14](T14-用量账单与日志API.md) | 用量·账单·请求日志 API | T11 | `internal/control/usage/` | ⬜ |
-| [T15](T15-运营后台API.md) | 运营后台 API（渠道/模型/定价/分组/公告/风控） | T11,T05 | `internal/control/ops/` | ⬜ |
+| [T15](T15-运营后台API.md) | 运营后台 API（渠道/模型/定价/分组/公告/风控） | T11,T05 | `internal/control/ops/` | 🟨 第一段 ✅ |
 | [T16](T16-工单审核与模型主数据API.md) | 工单·审核中心·模型主数据 API | T15 | `internal/control/ticket/`、`.../review/` | ⬜ |
 
 ### 阶段 5 · 前端
@@ -222,6 +222,26 @@ flowchart LR
 | T12 | 2026-10-27 | 2026-10-27 | ✅ **通过**（含一次 P0 修复） | 12 项非阻塞 | 用户/密钥/模型域 9 个接口；E-21 码表 65→69 落地、P0 修复追加第 70 码 `key_limit_reached`；A1–A14 独立复跑，A7/A11 仅单测；277+44 turns / 2204s / $29.43 |
 | T13 | 2026-10-27 | 2026-10-27 | 🟨 **有条件通过**（两段已交付，**缺 QA 独立验证**） | 6 项遗留 + 7 条勘误 | 第一段 `a1e096a`（回调幂等/分账/兑换码）、第二段 `1d256c4`（退款/发票/提额/防刷）；`fund` 覆盖率 64.0%→66.7%；QA 首轮 429 中断 |
 | — | 2026-10-27 | 2026-10-27 | ✅ E-28 审计列宽（P1） | — | 迁移 `0023` 放宽 `result` 到 `varchar(24)`；`0022` 仍留 T22；修复被拒登录审计静默丢失 |
+| T15 第一段 | 2026-10-27 | 2026-10-27 | 🟨 已交付，待验收 | 5 项 | 状态码收敛 70→74、权限点 19 个 + 四角色矩阵、渠道 6 路由、模型主数据 5 路由；「10 角色」实为 4（E-30） |
+
+### T15 第一段验收记录（交付总监复核，2026-10-27）
+
+| 复核项 | 结果 | 证据 |
+| :--- | :--- | :--- |
+| 迁移/配置未动 | ✅ | `git status` 无 `migrate/**`、无 `internal/config/**` |
+| `go build` / `go vet` | ✅ | 零错误 |
+| `go test -count=1` | ✅ | control(+ops)、auth、fund、key、model、mw、units、user + apierr + ledger + apikey 共 12 包全绿 |
+| `lint.sh` 8 条 | ✅ | `all hard constraints hold` |
+| 码表 74 | ✅ | `docs/error-codes.md` 75 行 `\| \`` = 1 表头 + **74 数据行** |
+| 状态类收敛 | ✅ **只剩 2 处** | `grep CodeInvalidRequestBody internal/control/fund/*.go` → `invoice.go:294`（超额，改小即可成功）与 `quota_apply.go:136`（目标额超 5 倍，同上），均为真·body |
+| 越权矩阵 | ✅ **13/13** | `TestPersonalAccountGets403OnEveryAdminRoute` 13 个子测试全 PASS：`whoami` + 渠道 6 条 + 模型 6 条，`PERSONAL` 全 403 `permission_denied` |
+| 上游 Key 不泄漏 | ✅ | `channelView` 出参只有 `UpstreamKeyMask`，无 `upstream_key`/信封字段；明文仅存在于 `channelCreateRequest`/`channelPatchRequest` 入站 DTO |
+| 无浮点 | ✅ | `grep float32\|float64 internal/control/ops/` 为空 |
+
+**两条我自己确认过的判断题**：
+
+1. **`admin.read` 该不该加**——加。若后台读接口复用 `model.read`，`PERSONAL` 就能读到模型 `cost_*` 成本价和渠道 `base_url`，直接违反 B-48「成本价仅运营可见」。已登记 E-31。
+2. **「10 个角色」**——不存在。PRD §6.3、TDS 1209 行、openapi `UserRole` 三处都只有 4 个。照卡面的「10 个」写会让实现方编造角色名，一旦落库就是 `PermissionsFor` 返回空集、登录后全 403 且极难排查。按 4 个实现，登记 E-30。
 
 ### T13 验收记录（交付总监复核，2026-10-27）
 

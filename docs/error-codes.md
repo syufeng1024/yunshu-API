@@ -1,4 +1,4 @@
-# 错误码台账（70 条）
+# 错误码台账（74 条）
 
 > 本文件由 `apierr.MarkdownTable()` 生成，**不得手工编辑**。真相源是 PRD 附录 E.1 与 `internal/apierr/codes.go`。
 > 重新生成：写一段 10 行的临时程序打印 `apierr.MarkdownTable()` 到本文件（临时程序不入库），或等 T15 的后台「错误码导出」接口。
@@ -6,9 +6,10 @@
 ## 与 PRD E.1 的关系
 
 - HTTP 状态、`type`、可重试性、`hint` 规则、触发阶段 逐条对齐附录 E.1
-- 码总数固定 **70**，`codes_test.go` 断言 `len(Specs()) == 70`
+- 码总数固定 **74**，`codes_test.go` 断言 `len(Specs()) == 74`
 - 新增四码来自勘误 **E-21**（PRD E.1 尚未回写）：`session_expired`、`invalid_credentials`、`account_exists`、`invalid_query_parameter`；总数 65 → 69
-- 新增一码来自 **T12 硬约束 2**（PRD E.1 无对应行）：`key_limit_reached`（409 `conflict_error`，不可重试）——免费档活跃 Key 已达 `quota.free_max_active_keys` 上限。此前该拒绝复用 `invalid_request_body`，把合法请求体报成「不是合法 JSON：count」，误导用户去改一个改了也没用的字段；总数 69 → 70
+- 新增一码来自 **T12 硬约束 2**（PRD E.1 无对应行）：`key_limit_reached`（409 `conflict_error`，不可重试）——免费档活跃 Key 已达 `quota.free_max_active_keys` 上限；总数 69 → 70
+- 新增四码来自 **T15 状态类错误码收敛**（PRD E.1 无对应行）：`resource_state_conflict`、`trial_already_claimed`、`invoice_already_issued`、`price_conflict`（均 409 `conflict_error`，不可重试）。判定规则：按 hint 改请求体仍无法成功的拒绝属于状态/配额问题，必须有自己的码；T13 遗留的 12 处 `invalid_request_body` 中 10 处迁到新码，2 处保留（`amount_fen` 超过可开额度、`target_quota_micro` 超过 5 倍上限——改字段即可成功）；总数 70 → 74
 
 ## 全量清单
 
@@ -82,6 +83,9 @@
 | `channel_in_use` | `conflict_error` | 409 | 0 | no | BUSINESS | 运营后台 |
 | `config_item_not_found` | `invalid_request_error` | 404 | 0 | no | BUSINESS | 运营后台 |
 | `config_value_invalid` | `invalid_request_error` | 400 | 0 | no | BUSINESS | 运营后台 |
+| `resource_state_conflict` | `conflict_error` | 409 | 0 | no | BUSINESS | 控制台接口 / 运营后台 |
+| `trial_already_claimed` | `conflict_error` | 409 | 0 | no | BUSINESS | 控制台接口 |
+| `invoice_already_issued` | `conflict_error` | 409 | 0 | no | BUSINESS | 控制台接口 |
+| `price_conflict` | `conflict_error` | 409 | 0 | no | BUSINESS | 运营后台 |
 | `account_rpm_exceeded` | `rate_limit_exceeded` | 429 | 60 | duration | BUSINESS | P11（V1.0 不实现） |
 | `content_policy_violation` | `invalid_request_error` | 403 | 0 | no | BUSINESS | P04 / §8.4 |
-

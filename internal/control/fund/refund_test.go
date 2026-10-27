@@ -233,10 +233,13 @@ func TestRefundBlockedByIssuedInvoice(t *testing.T) {
 
 	rec = call(t, svc.CreateRefund, http.MethodPost, "/api/console/refunds",
 		map[string]any{"recharge_order_id": order.ID}, uid)
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusConflict {
 		t.Fatalf("refund on issued invoice status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	eb := errorBody(t, rec)
+	if eb.Error.Code != "resource_state_conflict" {
+		t.Fatalf("code = %q, want resource_state_conflict", eb.Error.Code)
+	}
 	if !strings.Contains(eb.Error.Message, "已开票") {
 		t.Fatalf("message = %q, want 已开票 refusal", eb.Error.Message)
 	}

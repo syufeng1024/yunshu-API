@@ -142,6 +142,8 @@ group_code 拒绝: A5 输出
 | 轮换 | 旧 Key `DISABLED`、新 Key `ENABLED`、明文只返回一次 |
 | 回归 B1–B6 | seedctl 3 表各 1；`cfg:snap:ROUTING` 含 keyModels；非流式 200 + `X-Credits-Consumed: 116`；usage/ledger（PREHOLD→RELEASE→SETTLE）落库、余额 100000→99748；流式有 `X-Credits-Preheld` 无 `X-Credits-Consumed`；无 Key/错 Key 401、越权模型 403 |
 
+> **码表后续演进**：本表里的「69 / 70 数据行 / `TestCodeCountIs69` / `TestCodeCountIs70`」是**当时**的状态。T15 第一段为收敛状态类拒绝又加了 4 码（`resource_state_conflict` / `trial_already_claimed` / `invoice_already_issued` / `price_conflict`），总数 **74**，断言已更名为 `TestCodeCountIs74` / `TestCodeConstantsCountIs74`。历史记录不改写，读到时以当前码表为准。
+
 ### 必修 1 项（P0，派 T13 前完成）—— ✅ 已关闭（2026-10-27）
 
 > **关闭说明**：本轮修复已由工程师交付、QA 三层验证、交付总监独立复跑后通过。证据见本节末尾「修复交付与验证」。以下保留原始问题描述，不删改，以便追溯「为什么会有第 70 个码」。

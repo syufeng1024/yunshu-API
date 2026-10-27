@@ -23,7 +23,9 @@ import (
 	"yunshu.dev/core/internal/control/key"
 	"yunshu.dev/core/internal/control/model"
 	"yunshu.dev/core/internal/control/mw"
+	"yunshu.dev/core/internal/control/ops"
 	"yunshu.dev/core/internal/control/user"
+	"yunshu.dev/core/internal/cryptobox"
 	obslog "yunshu.dev/core/internal/obs/log"
 	"yunshu.dev/core/internal/platform/clock"
 	"yunshu.dev/core/internal/redisx"
@@ -71,6 +73,7 @@ type Server struct {
 	keys   *key.Service
 	models *model.Service
 	fund   *fund.Service
+	ops    *ops.Service
 }
 
 // New validates the wiring and builds the server.
@@ -91,6 +94,17 @@ func New(d Deps) (*Server, error) {
 	funds.PublishRoutes = d.PublishRoutes
 	funds.Mailer = d.Mailer
 	funds.FingerprintKey = d.FingerprintKey
+
+	// CHANNEL_KEY_KEK is required only by the channel write path. A missing or
+	// malformed KEK leaves Box nil: reads still work, and creating or rotating
+	// an upstream key answers 503 config_unavailable instead of storing
+	// plaintext or an envelope no node can open.
+	box, boxErr := cryptobox.FromEnv()
+	if boxErr != nil && d.Logger != nil {
+		d.Logger.Warn(context.TODO(), "control: CHANNEL_KEY_KEK unavailable: "+boxErr.Error(),
+			obslog.Fields{Stage: "control"})
+	}
+	opss := ops.New(d.DB, d.Audit, d.Now, d.Logger, d.PublishRoutes, box)
 	return &Server{
 		d: d,
 		auth: &auth.Service{
@@ -104,6 +118,7 @@ func New(d Deps) (*Server, error) {
 		keys:   keys,
 		models: model.New(d.DB, d.Now, d.Logger),
 		fund:   funds,
+		ops:    opss,
 	}, nil
 }
 
@@ -156,9 +171,30 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// route must never be wired through s.authed (no cookie, no sid).
 	mux.Handle("POST /api/v1/pay/callback/{channel}", s.public(s.fund.Callback))
 
-	// Admin: the first segment wires one read-only diagnostic. The business
-	// admin endpoints arrive with T15 and inherit the same admin.all gate.
+	// Admin: whoami stays behind admin.all. Business admin routes declare the
+	// concrete permission instead: OPS may write channels/models, FINANCE may
+	// read models, and neither gets admin.all.
 	mux.Handle("GET /api/admin/whoami", s.authed(mw.PermAdminAll, s.handleAdminWhoami))
+
+	// Operator channels. Reads use admin.read, not model.read: PERSONAL holds
+	// model.read for the console catalog, and these views expose base_url and
+	// key masks. Mutations need channel.write.
+	mux.Handle("GET /api/admin/channels", s.authed(mw.PermAdminRead, s.ops.ListChannels))
+	mux.Handle("GET /api/admin/channels/{id}", s.authed(mw.PermAdminRead, s.ops.GetChannel))
+	mux.Handle("POST /api/admin/channels", s.authed(mw.PermChannelWrite, s.ops.CreateChannel))
+	mux.Handle("PATCH /api/admin/channels/{id}", s.authed(mw.PermChannelWrite, s.ops.UpdateChannel))
+	mux.Handle("POST /api/admin/channels/{id}/disable", s.authed(mw.PermChannelWrite, s.ops.DisableChannel))
+	mux.Handle("DELETE /api/admin/channels/{id}", s.authed(mw.PermChannelWrite, s.ops.DeleteChannel))
+
+	// Operator model master data. Reads use admin.read because this view
+	// includes upstream cost prices; model.read stays the console catalog's
+	// permission.
+	mux.Handle("GET /api/admin/models", s.authed(mw.PermAdminRead, s.ops.ListModels))
+	mux.Handle("GET /api/admin/models/{id}", s.authed(mw.PermAdminRead, s.ops.GetModel))
+	mux.Handle("POST /api/admin/models", s.authed(mw.PermModelWrite, s.ops.CreateModel))
+	mux.Handle("PATCH /api/admin/models/{id}", s.authed(mw.PermModelWrite, s.ops.UpdateModel))
+	mux.Handle("POST /api/admin/models/{id}/listing-state", s.authed(mw.PermModelWrite, s.ops.SetListingState))
+	mux.Handle("POST /api/admin/models/{id}/recommend-weight", s.authed(mw.PermModelWrite, s.ops.SetRecommendWeight))
 
 	// Unknown /api paths return the shared error envelope instead of net/http's
 	// plain-text 404.

@@ -47,10 +47,14 @@ func TestA5InvoiceGatesAndIssuedLock(t *testing.T) {
 		t.Fatalf("tax_rate_bp = %d, want 10000 (1.00, Q-03)", created.Invoice.TaxRateBP)
 	}
 
-	// 3. A second application while the first is in flight.
+	// 3. A second application while the first is in flight. Editing the body
+	// cannot make it succeed, so the refusal is a 409 state conflict (T15).
 	rec = call(t, svc.CreateInvoice, http.MethodPost, "/api/console/invoices", body, uid)
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusConflict {
 		t.Fatalf("duplicate status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if code := errorBody(t, rec).Error.Code; code != "resource_state_conflict" {
+		t.Fatalf("duplicate code=%q, want resource_state_conflict", code)
 	}
 	if msg := errorBody(t, rec).Error.Message; !strings.Contains(msg, "处理中") {
 		t.Fatalf("duplicate message=%q, want 处理中", msg)
@@ -75,8 +79,11 @@ func TestA5InvoiceGatesAndIssuedLock(t *testing.T) {
 	}
 
 	rec = call(t, svc.CreateInvoice, http.MethodPost, "/api/console/invoices", body, uid)
-	if rec.Code != http.StatusBadRequest {
+	if rec.Code != http.StatusConflict {
 		t.Fatalf("after ISSUED status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if code := errorBody(t, rec).Error.Code; code != "invoice_already_issued" {
+		t.Fatalf("after ISSUED code=%q, want invoice_already_issued", code)
 	}
 	if msg := errorBody(t, rec).Error.Message; !strings.Contains(msg, "已开具") {
 		t.Fatalf("after ISSUED message=%q, want 已开具", msg)
@@ -97,6 +104,11 @@ func TestA5InvoiceGatesAndIssuedLock(t *testing.T) {
 	rec = call(t, svc.CreateInvoice, http.MethodPost, "/api/console/invoices", over, uid)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("over-amount status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	// amount_fen is in the body and reducing it *does* make the request
+	// succeed, so this one stays invalid_request_body (T15).
+	if code := errorBody(t, rec).Error.Code; code != "invalid_request_body" {
+		t.Fatalf("over-amount code=%q, want invalid_request_body", code)
 	}
 	msg := errorBody(t, rec).Error.Message
 	if !strings.Contains(msg, "剩余可开 9900 分") {

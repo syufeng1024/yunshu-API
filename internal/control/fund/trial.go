@@ -77,7 +77,7 @@ func (s *Service) ClaimTrial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if deviceClaimed > 0 {
-		mw.WriteError(w, r, trialRefusal("该设备已领取过体验额度"))
+		mw.WriteError(w, r, trialRefusal())
 		return
 	}
 
@@ -108,7 +108,7 @@ func (s *Service) ClaimTrial(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if phoneClaimed > 0 {
-			mw.WriteError(w, r, trialRefusal("该手机号绑定的账号已领取过体验额度"))
+			mw.WriteError(w, r, trialRefusal())
 			return
 		}
 	}
@@ -121,11 +121,11 @@ func (s *Service) ClaimTrial(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ipBlocked {
-		mw.WriteError(w, r, trialRefusal("该网络地址已领取过体验额度"))
+		mw.WriteError(w, r, trialRefusal())
 		return
 	}
 	if claimedAt.Valid {
-		mw.WriteError(w, r, trialRefusal("该账号已领取过体验额度"))
+		mw.WriteError(w, r, trialRefusal())
 		return
 	}
 
@@ -245,11 +245,8 @@ func (s *Service) ClaimTrial(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}()
 	switch {
-	case errors.Is(err, errTrialAlreadyClaimed):
-		mw.WriteError(w, r, trialRefusal("该账号已领取过体验额度"))
-		return
-	case errors.Is(err, errTrialDeviceClaimed):
-		mw.WriteError(w, r, trialRefusal("该设备已领取过体验额度"))
+	case errors.Is(err, errTrialAlreadyClaimed), errors.Is(err, errTrialDeviceClaimed):
+		mw.WriteError(w, r, trialRefusal())
 		return
 	case err != nil:
 		s.logError(ctx, "fund_trial_claim_failed: "+err.Error())
@@ -280,8 +277,11 @@ var (
 	errTrialDeviceClaimed  = errors.New("fund: trial already granted to this device")
 )
 
-func trialRefusal(reason string) *apierr.APIError {
-	return apierr.Newf(apierr.CodeInvalidRequestBody, reason)
+// trialRefusal answers every anti-abuse hit (device, phone, IP segment and the
+// account's own earlier claim). The four factors deliberately share one message:
+// naming the matched factor would tell an abuser which one to change next.
+func trialRefusal() *apierr.APIError {
+	return apierr.New(apierr.CodeTrialAlreadyClaimed)
 }
 
 // fingerprintHash is HMAC-SHA256(raw, FP_HMAC_KEY) in lowercase hex. The HMAC

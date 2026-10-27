@@ -3,6 +3,7 @@ package fund
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -55,44 +56,41 @@ func TestA7TrialAntiAbuse(t *testing.T) {
 		granted.GrantedCredits, granted.PlanCode, granted.TrialExpireAt)
 
 	// Same fingerprint, different account and IP.
+	assertTrialClaimed := func(label string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if rec.Code != http.StatusConflict {
+			t.Fatalf("%s status=%d body=%s", label, rec.Code, rec.Body.String())
+		}
+		eb := errorBody(t, rec)
+		if eb.Error.Code != "trial_already_claimed" {
+			t.Fatalf("%s code=%q, want trial_already_claimed", label, eb.Error.Code)
+		}
+		// The four factors share one message on purpose (no probing which one
+		// matched).
+		if !strings.Contains(eb.Error.Message, "该账号或设备已领取过体验额度") {
+			t.Fatalf("%s message=%q", label, eb.Error.Message)
+		}
+		t.Logf("%s refusal: HTTP %d code=%s", label, rec.Code, eb.Error.Code)
+	}
+
 	rec = callWithRemote(t, svc.ClaimTrial, http.MethodPost, "/api/console/trial/claim",
 		map[string]any{"fingerprint": "device-alpha"}, u2, "198.51.100.20:4111", nil)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("same fingerprint status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if msg := errorBody(t, rec).Error.Message; !strings.Contains(msg, "该设备已领取过体验额度") {
-		t.Fatalf("same fingerprint message=%q", msg)
-	}
-	t.Logf("same fingerprint refusal: %s", errorBody(t, rec).Error.Message)
+	assertTrialClaimed("same fingerprint", rec)
 
 	// Different fingerprint, same phone.
 	rec = callWithRemote(t, svc.ClaimTrial, http.MethodPost, "/api/console/trial/claim",
 		map[string]any{"fingerprint": "device-beta"}, u3, "192.0.2.30:4111", nil)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("same phone status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if msg := errorBody(t, rec).Error.Message; !strings.Contains(msg, "手机号") {
-		t.Fatalf("same phone message=%q", msg)
-	}
-	t.Logf("same phone refusal: %s", errorBody(t, rec).Error.Message)
+	assertTrialClaimed("same phone", rec)
 
 	// Different fingerprint and phone, but the same /24 as the first claim.
 	rec = callWithRemote(t, svc.ClaimTrial, http.MethodPost, "/api/console/trial/claim",
 		map[string]any{"fingerprint": "device-gamma"}, u4, "203.0.113.99:4111", nil)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("same /24 status=%d body=%s", rec.Code, rec.Body.String())
-	}
-	if msg := errorBody(t, rec).Error.Message; !strings.Contains(msg, "网络地址") {
-		t.Fatalf("same /24 message=%q", msg)
-	}
-	t.Logf("same /24 refusal: %s", errorBody(t, rec).Error.Message)
+	assertTrialClaimed("same /24", rec)
 
 	// The first account cannot claim twice either.
 	rec = callWithRemote(t, svc.ClaimTrial, http.MethodPost, "/api/console/trial/claim",
 		map[string]any{"fingerprint": "device-delta"}, u1, "203.0.113.10:4111", nil)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("second claim by same user status=%d body=%s", rec.Code, rec.Body.String())
-	}
+	assertTrialClaimed("second claim by same user", rec)
 	if n := countNotifications(t, u1, eventRefundArrived); n != 0 {
 		t.Fatalf("trial claim wrote %d refund notifications, want 0", n)
 	}

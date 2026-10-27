@@ -654,7 +654,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CreatedRefund'
         '400':
-          description: order_id 非法 / 订单不可退 / 低于起退额 / 已开票 / 已有进行中的退款（invalid_request_body，message 带原因）
+          description: order_id 缺失或非法（invalid_request_body，改字段即可成功）
           content:
             application/json:
               schema:
@@ -666,7 +666,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '409':
-          description: 同一 Idempotency-Key 的首次请求仍在处理中（request_in_flight）
+          description: >-
+            同一 Idempotency-Key 的首次请求仍在处理中（request_in_flight）；或订单不可退 / 低于起退额 / 已开票 /
+            已有进行中的退款（resource_state_conflict，message 带原因）
           content:
             application/json:
               schema:
@@ -744,7 +746,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CreatedInvoice'
         '400':
-          description: 字段非法 / 金额超过可开额度 / 同订单已有处理中的申请（invalid_request_body）
+          description: 字段非法（invalid_request_body）：tax_no 缺失、标题为空、amount_fen 超过可开额度
           content:
             application/json:
               schema:
@@ -757,6 +759,14 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '403':
           description: 未实名（account_not_verified）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: >-
+            订单非已支付 / 已有处理中的申请（resource_state_conflict）；
+            同订单已开具发票（invoice_already_issued）
           content:
             application/json:
               schema:
@@ -834,13 +844,19 @@ paths:
               schema:
                 $ref: '#/components/schemas/CreatedQuotaApply'
         '400':
-          description: 字段非法 / 超过 5 倍上限 / 当前套餐无日额度（invalid_request_body）
+          description: 字段非法 / target_quota_micro 超过当前日额度的 5 倍（invalid_request_body）
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '401':
           description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 当前套餐没有日额度上限，无需申请提额（resource_state_conflict）
           content:
             application/json:
               schema:
@@ -866,13 +882,21 @@ paths:
               schema:
                 $ref: '#/components/schemas/TrialClaimResult'
         '400':
-          description: 指纹非法 / 任一防刷因子命中（invalid_request_body，message 指明缺哪一项）
+          description: fingerprint 缺失或超长（invalid_request_body）
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '401':
           description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: >-
+            设备指纹 / 手机号 / IP 段 / 账号任一命中防刷规则（trial_already_claimed）。
+            四类因子共用一条 message，不披露命中哪一项。
           content:
             application/json:
               schema:
