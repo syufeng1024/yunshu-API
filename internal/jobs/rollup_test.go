@@ -258,6 +258,11 @@ func openSessionTimeZone(t *testing.T, tz string) *sql.DB {
 	if err != nil {
 		t.Fatalf("parse DSN: %v", err)
 	}
+	// setupDatabase pins the schema to jobsSchema whatever TEST_DB_DSN says, so
+	// this second pool has to follow: reading the raw DSN here would point at
+	// another package's schema and the row written by the rollup would be
+	// invisible.
+	cfg.DBName = jobsSchema
 	if cfg.Params == nil {
 		cfg.Params = map[string]string{}
 	}

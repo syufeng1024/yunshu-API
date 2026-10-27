@@ -24,6 +24,9 @@ import (
 // another package's fixtures.
 const defaultTestDSN = "root:root@tcp(127.0.0.1:13306)/yunshu_recon_test?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
 
+// reconSchema is the schema these tests always own, whatever TEST_DB_DSN says.
+const reconSchema = "yunshu_recon_test"
+
 var (
 	testDB     *sql.DB
 	safeDBName = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
@@ -50,9 +53,12 @@ func setupDatabase() error {
 	if err != nil {
 		return fmt.Errorf("parse TEST_DB_DSN: %w", err)
 	}
-	if cfg.DBName == "" {
-		cfg.DBName = "yunshu_recon_test"
-	}
+	// Only host and credentials are inherited from TEST_DB_DSN. The schema name
+	// stays recon-owned: CI exports a single TEST_DB_DSN pointing at
+	// yunshu_test for every package, and if recon joined it the global scans
+	// above would (a) read another package's fixtures and (b) race that
+	// package's migration runner under `go test -p N`.
+	cfg.DBName = reconSchema
 	if !safeDBName.MatchString(cfg.DBName) {
 		return fmt.Errorf("unsafe database name %q", cfg.DBName)
 	}
@@ -98,7 +104,10 @@ func setupDatabase() error {
 		return fmt.Errorf("lock conn: %w", err)
 	}
 	var locked sql.NullInt64
-	if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK('yunshu_recon_test_migrate', 120)`).Scan(&locked); err != nil || !locked.Valid || locked.Int64 != 1 {
+	// Lock name follows the schema actually in use, so a package that ends up
+	// on the same schema through TEST_DB_DSN still serialises against it.
+	lockName := dbName + "_migrate"
+	if err := conn.QueryRowContext(ctx, `SELECT GET_LOCK(?, 120)`, lockName).Scan(&locked); err != nil || !locked.Valid || locked.Int64 != 1 {
 		return fmt.Errorf("migration lock: %v %v", err, locked)
 	}
 
@@ -111,7 +120,7 @@ func setupDatabase() error {
 	if _, err := runner.Up(ctx); err != nil {
 		return fmt.Errorf("apply migrations: %w", err)
 	}
-	_, _ = conn.ExecContext(ctx, `SELECT RELEASE_LOCK('yunshu_recon_test_migrate')`)
+	_, _ = conn.ExecContext(ctx, `SELECT RELEASE_LOCK(?)`, lockName)
 	_ = conn.Close()
 	return nil
 }
