@@ -206,3 +206,22 @@ A10 挖出的问题是本轮最有价值的：**引擎有能力但没人验**，
 **T19/T20 需要给 e2e 预留的两个钩子**（写进那两张卡）：
 - 密钥详情页必须能用「不出现在 DOM/URL/storage 的明文 Key」渲染（`F4-2` 的观测点）
 - 登录页要能被两个独立会话驱动（`F7-1` 需要 A/B 两个账号）
+
+---
+
+## 11. 首次上线后的 CI 排障（2026-10-27，run #1–#8）
+
+CI 上线后连续失败 6 次。逐个 job / step 拉出来看，是**三个互不相关的根因**，不是同一个问题反复。
+
+| # | 现象 | 根因 | 影响面 | 修法 |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | `Initialize containers` 失败，带 MySQL service 的 job 全挂 | `services.mysql.options` 里写了 `--character-set-server` / `--collation-server`。GitHub Actions 会把 `options` 整段拼进 `docker create` 的参数位，这两个是**容器 CMD 参数**不是 docker flag → `docker create` exit 125（unknown flag），容器根本没起来 | unit / coverage / acceptance 三个 job | 从 `options` 里删掉这两项。排序规则无关紧要：每个包的 `testmain_test.go` 建库时都显式 `COLLATE utf8mb4_0900_as_cs` |
+| 2 | `static` job 的 `lint + hard-constraint scans` 失败 | `golangci-lint` 的 `ineffassign`：`internal/ledger/settle.go` 里 `curRecharge` 全函数无读者、`curBonus` 的最后一次写入在其读取点之后 | static | 删掉死赋值（行为等价，`ledger`/`settle` 测试绿） |
+| 3 | 容器起来后，`coverage gate` 与 `acceptance` 仍红 | `internal/jobs` 与 `internal/recon` 共用 `yunshu_test`：recon 的 R-01..R-08 是全表扫描，jobs 的 rollup 也是；两包在 `go test` 默认并发下既互相看见对方的 fixture，又抢同一批确定性 `batch_no`，撞 `t_credit_batch.uk_cb_no` | coverage / acceptance | 两包只从 `TEST_DB_DSN` 继承 host 与凭据，schema 固定各自独占（`yunshu_jobs_test` / `yunshu_recon_test`），迁移锁名跟随实际 schema；连带修 `openSessionTimeZone` 自建连接池未钉 schema |
+
+**结论**：run #8（`e3de57d`）五个 job 全绿 —— `static` / `unit (-race)` / `migrations` / `coverage gate` / `acceptance`。
+
+**两个值得记住的教训**：
+
+1. **`services.*.options` 不是给镜像传参的地方**。需要服务端参数时要么用 `command:`，要么在应用侧解决。写进 `options` 会让容器起不来，而错误信息（`unknown flag`）跟 MySQL 毫无关系，很容易误判成镜像问题。
+2. **`-race` 在 Linux 上是能过的**。这一条之前一直悬着（本机无 gcc），现在有 CI 证据：`unit (-race, real MySQL 8.0 + Redis 7)` 通过。并发正确性（幂等、预扣、结算、导出锁）第一次得到真实工具验证。
