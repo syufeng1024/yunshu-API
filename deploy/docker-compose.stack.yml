@@ -20,7 +20,11 @@ x-app-env: &app-env
   TZ: ${TZ:-Asia/Shanghai}
   # 容器内用服务名寻址，不能用 127.0.0.1。
   DB_DSN: ${DB_DSN:-root:${MYSQL_ROOT_PASSWORD:-root}@tcp(mysql:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4}
-  LOG_SQL_DSN: ${LOG_SQL_DSN:-root:${MYSQL_ROOT_PASSWORD:-root}@tcp(mysql:3306)/yunshu_log?parseTime=true&loc=UTC&charset=utf8mb4}
+  # 日志库。默认与 GW_WRITE_DSN 同库：迁移只对 DB_DSN（yunshu）执行，
+  # 指向独立的 yunshu_log 会让那个 schema 里一张表都没有，/api/console/logs
+  # 对所有人 500（Table 'yunshu_log.t_usage_record' doesn't exist）。
+  # 真正分离日志库时，必须先把同样的迁移应用到该库，再在这里指向它。
+  LOG_SQL_DSN: ${LOG_SQL_DSN:-root:${MYSQL_ROOT_PASSWORD:-root}@tcp(mysql:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4}
   GW_WRITE_DSN: ${GW_WRITE_DSN:-root:${MYSQL_ROOT_PASSWORD:-root}@tcp(mysql:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4}
   REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
   REDIS_PASSWORD: ${REDIS_PASSWORD:-}
