@@ -53,6 +53,9 @@ var adminRoutes = []struct {
 	{http.MethodPatch, "/api/admin/models/1"},
 	{http.MethodPost, "/api/admin/models/1/listing-state"},
 	{http.MethodPost, "/api/admin/models/1/recommend-weight"},
+	{http.MethodGet, "/api/admin/models/1/aliases"},
+	{http.MethodPost, "/api/admin/models/1/aliases"},
+	{http.MethodDelete, "/api/admin/models/1/aliases/qwen-max"},
 	{http.MethodGet, "/api/admin/prices"},
 	{http.MethodPost, "/api/admin/prices"},
 	{http.MethodPatch, "/api/admin/prices/1"},
@@ -79,6 +82,10 @@ var adminRoutes = []struct {
 	{http.MethodGet, "/api/admin/tickets"},
 	{http.MethodPost, "/api/admin/tickets/1/reply"},
 	{http.MethodPost, "/api/admin/tickets/1/state"},
+	// T16 review centre: fund.approve is FINANCE/SUPER_ADMIN only.
+	{http.MethodGet, "/api/admin/reviews"},
+	{http.MethodPost, "/api/admin/reviews/1/approve"},
+	{http.MethodPost, "/api/admin/reviews/1/reject"},
 }
 
 func TestPersonalAccountGets403OnEveryAdminRoute(t *testing.T) {

@@ -103,6 +103,15 @@ func newTestUser(t *testing.T, planID *int64) int64 {
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_ledger_entry WHERE user_id = ?`, uid)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_credit_batch WHERE user_id = ?`, uid)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_rate_limit_policy WHERE scope_id = ? AND scope_type = 'USER'`, uid)
+		_, _ = testDB.ExecContext(ctx, `DELETE rt FROM t_review_task rt
+			JOIN t_refund_order r ON r.id = rt.biz_id AND rt.biz_type = 'REFUND_APPLY'
+			WHERE r.user_id = ?`, uid)
+		_, _ = testDB.ExecContext(ctx, `DELETE rt FROM t_review_task rt
+			JOIN t_invoice_apply i ON i.id = rt.biz_id AND rt.biz_type = 'INVOICE_APPLY'
+			WHERE i.user_id = ?`, uid)
+		_, _ = testDB.ExecContext(ctx, `DELETE rt FROM t_review_task rt
+			JOIN t_quota_apply q ON q.id = rt.biz_id AND rt.biz_type = 'QUOTA_APPLY'
+			WHERE q.user_id = ?`, uid)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_refund_order WHERE user_id = ?`, uid)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_invoice_apply WHERE user_id = ?`, uid)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_quota_apply WHERE user_id = ?`, uid)

@@ -141,3 +141,49 @@ SLA: A11 输出（证明未自动关闭）
 2. **48h 答复倒计时未落**：`t_ticket` 无对应列，且没有用户回复路由，计时基准不存在；本段只落 4h 首次响应。
 3. **运营侧无工单详情路由**：卡面接口表未列 `GET /api/admin/tickets/{id}`，运营目前只能看列表，内部备注只能写不能读回（用户侧已确认不可见）。这是接口表本身的缺口，留待补卡。
 4. 内容申诉额外按 TDS §8.4.5 置 `action='APPEAL_PENDING'`、写 `appeal_at`/`appeal_note`，并拒 30 天外/已复核的命中——卡面只写「自动带出」，此为源文档补充口径。
+
+---
+
+## 10. 第二段交付记录（2026-10-27）· 审核中心 + 模型主数据
+
+新增 `internal/control/review/`、`internal/control/ops/{alias.go,model_filter_test.go}`；改 `ops/model.go`（别名、改名、筛选）、`fund/{service,quota_apply,refund,invoice}.go`（提交时同事务入队）、`server.go`。**未新增迁移、未新增配置键、未新增错误码**。
+
+### 接口与权限
+
+| 路径 | 方法 | 权限点 |
+| :--- | :--- | :--- |
+| `/api/admin/reviews` | GET | `fund.approve` |
+| `/api/admin/reviews/{id}/approve` | POST | `fund.approve` |
+| `/api/admin/reviews/{id}/reject` | POST | `fund.approve` |
+| `/api/admin/models/{id}/aliases` | GET / POST | `admin.read` / `model.write` |
+| `/api/admin/models/{id}/aliases/{alias}` | DELETE | `model.write` |
+
+审核用 `fund.approve` 而非 `admin.read`：OPS 可以改价改渠道但**不能**批退款，PERSONAL 持有 `fund.write`（自己下单）但不能进审批队列；`fund.approve` 是唯一与「资金审批 + 职责分离」一致的既有权限点。
+
+### 关键验收
+
+| 验收 | 结果 |
+| :--- | :--- |
+| A6 默认 PENDING + 提交时间升序 | ✅ 插入顺序 r3(570)/r1(571)/r2(572)，返回 r1→r2→r3，证明按 `created_at` 而非 id；筛选后仍升序；已终态不在默认 Tab |
+| 待办异常项 | ✅ 业务行已删的队列项返回 200 + `anomaly=true`，不 500 |
+| A7 驳回理由必填 | ✅ 缺失 / 空对象 / 纯空白 / 超长 四种都 400；填理由后写入 `decision_note` + 业务表 `reject_reason`，申请人在自己入口读回同一句 |
+| A8 自审系统级拒绝 | ✅ approve 与 reject **两条路径**都在任何副作用前返回 403 `permission_denied`，业务行与队列行均保持 `PENDING` |
+| A17 审批幂等 | ✅ 第二次审批 409 `resource_state_conflict`；`t_rate_limit_policy` 始终 1 行、`decided_at` 未变 |
+| A13 改名同步 | ✅ 改名后 `/api/admin/prices` 与 `/api/console/models` 读到的名称同步（两边都 JOIN `t_model.model_name`）；`t_usage_record.model_name_snap` 是**历史快照，不同步** |
+| A14 别名唯一 | ✅ 别名撞他人别名 / 撞他人模型名 均 409 并**列出冲突模型 id + model_name**；因表是 `as_cs`，`qwen-Max ≠ qwen-max`，代码未做归一化 |
+| A16 筛选 | ✅ `model_type` / `listing_state` / `region` 三种筛选各返回正确集合，每行带 `listing_state` 供标色 |
+| F22-3 草稿留痕 | ✅ `t_announcement` 无 reason 列，理由写进 ANNOUNCEMENT 审计的 `after_json` 与模型 `LISTING_STATE_CHANGE` 审计 |
+| 全仓回归 | ✅ **37 包 ok / 0 FAIL**（连续跑 5 次）；lint 8 条通过 |
+
+### 两处对 T13 代码的改动（需特别留意）
+
+1. **提交时同事务入队**：`CreateQuotaApply` / `CreateRefund` / `CreateInvoice` 在各自事务里调 `fund.insertReviewTaskTx`，保证「队列与业务状态永不分叉」。`uk_rt_biz` 使重试成为幂等空操作。
+2. **`withQuotaTx` 加有界重试**：并发提额审批会向 `t_rate_limit_policy` 插相邻行，InnoDB 可能选一方做死锁牺牲者（1213）导致 500。现只对 1213/1205 重试，最多 3 次、20ms/40ms 退避、`ctx.Done()` 可中断；安全性前提是 `fn` 每次都在 `FOR UPDATE` 下重读状态（已成立）。
+
+### 遗留
+
+1. **开票驳回缺导出方法**：`fund` 没有 `RejectInvoice`。本段不直接写 `t_invoice_apply`（否则发票状态机出现第二个写者），驳回返回 409 并保持 `PENDING`。需资金域补 `RejectInvoice(ctx, invoiceID, auditorID, reason)`。
+2. **`REDEEM_BATCH` / `BALANCE_ADJUST` 无业务闭环**：前者 `t_redeem_batch` 无状态列、无生成入口；后者无业务表。两类不产生队列行；人工造出的队列行会被 409 拒绝，不伪造进度。
+3. **分组开通 / 渠道专属未实现**：不在五个 `biz_type` 枚举内，也无提交入口，需先裁定枚举与入口（不能靠新迁移改注释）。
+4. **无转交接口**：`assignee_id` 只读返回、从不写入，「当前处理人」列恒空。
+5. `openapi.yaml` 未追加本段与 T15 的 `/api/admin/*`，属既有缺口，留 T19/T20 生成前端类型前一并补。

@@ -233,6 +233,10 @@ func (s *Service) insertRefund(ctx context.Context, r *http.Request, uid, rechar
 		s.logError(ctx, "fund_refund_id_failed: "+err.Error())
 		return refundView{}, apierr.New(apierr.CodeInternalError)
 	}
+	if err := insertReviewTaskTx(ctx, tx, reviewBizRefundApply, refundID, uid, now); err != nil {
+		s.logError(ctx, "fund_refund_review_enqueue_failed: "+err.Error())
+		return refundView{}, apierr.New(apierr.CodeInternalError)
+	}
 
 	if err := s.Ledger.FreezeRefundTx(ctx, tx, uid, quote.RefundableMicro); err != nil {
 		s.logError(ctx, "fund_refund_freeze_failed: "+err.Error())

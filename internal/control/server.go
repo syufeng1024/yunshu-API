@@ -26,6 +26,7 @@ import (
 	"yunshu.dev/core/internal/control/model"
 	"yunshu.dev/core/internal/control/mw"
 	"yunshu.dev/core/internal/control/ops"
+	"yunshu.dev/core/internal/control/review"
 	"yunshu.dev/core/internal/control/ticket"
 	"yunshu.dev/core/internal/control/user"
 	"yunshu.dev/core/internal/cryptobox"
@@ -83,6 +84,7 @@ type Server struct {
 	fund    *fund.Service
 	ops     *ops.Service
 	tickets *ticket.Service
+	reviews *review.Service
 }
 
 // New validates the wiring and builds the server.
@@ -128,6 +130,9 @@ func New(d Deps) (*Server, error) {
 	if d.Mailer != nil {
 		tickets.Mailer = d.Mailer
 	}
+	// The review centre decides through the fund service; it has no balance
+	// writer of its own.
+	reviews := review.New(d.DB, d.Audit, d.Now, d.Logger, funds)
 	return &Server{
 		d: d,
 		auth: &auth.Service{
@@ -143,6 +148,7 @@ func New(d Deps) (*Server, error) {
 		fund:    funds,
 		ops:     opss,
 		tickets: tickets,
+		reviews: reviews,
 	}, nil
 }
 
@@ -219,6 +225,11 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/admin/models/{id}", s.authed(mw.PermModelWrite, s.ops.UpdateModel))
 	mux.Handle("POST /api/admin/models/{id}/listing-state", s.authed(mw.PermModelWrite, s.ops.SetListingState))
 	mux.Handle("POST /api/admin/models/{id}/recommend-weight", s.authed(mw.PermModelWrite, s.ops.SetRecommendWeight))
+	// Aliases are part of model master data (F22-2). Reads follow the admin
+	// read permission; mutations require model.write.
+	mux.Handle("GET /api/admin/models/{id}/aliases", s.authed(mw.PermAdminRead, s.ops.ListAliases))
+	mux.Handle("POST /api/admin/models/{id}/aliases", s.authed(mw.PermModelWrite, s.ops.CreateAlias))
+	mux.Handle("DELETE /api/admin/models/{id}/aliases/{alias}", s.authed(mw.PermModelWrite, s.ops.DeleteAlias))
 
 	// T15 second segment: pricing, groups, announcements, risk, users and the
 	// runtime config whitelist. Reads of /api/admin/users use admin.read rather
@@ -264,6 +275,14 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/admin/tickets", s.authed(mw.PermTicketReply, s.tickets.ListAdmin))
 	mux.Handle("POST /api/admin/tickets/{id}/reply", s.authed(mw.PermTicketReply, s.tickets.Reply))
 	mux.Handle("POST /api/admin/tickets/{id}/state", s.authed(mw.PermTicketReply, s.tickets.State))
+
+	// T16 review centre. fund.approve is the money-approval capability: OPS
+	// may edit prices but deliberately cannot approve a refund, and PERSONAL
+	// holds fund.write only for its own purchases. There is no batch endpoint
+	// (V1.0): one document, one reason, one decision.
+	mux.Handle("GET /api/admin/reviews", s.authed(mw.PermFundApprove, s.reviews.List))
+	mux.Handle("POST /api/admin/reviews/{id}/approve", s.authed(mw.PermFundApprove, s.reviews.Approve))
+	mux.Handle("POST /api/admin/reviews/{id}/reject", s.authed(mw.PermFundApprove, s.reviews.Reject))
 
 	// Unknown /api paths return the shared error envelope instead of net/http's
 	// plain-text 404.

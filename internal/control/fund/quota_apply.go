@@ -182,6 +182,9 @@ func (s *Service) CreateQuotaApply(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return err
 		}
+		if err := insertReviewTaskTx(ctx, tx, reviewBizQuotaApply, applyID, uid, now); err != nil {
+			return err
+		}
 		if err := s.Audit.Insert(ctx, tx, audit.Entry{
 			OperatorID:   uid,
 			OperatorRole: "PERSONAL",
@@ -684,16 +687,38 @@ func (s *Service) RejectQuotaApply(ctx context.Context, applyID, auditorID int64
 	return nil
 }
 
+// withQuotaTx runs fn in a transaction, retrying at most twice when InnoDB
+// picks this transaction as a deadlock victim (1213) or a lock wait times out
+// (1205). The retry is safe because every fn re-reads the row state under
+// FOR UPDATE: a rolled-back attempt left no change behind. Anything else is
+// returned unchanged.
 func (s *Service) withQuotaTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("fund: begin quota transaction: %w", err)
+	const maxAttempts = 3
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		lastErr = func() error {
+			tx, err := s.DB.BeginTx(ctx, nil)
+			if err != nil {
+				return fmt.Errorf("fund: begin quota transaction: %w", err)
+			}
+			if err := fn(ctx, tx); err != nil {
+				_ = tx.Rollback()
+				return err
+			}
+			return tx.Commit()
+		}()
+		if lastErr == nil || !isRetryableTxError(lastErr) {
+			return lastErr
+		}
+		if attempt+1 < maxAttempts {
+			select {
+			case <-ctx.Done():
+				return lastErr
+			case <-time.After(time.Duration(attempt+1) * 20 * time.Millisecond):
+			}
+		}
 	}
-	if err := fn(ctx, tx); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	return tx.Commit()
+	return lastErr
 }
 
 func (s *Service) quotaApplyByIDAdmin(ctx context.Context, id int64) (quotaApplyView, error) {

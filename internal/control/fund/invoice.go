@@ -317,6 +317,10 @@ func (s *Service) insertInvoice(ctx context.Context, r *http.Request, uid int64,
 		s.logError(ctx, "fund_invoice_id_failed: "+err.Error())
 		return invoiceView{}, apierr.New(apierr.CodeInternalError)
 	}
+	if err := insertReviewTaskTx(ctx, tx, reviewBizInvoiceApply, invoiceID, uid, now); err != nil {
+		s.logError(ctx, "fund_invoice_review_enqueue_failed: "+err.Error())
+		return invoiceView{}, apierr.New(apierr.CodeInternalError)
+	}
 
 	if err := s.Audit.Insert(ctx, tx, audit.Entry{
 		OperatorID:   uid,

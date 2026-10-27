@@ -185,18 +185,27 @@ func TestModelAliasConflict(t *testing.T) {
 
 	first := modelBody(t, "t15-model-a-"+uniqueSuffix(), "CATALOG_ONLY")
 	first["aliases"] = []string{alias}
-	createTestModel(t, svc, uid, first)
+	owner := createTestModel(t, svc, uid, first)
 
 	second := modelBody(t, "t15-model-b-"+uniqueSuffix(), "CATALOG_ONLY")
 	second["aliases"] = []string{alias}
 	rec := call(t, svc.CreateModel, http.MethodPost, "/api/admin/models", second,
 		testCallOptions{uid: uid, role: "OPS"})
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("duplicate alias status=%d body=%s, want 400", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("duplicate alias status=%d body=%s, want 409", rec.Code, rec.Body.String())
 	}
-	if msg := errorBody(t, rec).Error.Message; !strings.Contains(msg, alias) {
-		t.Fatalf("message=%q, want the alias named", msg)
+	eb := errorBody(t, rec)
+	if eb.Error.Code != "resource_state_conflict" {
+		t.Fatalf("code=%q, want resource_state_conflict", eb.Error.Code)
 	}
+	msg := eb.Error.Message
+	if !strings.Contains(msg, alias) ||
+		!strings.Contains(msg, owner.ModelName) ||
+		!strings.Contains(msg, itoa(owner.ID)) {
+		t.Fatalf("message=%q, want alias + conflicting model name and id", msg)
+	}
+	t.Logf("A14 alias=%q already owned by %s(id=%d) -> 409 %s: %s",
+		alias, owner.ModelName, owner.ID, eb.Error.Code, msg)
 }
 
 // F16-7 / E-34: a model cannot be created directly as LISTED without an

@@ -273,7 +273,47 @@ func isDuplicateKey(err error) bool {
 	return errors.As(err, &me) && me.Number == 1062
 }
 
+// isRetryableTxError reports the two InnoDB errors that mean "this
+// transaction lost a race, run it again": 1213 deadlock and 1205 lock wait
+// timeout. Concurrent quota approvals insert adjacent rows into
+// t_rate_limit_policy, so InnoDB may pick one as the deadlock victim even
+// though both transactions are individually correct.
+func isRetryableTxError(err error) bool {
+	var me *mysql.MySQLError
+	return errors.As(err, &me) && (me.Number == 1213 || me.Number == 1205)
+}
+
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
+
+// ---------------------------------------------------------------------------
+// review queue (T16 审核中心)
+// ---------------------------------------------------------------------------
+
+// The five t_review_task.biz_type values (0015 DDL). REDEEM_BATCH and
+// BALANCE_ADJUST have no submission path in this repository yet; the three
+// constants below are the ones the create transactions can enqueue.
+const (
+	reviewBizQuotaApply   = "QUOTA_APPLY"
+	reviewBizInvoiceApply = "INVOICE_APPLY"
+	reviewBizRefundApply  = "REFUND_APPLY"
+)
+
+// insertReviewTaskTx enqueues the pending row in the same transaction as the
+// business row (TDS §1.9: the queue and the business state must never
+// disagree). uk_rt_biz(biz_type, biz_id) makes a retry a no-op instead of a
+// duplicate; a failure aborts the submission rather than leaving an
+// application no operator can see.
+func insertReviewTaskTx(ctx context.Context, tx *sql.Tx, bizType string, bizID, applicantID int64, now time.Time) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO t_review_task (biz_type, biz_id, applicant_id, state, created_at)
+		VALUES (?,?,?, 'PENDING', ?)
+		ON DUPLICATE KEY UPDATE id = id`,
+		bizType, bizID, applicantID, now)
+	if err != nil {
+		return fmt.Errorf("fund: enqueue review task %s#%d: %w", bizType, bizID, err)
+	}
+	return nil
+}
 
 // mustMarshal returns nil on an encoding failure. Audit "after" payloads are
 // best-effort: losing one must not fail the money write that produced it.

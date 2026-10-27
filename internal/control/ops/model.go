@@ -94,6 +94,10 @@ type modelCreateRequest struct {
 }
 
 type modelPatchRequest struct {
+	// ModelName is the single source of truth every other surface reads
+	// (pricing table, model catalogue, routing). Renaming here is the only
+	// way to change it (F22-1).
+	ModelName        *string          `json:"model_name"`
 	DisplayName      *string          `json:"display_name"`
 	Region           *string          `json:"region"`
 	ModelType        *string          `json:"model_type"`
@@ -503,6 +507,23 @@ func (s *Service) updateModel(w http.ResponseWriter, r *http.Request, id int64, 
 		args = append(args, v)
 	}
 
+	if req.ModelName != nil {
+		name := strings.TrimSpace(*req.ModelName)
+		if name == "" || len([]rune(name)) > 128 {
+			mw.WriteError(w, r, mw.InvalidField("model_name"))
+			return
+		}
+		if name != before.ModelName {
+			// Renaming rewrites the one row every other read joins to. A name
+			// already used by another model, or already used as another
+			// model's alias, is refused with both ids in the message (F22-2).
+			if apiErr := modelNameAvailable(ctx, tx, name, id); apiErr != nil {
+				mw.WriteError(w, r, apiErr)
+				return
+			}
+			add("model_name", name)
+		}
+	}
 	if req.DisplayName != nil {
 		name := strings.TrimSpace(*req.DisplayName)
 		if name == "" || len([]rune(name)) > 128 {
@@ -641,12 +662,20 @@ func (s *Service) updateModel(w http.ResponseWriter, r *http.Request, id int64, 
 			return
 		}
 		// The draft is a write of its own; audit it separately so an operator
-		// reading the announcement trail sees where the row came from.
+		// reading the announcement trail sees where the row came from. The
+		// draft row itself has created_by but no reason column (0015-era
+		// t_announcement), so the operator's reason is recorded here and in
+		// the model audit row below.
+		draftReason := strings.TrimSpace(req.Reason)
+		if draftReason == "" {
+			draftReason = "由模型状态变更自动生成"
+		}
 		if err := s.insertAudit(ctx, tx, r, "ANNOUNCEMENT", "CREATE", "t_announcement",
 			announcementID, nil, map[string]any{
 				"title": title, "state": "DRAFT", "position_mask": 2,
-				"listing_state": nextState,
-			}, "由模型状态变更自动生成"); err != nil {
+				"listing_state": nextState, "operator_id": mustActorID(r),
+				"reason": draftReason,
+			}, draftReason); err != nil {
 			s.logError(ctx, "ops_model_announcement_audit_failed: "+err.Error())
 			mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
 			return
@@ -920,22 +949,25 @@ func capabilityMask(caps map[string]bool) (int64, *apierr.APIError) {
 	return mask, nil
 }
 
-func aliasesAvailable(ctx context.Context, q interface {
-	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
-}, aliases []string, modelID int64) *apierr.APIError {
+// aliasesAvailable refuses an alias already owned by another model, or one
+// that equals another model's public name (PRD F22-2: aliases and public names
+// may not cross-occupy). The collation is utf8mb4_0900_as_cs, so qwen-Max and
+// qwen-max are distinct aliases; no extra normalization happens here.
+func aliasesAvailable(ctx context.Context, q modelQueryer, aliases []string, modelID int64) *apierr.APIError {
 	for _, a := range aliases {
-		var owner int64
-		err := q.QueryRowContext(ctx,
-			`SELECT model_id FROM t_model_alias WHERE alias_name = ? LIMIT 1`, a).Scan(&owner)
-		if errors.Is(err, sql.ErrNoRows) {
-			continue
+		ref, found, apiErr := aliasOwner(ctx, q, a, modelID)
+		if apiErr != nil {
+			return apiErr
 		}
-		if err != nil {
-			return apierr.New(apierr.CodeInternalError).WithCause(err)
+		if found {
+			return aliasTaken(a, ref)
 		}
-		if owner != modelID {
-			return apierr.Newf(apierr.CodeInvalidRequestBody,
-				fmt.Sprintf("别名 %s 已被模型 id=%d 占用", a, owner))
+		ref, found, apiErr = modelNameOwner(ctx, q, a, modelID)
+		if apiErr != nil {
+			return apiErr
+		}
+		if found {
+			return aliasClashesWithName(a, ref)
 		}
 	}
 	return nil
@@ -969,7 +1001,7 @@ func primaryChannelValid(ctx context.Context, q interface {
 }
 
 func hasModelPatch(req *modelPatchRequest) bool {
-	return req.DisplayName != nil || req.Region != nil || req.ModelType != nil ||
+	return req.ModelName != nil || req.DisplayName != nil || req.Region != nil || req.ModelType != nil ||
 		req.ProtocolID != nil || req.PrimaryChannelID != nil || req.ContextLength != nil ||
 		req.ListingState != nil || req.RecommendWeight != nil ||
 		req.Aliases != nil || req.Capabilities != nil
