@@ -10,9 +10,9 @@
 | T02 实际建表（0001–0006） | 47 | 0002 组按任务卡另含 `t_config_publish`（TDS §1.8 `2866` 行定义） |
 | T03 实际建表（0012 / 0014 / 0015 / 0016 / 0017） | 7 | `t_content_policy_hit`、`t_arrears`、`t_ticket`、`t_ticket_reply`、`t_review_task`、`t_upstream_bill`、`t_channel_dedicated_user` |
 | T09 实际建表（0021） | 2 | `t_job_lock`、`t_reconcile_diff` |
-| 当前业务表总量 | 56 | 47 + 7 + 2；0010 / 0011 / 0013 / 0020 只改列，0017 另建 1 表（已计入 7） |
+| 当前业务表总量 | 56 | 47 + 7 + 2；0010 / 0011 / 0013 / 0020 / 0023 只改列，0017 另建 1 表（已计入 7） |
 | 当前 `information_schema.tables` | 57 | 56 张业务表 + `schema_migrations` |
-| 当前迁移条数 | 19 | 0001–0006（6）、0009（1）、0010–0020（11）、0021（1）；0007 / 0008 空缺不计 |
+| 当前迁移条数 | 20 | 0001–0006（6）、0009（1）、0010–0020（11）、0021（1）、0023（1）；0007 / 0008 空缺、0022 为 D-20 预留，均不计 |
 
 任务卡 §1 / §7 A2 写「46 张」，与卡内 §4 逐表清单（8 + 11 + 26 + 2 = 47）相差 1；差的是 `t_config_publish`。本表按逐表清单登记，未删表凑数。`information_schema` 计数含迁移记录表，因此比业务表多 1。
 
@@ -129,6 +129,7 @@
 | 0017 | `t_model` / `t_channel` | `t_model` 加 `recommend_weight int unsigned NOT NULL DEFAULT 0` + `idx_model_recommend (recommend_weight DESC, published_at DESC)`；`t_channel` 加 `dedicated_scope_mode varchar(16) NOT NULL DEFAULT 'ALL'`、`fallback_allowed tinyint(1) NOT NULL DEFAULT 0` |
 | 0018 | `t_config_item` / `t_price_group` / `t_protocol` / `t_rate_limit_policy` / `t_plan` | 34 配置键、3 分组、3 协议、5 档限流模板；`t_rate_limit_policy.daily_quota_micro` 改可空；付费三档 `invoice_supported=1` + SLA 文案 |
 | 0019 | `t_channel` / `t_model` / `t_model_alias` / `t_route` / `t_price_rule` | 仅 `ENV=local`：1 渠道、2 文本模型、2 别名、2 路由、2 价目规则 |
+| 0023 | `t_admin_audit_log` | `result` 改 `varchar(24) NOT NULL DEFAULT 'OK'`（E-28：`REJECTED_BY_GUARD` 17 字符超出原 `varchar(16)`）；回滚前校验超长值，有则 SIGNAL 拒绝 |
 
 `t_arrears.amount_micro` / `settled_micro` 对应 TDS §1.5 的 `due_micro` / `repaid_micro`；列名按 T03 卡落地，语义不变（欠费额 / 已抵扣额）。
 

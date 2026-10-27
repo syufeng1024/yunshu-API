@@ -6,10 +6,10 @@ import (
 	"testing/fstest"
 )
 
-// wantMigrationCount is the delivered T02 + T03 + 0020 + 0021 set:
-// 0001-0006 (6) + 0009 (1) + 0010-0019 (10) + 0020 (1) + 0021 (1) = 19.
-// 0007 / 0008 are permanent gaps and must never be counted here.
-const wantMigrationCount = 19
+// wantMigrationCount is the delivered T02 + T03 + 0020 + 0021 + 0023 set:
+// 0001-0006 (6) + 0009 (1) + 0010-0019 (10) + 0020 (1) + 0021 (1) + 0023 (1) = 20.
+// 0007 / 0008 are permanent gaps; 0022 is reserved for D-20 (t_request_body).
+const wantMigrationCount = 20
 
 func loadEmbedded(t *testing.T) []Migration {
 	t.Helper()
@@ -31,7 +31,7 @@ func TestVersionsAreUnique(t *testing.T) {
 	}
 }
 
-// ② 版本号跳号只允许出现在 0006 → 0009（即 0007 / 0008 两个预留位）。
+// ② 版本号跳号只允许出现在预留位：0006 → 0009（0007 / 0008）与 0021 → 0023（0022，D-20 预留）。
 func TestVersionGapsOnlyAtReservedNumbers(t *testing.T) {
 	migrations := loadEmbedded(t)
 	for i := 1; i < len(migrations); i++ {
@@ -41,7 +41,10 @@ func TestVersionGapsOnlyAtReservedNumbers(t *testing.T) {
 			if previous == 6 && current == 9 {
 				continue
 			}
-			t.Fatalf("非法跳号：%s → %s；只有 0007 / 0008 可以空缺", migrations[i-1].Version, migrations[i].Version)
+			if previous == 21 && current == 23 {
+				continue
+			}
+			t.Fatalf("非法跳号：%s → %s；只有 0007 / 0008 与 0022 可以空缺", migrations[i-1].Version, migrations[i].Version)
 		}
 	}
 }
@@ -128,7 +131,7 @@ func TestMigrationCountMatchesFiles(t *testing.T) {
 	want := []string{
 		"0001", "0002", "0003", "0004", "0005", "0006", "0009",
 		"0010", "0011", "0012", "0013", "0014", "0015", "0016", "0017", "0018", "0019", "0020",
-		"0021",
+		"0021", "0023",
 	}
 	if len(migrations) != len(want) {
 		t.Fatalf("版本数量 = %d，期望 %d", len(migrations), len(want))
