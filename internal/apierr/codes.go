@@ -13,8 +13,8 @@
 // A fifth code was added after E-21 for a condition PRD E.1 has no row for at
 // all: the free tier's active-key ceiling (T12 hard constraint 2). Answering
 // that refusal with invalid_request_body told a caller whose body was perfectly
-// valid that its "count" member "was not valid JSON" — a diagnosis the caller
-// can never act on, because editing count cannot lift a quota ceiling:
+// valid that its "count" member was malformed — a diagnosis the caller can
+// never act on, because editing count cannot lift a quota ceiling:
 //
 //	key_limit_reached       409  free tier already at its active-key ceiling
 //
@@ -270,7 +270,7 @@ var specs = []Spec{
 	{
 		Code: CodeInvalidRequestBody, Type: TypeInvalidRequest, HTTPStatus: 400,
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "P04",
-		Message: "请求体不是合法 JSON：%s",
+		Message: "请求体参数有误：%s",
 		Hint:    "按 message 中的字段路径修正请求体",
 	},
 	{

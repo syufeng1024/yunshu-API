@@ -61,6 +61,25 @@ func (s *Store) QuoteRefund(ctx context.Context, p RefundQuoteParams) (RefundQuo
 }
 
 func (s *Store) quoteRefundTx(ctx context.Context, tx *sql.Tx, p RefundQuoteParams) (RefundQuote, error) {
+	return s.quoteRefundTxWithFrozen(ctx, tx, p, nil)
+}
+
+// QuoteRefundTx is QuoteRefund inside a caller-owned transaction. A caller
+// that is about to freeze the quoted amount must lock the account first and
+// quote in that same transaction; otherwise a concurrent consumption can move
+// the base between the quote and the freeze.
+func (s *Store) QuoteRefundTx(ctx context.Context, tx *sql.Tx, p RefundQuoteParams) (RefundQuote, error) {
+	if tx == nil {
+		return RefundQuote{}, fmt.Errorf("%w: transaction is nil", ErrInvalidParam)
+	}
+	return s.quoteRefundTx(ctx, tx, p)
+}
+
+// quoteRefundTxWithFrozen computes the same quote against an effective frozen
+// amount. Refund uses it to release the refund order's own freeze in memory
+// before quoting, so the money it is about to pay out is not counted as
+// unavailable against itself. A nil override reads the account row.
+func (s *Store) quoteRefundTxWithFrozen(ctx context.Context, tx *sql.Tx, p RefundQuoteParams, frozenOverride *int64) (RefundQuote, error) {
 	minMicro := p.MinRefundMicro
 	if minMicro <= 0 {
 		minMicro = MinRefundMicro
@@ -101,8 +120,10 @@ func (s *Store) quoteRefundTx(ctx context.Context, tx *sql.Tx, p RefundQuotePara
 	}
 
 	// Money already frozen for a pending refund cannot be quoted again.
-	var frozen int64
-	if err := tx.QueryRowContext(ctx,
+	frozen := int64(0)
+	if frozenOverride != nil {
+		frozen = *frozenOverride
+	} else if err := tx.QueryRowContext(ctx,
 		`SELECT frozen_refund_micro FROM t_credit_account WHERE user_id = ?`,
 		p.UserID,
 	).Scan(&frozen); err != nil {
@@ -200,11 +221,14 @@ func (s *Store) Refund(ctx context.Context, p RefundParams) (RefundResult, error
 		// Lock the refund order before the account. Two concurrent retries for
 		// the same refund_order_id serialise here; the loser sees PAID and
 		// returns the existing result instead of refunding twice.
-		var refundState string
+		var (
+			refundState string
+			applyMicro  int64
+		)
 		err = tx.QueryRowContext(ctx,
-			`SELECT state FROM t_refund_order WHERE id = ? FOR UPDATE`,
+			`SELECT state, apply_micro FROM t_refund_order WHERE id = ? FOR UPDATE`,
 			p.RefundOrderID,
-		).Scan(&refundState)
+		).Scan(&refundState, &applyMicro)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("%w: refund_order_id=%d not found", ErrInvalidParam, p.RefundOrderID)
 		}
@@ -222,11 +246,20 @@ func (s *Store) Refund(ctx context.Context, p RefundParams) (RefundResult, error
 		if err != nil {
 			return err
 		}
-		quote, err := s.quoteRefundTx(ctx, tx, RefundQuoteParams{
+		// Release this refund order's own freeze before quoting: the frozen
+		// amount protects the money from consumption, but must not count as
+		// unavailable against the refund that created it (B-43). The release
+		// and the balance deduction commit together below.
+		release := int64(0)
+		if applyMicro > 0 && acct.FrozenRefundMicro > 0 {
+			release = min64(applyMicro, acct.FrozenRefundMicro)
+		}
+		effectiveFrozen := acct.FrozenRefundMicro - release
+		quote, err := s.quoteRefundTxWithFrozen(ctx, tx, RefundQuoteParams{
 			UserID:          p.UserID,
 			RechargeOrderID: &p.RechargeOrderID,
 			MinRefundMicro:  p.MinRefundMicro,
-		})
+		}, &effectiveFrozen)
 		if err != nil {
 			return err
 		}
@@ -328,7 +361,8 @@ func (s *Store) Refund(ctx context.Context, p RefundParams) (RefundResult, error
 			return fmt.Errorf("%w: refund left=%d", ErrInsufficientBatches, left)
 		}
 		if err := acct.Apply(ctx, tx, BalanceDelta{
-			RechargeMicro: -quote.RefundableMicro,
+			RechargeMicro:     -quote.RefundableMicro,
+			FrozenRefundMicro: -release,
 		}, lastEntryID, nil, now); err != nil {
 			return err
 		}

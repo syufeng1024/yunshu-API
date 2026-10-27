@@ -35,6 +35,9 @@
 | E-26 | T13 卡交付物 9 vs TDS §1.5 `t_refund_order.state` | 卡内写退款状态机 `PENDING → APPROVED → REFUNDING → REFUNDED / REFUND_FAILED`；DDL 枚举是 `APPLIED / APPROVED / REJECTED / PAYING / PAID / FAILED` | 六个状态里**五个名字对不上**，且卡面缺 `REJECTED`、DDL 缺 `REFUNDING`。按卡实现会写出库里没有的状态值 | **以 DDL 为准**：`APPLIED →(审核)→ APPROVED / REJECTED →(打款)→ PAYING → PAID / FAILED`。T13 第二段按此实现，`docs/fund-flow.md` 的退款图同源；卡面待修（第二段派单前由交付总监改） |
 | E-27 | T13 卡 A1–A14 隐含的「拒绝即 `invalid_request_body`」 | `invalid_request_body` 的 message 模板是「请求体不是合法 JSON：%s」，被全部 38 处字段校验共用 | 与 T12 P0 同源的第二层问题：`count=11`、兑换码已使用、回调验签失败这类请求，**body 都是合法 JSON**，却被告知"不是合法 JSON"。T12 只修了"状态类拒绝不该用 body 码"，没修"body 码的文案把值错误说成语法错误" | **文案模板改为「请求体参数有误：%s」**（不再出现"JSON"字样），解析失败与字段值不合法共用同一句；专项小修单独派单，不并入 T13。详见任务 #6 |
 
+| E-28 | TDS §1.5 `t_admin_audit_log.result` 列定义 vs 同列注释 | 列是 `varchar(16)`，注释却写枚举含 `REJECTED_BY_GUARD`（**17 个字符**） | MySQL 8.0 默认 `STRICT_TRANS_TABLES` 下写入报 `Error 1406 Data too long`。已实测复现。T11 的 `internal/control/auth/login.go` 有 **6 处**用该值，而 `auditLogin` 的错误只打 WARN、不冒泡——**所有被拒绝的登录（密码错、匿名、锁定）长期没有审计记录**，等于爆破留痕整段丢失 | **放宽列到 `varchar(24)`**（审计取值会随业务增长，改枚举名只是把问题往后挪）。用新迁移 `0023` 做 `ALTER`，**不得**改已应用的 `0003`（checksum 已锁定）。在迁移落地前，`REJECTED_BY_GUARD` 仍会写入失败——属已知缺陷，不得据此判 T11/T13 违约 |
+| E-29 | PRD 附录 D G-04 Given 内部矛盾，且 T13 卡 A4 数值另错 | PRD 写「得充值 9,900 + 赠送 2,000；已消耗 3,000（先赠后充 → **赠送 1,000 / 充值 2,000**）」。但赠送有 2,000 时，先赠后充的头 2,000 全走赠送、余 1,000 走充值，拆分应是「赠送 2,000 / 充值 1,000」。T13 卡 A4 又写「消费 **1,000** → 可退 **8,900**」，同样在赠送足够时推不出来（此时充值未动，可退 9,900） | 三处（PRD Given、PRD 推出的 7,900、卡面 A4 的 8,900）**互不自洽**，只有一条能成立 | **绑定规则只有一条**：可退基数 = 未消耗充值积分（`ledger.QuoteRefund` 已实现，赠送永不参与）。在此之上：① **默认路径**（赠送 2,000 可用）消费 3,000 → 扣赠送 2,000 + 充值 1,000 → 可退 **8,900**；② PRD G-04 的 **7,900 / 71.10 元** 需「1,000 赠送在第二次扣减前已不可用（过期未清零）」这一未写明前提，用例须**显式构造该时间线**并注明。卡内 A4 已改为两条都要断言。PRD Given 待回写 |
+
 ## 口径备忘（不是勘误，是实现约定）
 
 | 项 | 约定 | 原因 |

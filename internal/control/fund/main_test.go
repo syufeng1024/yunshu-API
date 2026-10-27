@@ -21,6 +21,7 @@ import (
 	"yunshu.dev/core/internal/control/ctltest"
 	"yunshu.dev/core/internal/control/mw"
 	"yunshu.dev/core/internal/jsonx"
+	"yunshu.dev/core/internal/ledger"
 	"yunshu.dev/core/internal/platform/clock"
 	"yunshu.dev/core/internal/redisx"
 	"yunshu.dev/core/internal/redisx/redistest"
@@ -51,6 +52,7 @@ func newTestService(t *testing.T) (*Service, *redisx.Client) {
 		PayChannelWechat: testPaySecret,
 		PayChannelAlipay: testPaySecret,
 	}
+	svc.FingerprintKey = "test-fp-hmac-key"
 	return svc, rdb
 }
 
@@ -101,6 +103,11 @@ func newTestUser(t *testing.T, planID *int64) int64 {
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_ledger_entry WHERE user_id = ?`, uid)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_credit_batch WHERE user_id = ?`, uid)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_rate_limit_policy WHERE scope_id = ? AND scope_type = 'USER'`, uid)
+		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_refund_order WHERE user_id = ?`, uid)
+		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_invoice_apply WHERE user_id = ?`, uid)
+		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_quota_apply WHERE user_id = ?`, uid)
+		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_device_fingerprint WHERE user_id = ? OR granted_user_id = ?`, uid, uid)
+		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_notification WHERE user_id = ?`, uid)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_recharge_order WHERE user_id = ?`, uid)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_redeem_code WHERE redeemed_by = ?`, uid)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_admin_audit_log WHERE operator_id = ?`, uid)
@@ -344,4 +351,132 @@ func mustJSONString(t *testing.T, v any) string {
 		t.Fatalf("marshal: %v", err)
 	}
 	return string(raw)
+}
+
+// payPlanOrder creates and pays one PLAN order, returning the order view.
+func payPlanOrder(t *testing.T, svc *Service, uid int64, code string) orderView {
+	t.Helper()
+	plan := planByCode(t, code)
+	order, _ := createOrder(t, svc, uid, map[string]any{
+		"order_type":  OrderTypePlan,
+		"plan_id":     plan.ID,
+		"pay_channel": PayChannelWechat,
+	})
+	rec := successfulCallback(t, svc, order, "WX"+strconv.FormatInt(time.Now().UnixNano(), 10))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("pay callback status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	return order
+}
+
+// consumeDebits burns credits through the ledger's real FIFO path, which is
+// what makes A4's bonus-first split (1,000 / 2,000) verifiable.
+func consumeDebits(t *testing.T, svc *Service, uid, credits int64) {
+	t.Helper()
+	_, err := svc.Ledger.Debit(context.Background(), ledger.DebitParams{
+		UserID:      uid,
+		AmountMicro: credits * MicroPerCredit,
+		RequestID:   fmt.Sprintf("t13c-%d-%012d", uid%100000, time.Now().UnixNano()%1_000_000_000_000),
+	})
+	if err != nil {
+		t.Fatalf("consume %d credits: %v", credits, err)
+	}
+}
+
+// consumeG04 builds G-04's exact ledger state: 1,000 bonus consumed while it
+// was valid, the remaining 1,000 bonus expired (and therefore unusable) before
+// the next 2,000 came out of recharge. The expired batch keeps its remaining
+// amount until jobsd sweeps it, so the books still show 1,000 bonus after the
+// refund — which is exactly errata E-10's corrected expectation.
+func consumeG04(t *testing.T, svc *Service, uid int64) {
+	t.Helper()
+	consumeDebits(t, svc, uid, 1000)
+	if _, err := testDB.ExecContext(context.Background(), `
+		UPDATE t_credit_batch
+		   SET expire_at = UTC_TIMESTAMP(3) - INTERVAL 1 SECOND
+		 WHERE user_id = ? AND batch_type = 'BONUS' AND remaining_micro > 0`, uid); err != nil {
+		t.Fatalf("expire remaining bonus: %v", err)
+	}
+	consumeDebits(t, svc, uid, 2000)
+}
+
+func frozenOf(t *testing.T, uid int64) int64 {
+	t.Helper()
+	var frozen int64
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT frozen_refund_micro FROM t_credit_account WHERE user_id = ?`, uid).
+		Scan(&frozen); err != nil {
+		t.Fatalf("frozen: %v", err)
+	}
+	return frozen
+}
+
+func orderRefundableMicro(t *testing.T, orderID int64) int64 {
+	t.Helper()
+	var v int64
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT refundable_micro FROM t_recharge_order WHERE id = ?`, orderID).Scan(&v); err != nil {
+		t.Fatalf("order refundable: %v", err)
+	}
+	return v
+}
+
+func setUserPhone(t *testing.T, uid int64, phone string) {
+	t.Helper()
+	if _, err := testDB.ExecContext(context.Background(),
+		`UPDATE t_user SET phone = ? WHERE id = ?`, phone, uid); err != nil {
+		t.Fatalf("set phone: %v", err)
+	}
+}
+
+func markVerified(t *testing.T, uid int64) {
+	t.Helper()
+	if _, err := testDB.ExecContext(context.Background(),
+		`UPDATE t_user SET verify_status = 'VERIFIED', verified_at = NOW(3) WHERE id = ?`, uid); err != nil {
+		t.Fatalf("mark verified: %v", err)
+	}
+}
+
+// callWithRemote is callWithHeaders plus a RemoteAddr, for the trial IP-segment
+// check and for auditing a realistic operator IP.
+func callWithRemote(t *testing.T, h http.HandlerFunc, method, target string, body any, uid int64, remote string, headers map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+	var payload []byte
+	if body != nil {
+		var err error
+		payload, err = jsonx.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal body: %v", err)
+		}
+	}
+	req := httptest.NewRequest(method, target, bytes.NewReader(payload))
+	req.RemoteAddr = remote
+	req = req.WithContext(mw.WithSession(req.Context(), &mw.Session{UID: uid, Role: "PERSONAL"}))
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rec := httptest.NewRecorder()
+	h(rec, req)
+	return rec
+}
+
+func refundStateOf(t *testing.T, refundID int64) string {
+	t.Helper()
+	var state string
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT state FROM t_refund_order WHERE id = ?`, refundID).Scan(&state); err != nil {
+		t.Fatalf("refund state: %v", err)
+	}
+	return state
+}
+
+func countNotifications(t *testing.T, uid int64, event string) int64 {
+	t.Helper()
+	var n int64
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM t_notification WHERE user_id = ? AND event_code = ?`, uid, event).
+		Scan(&n); err != nil {
+		t.Fatalf("count notifications: %v", err)
+	}
+	return n
 }

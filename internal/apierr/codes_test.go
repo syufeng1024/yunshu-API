@@ -298,6 +298,23 @@ func TestKeyLimitReachedIsStateConflict(t *testing.T) {
 	}
 }
 
+// E-27: invalid_request_body is shared by the JSON decoder and by field-value
+// validation (count=11, an already-used redeem code, a bad callback signature).
+// Most of those bodies are valid JSON, so the template must not claim a syntax
+// error the caller would waste time hunting for.
+func TestInvalidRequestBodyDoesNotClaimJSON(t *testing.T) {
+	e := Newf(CodeInvalidRequestBody, "count")
+	if strings.Contains(e.Message, "JSON") || strings.Contains(e.Hint, "JSON") {
+		t.Fatalf("invalid_request_body still blames JSON: message=%q hint=%q", e.Message, e.Hint)
+	}
+	if !strings.Contains(e.Message, "count") {
+		t.Fatalf("field path is not interpolated: %q", e.Message)
+	}
+	if !strings.Contains(e.Message, "请求体参数有误") {
+		t.Fatalf("message does not say the body parameters are wrong: %q", e.Message)
+	}
+}
+
 // A4: the two 401s must remain distinct codes with distinct hints.
 func TestInvalidAPIKeyAndKeyExpiredAreDistinct(t *testing.T) {
 	a := New(CodeInvalidAPIKey)

@@ -55,8 +55,8 @@ func PermissionDenied() *apierr.APIError { return apierr.New(apierr.CodePermissi
 // make the request succeed: a missing confirm, a wrong type, a count outside
 // its 1–10 range, an expire_at in the past. A refusal the caller cannot fix by
 // editing the body — a quota ceiling, a lifecycle state — must use its own
-// code (see apierr.CodeKeyLimitReached), because "请求体不是合法 JSON：count"
-// sends users to a field that is not the problem and can never be the fix.
+// code (see apierr.CodeKeyLimitReached), because pointing at a field that is
+// not the problem (and cannot be the fix) sends users to edit the wrong thing.
 func InvalidField(path string) *apierr.APIError {
 	return apierr.Newf(apierr.CodeInvalidRequestBody, path)
 }

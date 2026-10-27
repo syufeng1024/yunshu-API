@@ -112,7 +112,8 @@ func main() {
 			_, _, err := routeBuilder.Publish(ctx)
 			return err
 		},
-		PaySecrets: paySecrets,
+		PaySecrets:     paySecrets,
+		FingerprintKey: fpHMACKey(logger, rootCtx),
 	})
 	if err != nil {
 		logger.Error(rootCtx, "control server: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
@@ -168,6 +169,23 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info(rootCtx, "shutdown complete", obslog.Fields{Stage: "shutdown", Status: 0})
+}
+
+// fpHMACKey reads FP_HMAC_KEY from the environment. It is not a configuration
+// key: the 45 frozen keys carry no HMAC secret, and a secret in t_config_item
+// would be readable by every process. An empty key disables trial claims with
+// a 503; it never degrades to hashing with an empty secret.
+func fpHMACKey(logger *obslog.Logger, ctx context.Context) string {
+	key := strings.TrimSpace(os.Getenv("FP_HMAC_KEY"))
+	if key == "" {
+		key = strings.TrimSpace(os.Getenv("YUNSHU_FP_HMAC_KEY"))
+	}
+	if key == "" {
+		logger.Warn(ctx,
+			"FP_HMAC_KEY is not set: /api/console/trial/claim will answer 503",
+			obslog.Fields{Stage: "startup"})
+	}
+	return key
 }
 
 // payCallbackSecrets reads the per-channel callback signing secrets. An unset

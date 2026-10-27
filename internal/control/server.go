@@ -52,6 +52,15 @@ type Deps struct {
 	// t_config_item would be readable by every process that reads config.
 	// A channel with no secret answers 503 and never skips verification.
 	PaySecrets map[string]string
+
+	// Mailer is the outbound e-mail seam. Nil is allowed: notifications fall
+	// back to the in-app row plus a WARN.
+	Mailer fund.Mailer
+
+	// FingerprintKey is FP_HMAC_KEY from the environment (the YUNSHU_ prefix
+	// is accepted as a fallback). Empty makes the trial claim answer 503
+	// rather than hash device identifiers with no key.
+	FingerprintKey string
 }
 
 // Server holds the route table and its dependencies.
@@ -80,6 +89,8 @@ func New(d Deps) (*Server, error) {
 	funds := fund.New(d.DB, d.Redis, nil, d.Audit, d.Now, d.Logger)
 	funds.PaySecrets = d.PaySecrets
 	funds.PublishRoutes = d.PublishRoutes
+	funds.Mailer = d.Mailer
+	funds.FingerprintKey = d.FingerprintKey
 	return &Server{
 		d: d,
 		auth: &auth.Service{
@@ -128,6 +139,17 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/console/orders", s.authed(mw.PermFundRead, s.fund.ListOrders))
 	mux.Handle("POST /api/console/orders", s.authed(mw.PermFundWrite, s.fund.CreateOrder))
 	mux.Handle("POST /api/console/redeem", s.authed(mw.PermFundWrite, s.fund.Redeem))
+
+	// Console fund: refunds, invoices, quota applies and the trial claim.
+	// Approval/payment transitions are exported methods for T16; the console
+	// only submits and lists.
+	mux.Handle("GET /api/console/refunds", s.authed(mw.PermFundRead, s.fund.ListRefunds))
+	mux.Handle("POST /api/console/refunds", s.authed(mw.PermFundWrite, s.fund.CreateRefund))
+	mux.Handle("GET /api/console/invoices", s.authed(mw.PermFundRead, s.fund.ListInvoices))
+	mux.Handle("POST /api/console/invoices", s.authed(mw.PermFundWrite, s.fund.CreateInvoice))
+	mux.Handle("GET /api/console/quota-applies", s.authed(mw.PermFundRead, s.fund.ListQuotaApplies))
+	mux.Handle("POST /api/console/quota-applies", s.authed(mw.PermFundWrite, s.fund.CreateQuotaApply))
+	mux.Handle("POST /api/console/trial/claim", s.authed(mw.PermFundWrite, s.fund.ClaimTrial))
 
 	// Payment callback: public by design. The payment platform has no console
 	// session; the HMAC signature over the body is the authentication, so this

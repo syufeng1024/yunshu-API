@@ -76,6 +76,17 @@ type Service struct {
 	// unit tests.
 	PublishRoutes func(ctx context.Context) error
 
+	// Mailer sends the e-mail half of a notification. Nil is allowed: the
+	// in-app row is still written and a WARN records the skip.
+	Mailer Mailer
+
+	// FingerprintKey is FP_HMAC_KEY, read from the process environment. The
+	// 45 frozen configuration keys carry no HMAC key, and a key stored in
+	// t_config_item would be readable by every process that loads config.
+	// An empty key makes the trial-claim endpoint answer 503 rather than hash
+	// device identifiers with an empty secret.
+	FingerprintKey string
+
 	// IdemWindow is idem.duplicate_window_seconds resolved lazily; zero means
 	// "read the configuration".
 	idemWindow time.Duration
@@ -263,3 +274,13 @@ func isDuplicateKey(err error) bool {
 }
 
 func itoa(v int64) string { return strconv.FormatInt(v, 10) }
+
+// mustMarshal returns nil on an encoding failure. Audit "after" payloads are
+// best-effort: losing one must not fail the money write that produced it.
+func mustMarshal(v any) []byte {
+	raw, err := jsonx.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return raw
+}

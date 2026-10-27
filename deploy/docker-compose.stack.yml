@@ -26,6 +26,8 @@ x-app-env: &app-env
   REDIS_PASSWORD: ${REDIS_PASSWORD:-}
   SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET 缺失，请用 openssl rand -base64 32 生成后写入 deploy/.env.stack}
   CHANNEL_KEY_KEK: ${CHANNEL_KEY_KEK:-}
+  # 体验版设备指纹 HMAC 密钥；留空时 /api/console/trial/claim 返回 503。
+  FP_HMAC_KEY: ${FP_HMAC_KEY:-}
 
 x-app-image: &app-image
   image: yunshu-app:${IMAGE_TAG:-local}

@@ -9,7 +9,9 @@ info:
     T12 已登记：/api/console/overview、/api/console/keys（列表/创建/详情/更新/删除/
     操作日志/轮换）、/api/console/models。
     T13 第一段已登记：/api/console/plans、/api/console/orders（列表/创建）、
-    /api/console/redeem、公开回调 /api/v1/pay/callback/{channel}。退款/发票/提额随第二段。
+    /api/console/redeem、公开回调 /api/v1/pay/callback/{channel}。
+    T13 第二段已登记：/api/console/refunds、/api/console/invoices、
+    /api/console/quota-applies、/api/console/trial/claim。
     运营后台与官网公开数据接口待 T15/T18。
 servers:
   - url: /
@@ -579,6 +581,308 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/refunds:
+    get:
+      operationId: listConsoleRefunds
+      tags: [console, fund]
+      summary: 退款单列表（按状态筛选）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: status
+          in: query
+          schema: {type: string, enum: [applied, approved, rejected, paying, paid, failed]}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, paid_at]}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 退款单列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefundList'
+        '400':
+          description: 查询参数非法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: createConsoleRefund
+      tags: [console, fund]
+      summary: 申请退款（只退未消耗充值积分；申请即冻结；赠送积分不可退）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: 10s 去重窗口；窗口内重放返回同一退款单
+          schema: {type: string, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRefundRequest'
+      responses:
+        '201':
+          description: 已受理（APPLIED，已冻结对应余额）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedRefund'
+        '200':
+          description: 同一 Idempotency-Key 的重放
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedRefund'
+        '400':
+          description: order_id 非法 / 订单不可退 / 低于起退额 / 已开票 / 已有进行中的退款（invalid_request_body，message 带原因）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 同一 Idempotency-Key 的首次请求仍在处理中（request_in_flight）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/invoices:
+    get:
+      operationId: listConsoleInvoices
+      tags: [console, fund]
+      summary: 开票申请列表
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: status
+          in: query
+          schema: {type: string, enum: [applied, approved, issued, rejected, voided]}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, issued_at]}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 开票申请列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InvoiceList'
+        '400':
+          description: 查询参数非法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: createConsoleInvoice
+      tags: [console, fund]
+      summary: 申请开票（需实名；金额上限 = 实付 − 已开票）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: 10s 去重窗口
+          schema: {type: string, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateInvoiceRequest'
+      responses:
+        '201':
+          description: 已受理（APPLIED）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedInvoice'
+        '200':
+          description: 同一 Idempotency-Key 的重放
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedInvoice'
+        '400':
+          description: 字段非法 / 金额超过可开额度 / 同订单已有处理中的申请（invalid_request_body）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 未实名（account_not_verified）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/quota-applies:
+    get:
+      operationId: listConsoleQuotaApplies
+      tags: [console, fund]
+      summary: 提额申请列表
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: status
+          in: query
+          schema: {type: string, enum: [pending, approved, rejected, expired]}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, audited_at]}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 提额申请列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuotaApplyList'
+        '400':
+          description: 查询参数非法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    post:
+      operationId: createConsoleQuotaApply
+      tags: [console, fund]
+      summary: 提交提额申请（目标 ≤ 当前日额度 × 5；审批前额度不变）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          description: 10s 去重窗口
+          schema: {type: string, maxLength: 128}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateQuotaApplyRequest'
+      responses:
+        '201':
+          description: 已提交（PENDING）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedQuotaApply'
+        '200':
+          description: 同一 Idempotency-Key 的重放
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreatedQuotaApply'
+        '400':
+          description: 字段非法 / 超过 5 倍上限 / 当前套餐无日额度（invalid_request_body）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/trial/claim:
+    post:
+      operationId: claimTrial
+      tags: [console, fund]
+      summary: 领取体验版（设备指纹 + 手机号 + IP 段任一命中即拒）
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrialClaimRequest'
+      responses:
+        '200':
+          description: 领取成功（TRIAL 套餐 + 7,000 赠送积分，90 天有效）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrialClaimResult'
+        '400':
+          description: 指纹非法 / 任一防刷因子命中（invalid_request_body，message 指明缺哪一项）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: FP_HMAC_KEY 未配置（config_unavailable）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 components:
   securitySchemes:
     sessionCookie:
@@ -1117,3 +1421,157 @@ components:
         credited: {type: boolean, description: true = 本次或此前已入账}
         replayed: {type: boolean, description: true = 重复通知，未重复入账}
         reason: {type: string, description: "ORDER_NOT_FOUND / ORDER_CLOSED / ORDER_REFUNDED / PAY_TXN_MISMATCH / CHANNEL_REPORTED_FAILURE"}
+    Refund:
+      type: object
+      required: [id, refund_no, recharge_order_id, apply_micro, refund_micro, refund_fen, fee_fen, state, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        refund_no: {type: string, description: 28 位退款单号}
+        recharge_order_id: {type: integer, format: int64}
+        apply_micro: {type: integer, format: int64, description: 申请退款积分（微积分）}
+        apply_credits: {type: integer, format: int64, description: 申请退款积分（积分 = micro / 10000）}
+        refund_micro: {type: integer, format: int64, description: 实际退款积分基数（= apply_micro）}
+        refund_credits: {type: integer, format: int64}
+        refund_fen: {type: integer, format: int64, description: 退回人民币（分）= micro × 9 / 100000}
+        refund_yuan: {type: integer, format: int64, description: 元（整除，展示用；分位见 refund_fen % 100）}
+        fee_fen: {type: integer, format: int64, description: 手续费（分）= 可退积分 − refund_fen}
+        fee_yuan: {type: integer, format: int64}
+        state: {type: string, enum: [APPLIED, APPROVED, REJECTED, PAYING, PAID, FAILED]}
+        reject_reason: {type: string, nullable: true}
+        fail_reason: {type: string, nullable: true}
+        pay_txn_id: {type: string, nullable: true, description: 原路退回渠道流水号}
+        auditor_id: {type: integer, format: int64, nullable: true}
+        audited_at: {type: string, format: date-time, nullable: true}
+        paid_at: {type: string, format: date-time, nullable: true}
+        created_at: {type: string, format: date-time}
+    RefundList:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Refund'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    CreateRefundRequest:
+      type: object
+      required: [recharge_order_id]
+      properties:
+        recharge_order_id: {type: integer, format: int64, description: 必须属于当前账号且 state=PAID}
+        idempotency_key: {type: string, maxLength: 128, description: 也可用同名请求头；10s 窗口}
+    CreatedRefund:
+      type: object
+      required: [refund, idempotent_replay]
+      properties:
+        refund: {$ref: '#/components/schemas/Refund'}
+        idempotent_replay: {type: boolean}
+    Invoice:
+      type: object
+      required: [id, apply_no, recharge_order_id, invoice_type, title_type, title, receive_email, amount_fen, state, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        apply_no: {type: string}
+        recharge_order_id: {type: integer, format: int64}
+        invoice_type: {type: string, enum: [VAT_NORMAL_E]}
+        title_type: {type: string, enum: [PERSONAL, COMPANY]}
+        title: {type: string, maxLength: 128}
+        tax_no: {type: string, maxLength: 32, nullable: true, description: "COMPANY 必填"}
+        receive_email: {type: string, maxLength: 254}
+        amount_fen: {type: integer, format: int64}
+        amount_yuan: {type: integer, format: int64}
+        tax_rate_bp: {type: integer, format: int64, description: "V1.0 固定 10000（1.00，Q-03），不做价税分离"}
+        state: {type: string, enum: [APPLIED, APPROVED, ISSUED, REJECTED, VOIDED]}
+        reject_reason: {type: string, nullable: true}
+        invoice_url: {type: string, nullable: true}
+        auditor_id: {type: integer, format: int64, nullable: true}
+        issued_at: {type: string, format: date-time, nullable: true}
+        created_at: {type: string, format: date-time}
+    InvoiceList:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/Invoice'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    CreateInvoiceRequest:
+      type: object
+      required: [recharge_order_id, title_type, title, receive_email]
+      properties:
+        recharge_order_id: {type: integer, format: int64}
+        title_type: {type: string, enum: [PERSONAL, COMPANY]}
+        title: {type: string, maxLength: 128}
+        tax_no: {type: string, maxLength: 32, description: "title_type=COMPANY 时必填"}
+        receive_email: {type: string, maxLength: 254}
+        amount_fen: {type: integer, format: int64, description: "省略 = 剩余可开金额；超过剩余额度即拒绝"}
+        idempotency_key: {type: string, maxLength: 128}
+    CreatedInvoice:
+      type: object
+      required: [invoice, idempotent_replay]
+      properties:
+        invoice: {$ref: '#/components/schemas/Invoice'}
+        idempotent_replay: {type: boolean}
+    QuotaApply:
+      type: object
+      required: [id, apply_no, current_quota_micro, used_at_apply_micro, target_quota_micro, apply_reason, state, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        apply_no: {type: string}
+        current_quota_micro: {type: integer, format: int64, description: 提交时的日额度快照}
+        current_quota: {type: integer, format: int64}
+        used_at_apply_micro: {type: integer, format: int64, description: 提交时当日已用}
+        used_at_apply: {type: integer, format: int64}
+        target_quota_micro: {type: integer, format: int64}
+        target_quota: {type: integer, format: int64}
+        approved_quota_micro: {type: integer, format: int64, nullable: true}
+        approved_quota: {type: integer, format: int64, nullable: true}
+        apply_reason: {type: string, maxLength: 500}
+        state: {type: string, enum: [PENDING, APPROVED, REJECTED, EXPIRED]}
+        effective_from: {type: string, format: date-time, nullable: true, description: 批准日次日 00:00 UTC+8}
+        effective_to: {type: string, format: date-time, nullable: true, description: effective_from + 30 天}
+        reject_reason: {type: string, nullable: true}
+        auditor_id: {type: integer, format: int64, nullable: true}
+        audited_at: {type: string, format: date-time, nullable: true}
+        created_at: {type: string, format: date-time}
+    QuotaApplyList:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/QuotaApply'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    CreateQuotaApplyRequest:
+      type: object
+      required: [target_quota_micro, apply_reason]
+      properties:
+        target_quota_micro: {type: integer, format: int64, description: "必须 > 当前日额度且 ≤ 当前日额度 × 5"}
+        apply_reason: {type: string, maxLength: 500}
+        idempotency_key: {type: string, maxLength: 128}
+    CreatedQuotaApply:
+      type: object
+      required: [apply, idempotent_replay]
+      properties:
+        apply: {$ref: '#/components/schemas/QuotaApply'}
+        idempotent_replay: {type: boolean}
+    TrialClaimRequest:
+      type: object
+      required: [fingerprint]
+      properties:
+        fingerprint: {type: string, maxLength: 512, description: 客户端设备指纹原始串；服务端存 HMAC-SHA256(串, FP_HMAC_KEY)}
+    TrialClaimResult:
+      type: object
+      required: [plan_code, granted_micro, granted_credits, trial_expire_at, bonus_expire_at, balance_after_micro]
+      properties:
+        plan_code: {type: string, enum: [TRIAL]}
+        granted_micro: {type: integer, format: int64}
+        granted_credits: {type: integer, format: int64, description: 7,000}
+        trial_expire_at: {type: string, format: date-time}
+        bonus_expire_at: {type: string, format: date-time, description: 90 天}
+        balance_after_micro: {type: integer, format: int64}
+        anti_abuse_checks: {type: string, description: "DEVICE+PHONE+IP_SEGMENT+ACCOUNT"}

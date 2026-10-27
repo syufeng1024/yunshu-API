@@ -8,7 +8,7 @@
 | 依赖 | T11、T04、**T10**（错误码与写出口） |
 | 可并行 | 与 T12 / T14 / T15 并行 |
 | 交付根 | `internal/control/fund/` |
-| 状态 | ⬜ 未开始 |
+| 状态 | 🟨 有条件通过（2026-10-27）· 两段均已交付，**缺 QA 独立验证**（429 中断，见台账） |
 
 ## 1. 目标
 
@@ -73,7 +73,7 @@
 | A1 | `go test ./internal/control/fund/... -race` 全绿 | 复跑 |
 | A2 | **G-03**：同一回调并发 10 次 → 积分只加一次、批次 2 个、**流水 2 条**（充值/赠送各一）、返回均成功 | 单测 |
 | A3 | **G-03**：`status=PENDING` 时调用入账 → 拒绝（积分不变） | 单测 |
-| A4 | **G-04**：充 99 元（9900 + 2000），消费 1000 → 可退 = 8900 积分（扣的是赠送先）→ 实际退款额按未消耗充值积分算 | 单测（精确数值） |
+| A4 | **G-04**：可退基数 = 未消耗充值积分（赠送永不参与，唯一绑定规则）。① **默认路径**（赠送 2,000 可用）消费 3,000 → 扣赠送 2,000 + 充值 1,000 → 可退 **8,900**；② PRD G-04 的 **7,900** 需「1,000 赠送在第二次扣减前已不可用」这一**未写明前提**，用例须显式构造该时间线 → 可退 7,900、`refund_fen` **7,110 分（71.10 元）**、`fee_fen` 790 分。两条都要断言（见 E-29） | 单测（精确数值） |
 | A5 | **G-07**：未实名申请开票 → 403 `account_not_verified`；已开票订单再申请 → 拒绝 | 单测 |
 | A6 | **G-08**：提额申请 → 审核通过 → `t_rate_limit_policy` 变更且 K26/配置版本生效 | 单测 + 集成 |
 | A7 | **G-09**：同设备指纹第二次领取体验积分 → 拒绝 | 单测 |
@@ -115,3 +115,44 @@ G-07/G-08/G-09: 各一条输出
 状态机: 四张图与枚举一致性断言结果
 遗留:
 ```
+
+---
+
+## 10. 交付记录（2026-10-27，分两段）
+
+### 第一段 · 套餐 / 订单 / 回调幂等 / 分账 / 兑换码（commit `a1e096a`）
+
+交付物 1–7、15、16（订单图）。新增 `internal/control/fund/{service,plan,order,callback,plan_grant,redeem}.go`、`internal/ledger/grant.go`（`InsertCreditBatch`/`GrantTx`/`Grant`，在调用方事务内建批次 + 写流水 + 改余额）；改 `server.go`、`mw/authz.go`（新增 `fund.read`/`fund.write`）、`controld/main.go`（验签密钥经环境变量注入）、`openapi.yaml`、`docs/fund-flow.md`。15 文件 +3699 行。
+
+**G-03 幂等三层**：`uk_ro_pay_txn(pay_channel, pay_txn_id)` → 行锁内状态 CAS（`UPDATE ... WHERE state='PENDING'` 判 `RowsAffected()==1`）→ `uk_le_idem`（`recharge:{id}` / `bonus:{id}`）。没有「先查后写」。并发 10 次实测：10×200、`credit=99000000/20000000`、`batches=2`、`entries=2`。
+
+**分账**：`RECHARGE`（`expire_at=NULL`）+ `BONUS`（`+billing.bonus_expire_days` 天），两批次两到期日，未合并。
+
+**A8/A9**：升档整体覆盖（STANDARD→PRO 300→1000/630000→2100000/110→367），STANDARD 赠送批次到期日不变；重复购同档规格不变、积分累加、两批次各自到期。
+
+**回调安全**：验签密钥缺失 → 503 且不入账（不降级为“跳过验签”）；金额不符 → 拒绝且订单留 `PENDING`；迟到支付（`CLOSED`/`REFUNDED` 后收成功通知）→ 200 + 审计 + 不入账。
+
+### 第二段 · 退款 / 发票 / 提额 / 体验版防刷 / 通知（未提交，待验收）
+
+交付物 8–13、16（退款/发票/提额三张图）+ E-27 文案小修。新增 `internal/control/fund/{refund,invoice,quota_apply,trial,notify,idem}.go`、`internal/ledger/freeze.go`（`FreezeRefundTx`/`ReleaseRefundTx`，唯一允许改 `frozen_refund_micro` 的入口）；改 `ledger/{balance,refund}.go`（导出 `QuoteRefundTx`，`Refund` 打款时释放本单冻结）、`server.go`（`Deps.Mailer`/`FingerprintKey` + 7 条路由）、`controld/main.go`（`FP_HMAC_KEY`）。
+
+**复用而非重写**：可退基数与退款额全部走 T04 原语（`RefundFen` ×9/100000、`QuoteRefund`、`Refund`），T13 只负责建单与状态机。
+
+**状态机按 DDL（E-26）**：退款 `APPLIED→APPROVED/REJECTED→PAYING→PAID/FAILED`；发票 `APPLIED/APPROVED/ISSUED/REJECTED/VOIDED`；提额 `PENDING/APPROVED/REJECTED/EXPIRED`。三张图均带 `fundspec:*` 锚点，测试断言文档枚举集合 == 代码枚举集合。
+
+**关键断言**：未实名开票 → 403 `account_not_verified`；超额开票拒绝并报剩余额度；`ISSUED` 后不可重复；提额 `effective_from` = 批准日次日 00:00（UTC+8）、`effective_to` +30 天、生效写 `t_rate_limit_policy` 并推进 `cfg:ver`；自审（申请人=审批人）拒绝；同指纹/同手机号/同 /24 IP 段二次领取均拒，邮箱不参与；退款 `FAILED` 后冻结解除且余额不变、流水 0 条。
+
+**覆盖率** 64.0% → **66.7%**（本段新增约 2,600 行）。
+
+### 本卡暴露的源文档问题（已登记）
+
+E-23（`max_bonus_ratio_bp` 分母不明且必有一档越界）、E-24（卡面 A2 流水条数写反）、E-25（PRD 的订单状态 `SUCCESS` 在库里不存在）、E-26（卡面退款状态机五个名字与 DDL 不符）、E-27（`invalid_request_body` 文案误报 JSON 语法错，已修）、E-28（审计 `result` 列宽 16 vs 枚举 17 字符，**实测 Error 1406**，待迁移 0023）、E-29（PRD G-04 消耗拆分自相矛盾）。
+
+### 遗留
+
+1. **QA 独立验证缺失**：2026-10-27 首轮 QA 因模型侧 429 中断，未产出结论；第一段仅交付总监复跑（build/vet/10 包测试/lint/无直写余额），第二段为用户直接验收。按用户决定推迟到 T21 前与 F-07 覆盖率门禁一并处理。
+2. 状态类拒绝（订单非 `PAID`、不可退、重复领取、开票超额）仍用 `invalid_request_body`，缺专用码——码表刚扩到 70，留 T15 统一补（届时可引入 `refund_state_conflict` / `trial_already_claimed` 类码）。
+3. 同一账号同时只允许一笔进行中的退款（`frozen_refund_micro` 是账户级，无法按单归属）；多单并发退款需按单冻结列/表，受迁移冻结约束，需决策。
+4. `Mailer` 只有接口，仓库无 SMTP 实现；未注入时只写站内信 + WARN。
+5. G-09 的 24 小时发放延迟与运营抽检未实现（A7 只要求防刷与重复领取拒绝）。
+6. `t_recharge_order.refundable_micro` 不在消费时递减（T04 内核现状），退款申请事务内用报价刷新。

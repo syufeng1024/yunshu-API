@@ -78,6 +78,11 @@ type BalanceDelta struct {
 	ConsumedMicro      int64
 	TotalBonusMicro    int64
 	TotalRechargeMicro int64
+	// FrozenRefundMicro moves money between available and refund-frozen
+	// without changing the balance. A refund apply writes +amount, a failed
+	// or rejected refund writes -amount, and ledger.Refund releases exactly
+	// the amount it pays out. No other sign pattern is valid.
+	FrozenRefundMicro int64
 }
 
 // Apply writes the new balances, bumps the CAS version and enforces the
@@ -104,12 +109,23 @@ func (a *Account) Apply(
 	newBonus := a.BalanceBonusMicro + d.BonusMicro
 	newRecharge := a.BalanceRechargeMicro + d.RechargeMicro
 	newTotal := newBonus + newRecharge
-
-	if newTotal-a.FrozenRefundMicro < -a.OverdraftLimitMicro {
-		return fmt.Errorf("%w: user_id=%d new_available=%d floor=%d",
-			ErrBelowOverdraft, a.UserID, newTotal-a.FrozenRefundMicro, -a.OverdraftLimitMicro)
+	newFrozen := a.FrozenRefundMicro + d.FrozenRefundMicro
+	if newFrozen < 0 {
+		return fmt.Errorf("%w: frozen refund would become %d", ErrInvalidParam, newFrozen)
 	}
 
+	if newTotal-newFrozen < -a.OverdraftLimitMicro {
+		return fmt.Errorf("%w: user_id=%d new_available=%d floor=%d",
+			ErrBelowOverdraft, a.UserID, newTotal-newFrozen, -a.OverdraftLimitMicro)
+	}
+
+	// A freeze/unfreeze is not a money movement, so it carries no ledger id.
+	// Keeping the previous id is what makes the audit trail still point at the
+	// last real entry rather than at 0.
+	var lastLedgerArg any = lastLedgerID
+	if lastLedgerID <= 0 {
+		lastLedgerArg = nil
+	}
 	const q = `UPDATE t_credit_account
 	              SET balance_bonus_micro = ?,
 	                  balance_recharge_micro = ?,
@@ -117,19 +133,21 @@ func (a *Account) Apply(
 	                  total_consumed_micro = total_consumed_micro + ?,
 	                  total_bonus_micro = total_bonus_micro + ?,
 	                  total_recharge_micro = total_recharge_micro + ?,
+	                  frozen_refund_micro = ?,
 	                  version = version + 1,
-	                  last_ledger_id = ?,
+	                  last_ledger_id = COALESCE(?, last_ledger_id),
 	                  last_settled_at = COALESCE(?, last_settled_at),
 	                  updated_at = ?
 	              WHERE user_id = ?
 	                AND version = ?
 	                AND balance_bonus_micro + balance_recharge_micro
-	                    - frozen_refund_micro + ? >= -overdraft_limit_micro`
+	                    - ? + ? >= -overdraft_limit_micro`
 	res, err := tx.ExecContext(ctx, q,
 		newBonus, newRecharge, newTotal,
 		d.ConsumedMicro, d.TotalBonusMicro, d.TotalRechargeMicro,
-		lastLedgerID, settledAt, now.UTC(),
-		a.UserID, a.Version, d.BonusMicro+d.RechargeMicro,
+		newFrozen,
+		lastLedgerArg, settledAt, now.UTC(),
+		a.UserID, a.Version, newFrozen, d.BonusMicro+d.RechargeMicro,
 	)
 	if err != nil {
 		return fmt.Errorf("ledger: update account: %w", err)
@@ -145,7 +163,10 @@ func (a *Account) Apply(
 	a.BalanceBonusMicro = newBonus
 	a.BalanceRechargeMicro = newRecharge
 	a.BalanceMicro = newTotal
+	a.FrozenRefundMicro = newFrozen
 	a.Version++
-	a.LastLedgerID = &lastLedgerID
+	if lastLedgerID > 0 {
+		a.LastLedgerID = &lastLedgerID
+	}
 	return nil
 }

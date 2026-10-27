@@ -35,6 +35,76 @@ func TestOrderStateMachineDocMatchesCode(t *testing.T) {
 	t.Logf("order states (%d): %v", len(got), keys(got))
 }
 
+// A14: the other three state machines of T13's second segment. The anchor line
+// holds the set; the comparison is set equality, so a state added to one side
+// fails here before it reaches review.
+func TestSecondSegmentStateMachinesMatchCode(t *testing.T) {
+	doc := readFundFlow(t)
+	anchors := parseAnchors(doc)
+	cases := []struct {
+		anchor string
+		code   []string
+	}{
+		{"fundspec:refund-states", refundStates},
+		{"fundspec:invoice-states", invoiceStates},
+		{"fundspec:quota-states", quotaStates},
+	}
+	for _, tc := range cases {
+		documented, ok := anchors[tc.anchor]
+		if !ok {
+			t.Errorf("docs/fund-flow.md has no %q anchor; known anchors: %v",
+				tc.anchor, anchorNames(anchors))
+			continue
+		}
+		got := setOf(tc.code)
+		want := setOf(strings.Split(documented, ","))
+		if len(got) != len(want) {
+			t.Errorf("%s: count differs code=%v doc=%v", tc.anchor, keys(got), keys(want))
+		}
+		for state := range got {
+			if !want[state] {
+				t.Errorf("%s: state %q exists in code but not in docs", tc.anchor, state)
+			}
+		}
+		for state := range want {
+			if !got[state] {
+				t.Errorf("%s: state %q exists in docs but not in code", tc.anchor, state)
+			}
+		}
+		t.Logf("%s (%d): %v", tc.anchor, len(got), keys(got))
+	}
+}
+
+// Each of the three new diagrams must draw its states and be a mermaid block.
+// The order diagram test already asserts "stateDiagram-v2" exists; the
+// per-section check is done by requiring two more occurrences.
+func TestSecondSegmentDiagramsMentionEveryState(t *testing.T) {
+	doc := readFundFlow(t)
+	if got := strings.Count(doc, "stateDiagram-v2"); got < 4 {
+		t.Errorf("docs/fund-flow.md has %d mermaid state diagrams, want 4 (order/refund/invoice/quota)", got)
+	}
+	sections := []struct {
+		heading string
+		states  []string
+	}{
+		{"## 5. 退款状态机", refundStates},
+		{"## 6. 发票状态机", invoiceStates},
+		{"## 7. 提额状态机", quotaStates},
+	}
+	for _, sec := range sections {
+		idx := strings.Index(doc, sec.heading)
+		if idx < 0 {
+			t.Errorf("docs/fund-flow.md has no %q section", sec.heading)
+			continue
+		}
+		for _, state := range sec.states {
+			if !strings.Contains(doc[idx:], state) {
+				t.Errorf("%s never mentions the state %q", sec.heading, state)
+			}
+		}
+	}
+}
+
 // The document must also draw the order diagram, and the diagram must mention
 // every state: a state nobody can reach is a dead enum, one missing from the
 // picture is a documentation gap.
