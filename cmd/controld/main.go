@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/signal"
@@ -49,6 +50,23 @@ func main() {
 		os.Exit(1)
 	}
 	defer mainDB.Close()
+
+	// The log tables may live in their own instance. A configured DSN opens a
+	// second pool; an empty one is announced and the control service falls
+	// back to the main DB (the local single-database deployment).
+	var logDB *sql.DB
+	if strings.TrimSpace(cfg.LogSQLDSN) != "" {
+		logDB, err = db.OpenMain(cfg.LogSQLDSN, db.MainPoolMaxOpen, db.MainPoolMaxIdle)
+		if err != nil {
+			logger.Error(rootCtx, "open log db failed: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
+			os.Exit(1)
+		}
+		defer logDB.Close()
+	} else {
+		logger.Warn(rootCtx,
+			"LOG_SQL_DSN is empty: console log queries fall back to DB_DSN",
+			obslog.Fields{Stage: "startup"})
+	}
 
 	rdb := redisx.New(redisx.Options{
 		Addr:     cfg.RedisAddr,
@@ -103,6 +121,7 @@ func main() {
 
 	ctl, err := control.New(control.Deps{
 		DB:       mainDB,
+		LogDB:    logDB,
 		Redis:    rdb,
 		Sessions: sessions,
 		Audit:    auditWriter,
@@ -131,6 +150,11 @@ func main() {
 	h.Add("mysql", func(ctx context.Context) error {
 		return db.Ping(ctx, mainDB)
 	})
+	if logDB != nil {
+		h.Add("log_mysql", func(ctx context.Context) error {
+			return db.Ping(ctx, logDB)
+		})
+	}
 	h.Add("config", func(ctx context.Context) error {
 		n, err := rdb.Raw().Exists(ctx, config.SnapshotRedisKey(config.NsRouting)).Result()
 		if err != nil {

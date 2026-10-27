@@ -16,13 +16,13 @@ func TestRolePermissionMatrix(t *testing.T) {
 		PermChannelWrite, PermNoticeWrite, PermRiskWrite, PermConfigWrite,
 		PermFundRead, PermFundWrite, PermFundApprove,
 		PermTicketRead, PermTicketWrite, PermTicketReply,
-		PermAuditRead, PermAdminRead, PermAdminAll,
+		PermAuditRead, PermLogRead, PermAdminRead, PermAdminAll,
 	}
 	want := map[string]map[Permission]bool{
 		"PERSONAL": {
 			PermUserRead: true, PermKeyRead: true, PermKeyWrite: true,
 			PermModelRead: true, PermFundRead: true, PermFundWrite: true,
-			PermTicketRead: true, PermTicketWrite: true,
+			PermTicketRead: true, PermTicketWrite: true, PermLogRead: true,
 		},
 		"OPS": {
 			PermUserRead: true, PermUserWrite: true, PermModelRead: true,
@@ -70,6 +70,11 @@ func TestRolePermissionMatrix(t *testing.T) {
 	}
 	if Allows("FINANCE", PermTicketRead) || Allows("FINANCE", PermTicketWrite) || Allows("FINANCE", PermTicketReply) {
 		t.Error("FINANCE has no ticket permission")
+	}
+	// log.read is account-scoped. No operator role may hold it, otherwise an
+	// operator could open a customer's request log through the console route.
+	if Allows("OPS", PermLogRead) || Allows("FINANCE", PermLogRead) {
+		t.Error("log.read must stay with PERSONAL and SUPER_ADMIN only")
 	}
 
 	// An unknown role grants nothing.

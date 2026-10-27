@@ -129,7 +129,7 @@
 | [T11](T11-控制面骨架与RBAC.md) | 控制面骨架·会话鉴权·RBAC | T03,T05 | `cmd/controld/`、`internal/control/` | 🟨 第一段 ✅ |
 | [T12](T12-用户密钥与模型域API.md) | 用户 / 密钥 / 模型域 API | T11 | `internal/control/user/`、`.../key/`、`.../model/` | ✅ |
 | [T13](T13-资金域API.md) | 资金域 API（订单/退款/发票/提额/套餐） | T11,T04 | `internal/control/fund/` | 🟨 有条件通过（缺 QA） |
-| [T14](T14-用量账单与日志API.md) | 用量·账单·请求日志 API | T11 | `internal/control/usage/` | ⬜ |
+| [T14](T14-用量账单与日志API.md) | 用量·账单·请求日志 API | T11 | `internal/control/usage/`、`.../logq/` | 🟨 第一段 ✅ |
 | [T15](T15-运营后台API.md) | 运营后台 API（渠道/模型/定价/分组/公告/风控） | T11,T05 | `internal/control/ops/` | ✅ 两段完成 |
 | [T16](T16-工单审核与模型主数据API.md) | 工单·审核中心·模型主数据 API | T15 | `internal/control/ticket/`、`.../review/`、`ops/`（D-23） | ✅ 两段完成 |
 
@@ -228,6 +228,7 @@ flowchart LR
 | T15 补丁 | 2026-10-27 | 2026-10-27 | ✅ F16-7 未配价不得上架（E-34） | — | 409 `resource_state_conflict`；缺省 `listing_state` 改 `CATALOG_ONLY` |
 | T16 第一段 | 2026-10-27 | 2026-10-27 | ✅ 通过 | 4 项 | 工单中心 8 条路由；三态无 AUTO_CLOSED；SLA 假时钟证明不自动关闭；越权三类同一 404；三条审计分写 |
 | T16 第二段 | 2026-10-27 | 2026-10-27 | ✅ 通过 | 5 项 | 审核中心（升序队列/驳回必填/自审 403/审批幂等）+ 模型主数据并入 ops（别名/改名/筛选）；给 withQuotaTx 补死锁有界重试 |
+| T14 第一段 | 2026-10-27 | 2026-10-27 | 🟨 已交付，待验收 | 3 项 | 日志域 3 路由；365/180 双窗口；越权逐字相同；EXPLAIN 命中 idx_ur_user_created；正文表缺失降级 404 |
 
 **T15 全卡验收结论（交付总监复核）**
 

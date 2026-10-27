@@ -23,6 +23,7 @@ import (
 	"yunshu.dev/core/internal/control/auth"
 	"yunshu.dev/core/internal/control/fund"
 	"yunshu.dev/core/internal/control/key"
+	"yunshu.dev/core/internal/control/logq"
 	"yunshu.dev/core/internal/control/model"
 	"yunshu.dev/core/internal/control/mw"
 	"yunshu.dev/core/internal/control/ops"
@@ -38,7 +39,12 @@ import (
 // Deps is the control plane's dependency set. controld owns the general main
 // database and Redis pools (TDS §1).
 type Deps struct {
-	DB       *sql.DB
+	DB *sql.DB
+	// LogDB is the dedicated log database. It is optional: nil means the
+	// single-database deployment, where t_usage_record and
+	// t_upstream_attempt live in DB. The T14 log reads use it exclusively
+	// when set, so a production split never falls back to the main schema.
+	LogDB    *sql.DB
 	Redis    *redisx.Client
 	Sessions *mw.SessionManager
 	Audit    *audit.Writer
@@ -76,15 +82,16 @@ type Deps struct {
 
 // Server holds the route table and its dependencies.
 type Server struct {
-	d      Deps
-	auth   *auth.Service
-	user   *user.Service
-	keys   *key.Service
+	d       Deps
+	auth    *auth.Service
+	user    *user.Service
+	keys    *key.Service
 	models  *model.Service
 	fund    *fund.Service
 	ops     *ops.Service
 	tickets *ticket.Service
 	reviews *review.Service
+	logs    *logq.Service
 }
 
 // New validates the wiring and builds the server.
@@ -133,6 +140,10 @@ func New(d Deps) (*Server, error) {
 	// The review centre decides through the fund service; it has no balance
 	// writer of its own.
 	reviews := review.New(d.DB, d.Audit, d.Now, d.Logger, funds)
+	// Log reads go to LogDB when a separate log database is configured. The
+	// service falls back to DB on its own, so both the split and the
+	// single-database deployments share one route table.
+	logs := logq.New(d.DB, d.LogDB, d.Now, d.Logger)
 	return &Server{
 		d: d,
 		auth: &auth.Service{
@@ -142,13 +153,14 @@ func New(d Deps) (*Server, error) {
 			Logger:   d.Logger,
 			Now:      d.Now,
 		},
-		user:   user.New(d.DB, d.Redis, d.Now, d.Logger),
-		keys:   keys,
+		user:    user.New(d.DB, d.Redis, d.Now, d.Logger),
+		keys:    keys,
 		models:  model.New(d.DB, d.Now, d.Logger),
 		fund:    funds,
 		ops:     opss,
 		tickets: tickets,
 		reviews: reviews,
+		logs:    logs,
 	}, nil
 }
 
@@ -283,6 +295,14 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/admin/reviews", s.authed(mw.PermFundApprove, s.reviews.List))
 	mux.Handle("POST /api/admin/reviews/{id}/approve", s.authed(mw.PermFundApprove, s.reviews.Approve))
 	mux.Handle("POST /api/admin/reviews/{id}/reject", s.authed(mw.PermFundApprove, s.reviews.Reject))
+
+	// T14 request logs. Read-only by design: PRD §10.2 requires retention, so
+	// there is no delete route. The list defaults to seven days and refuses a
+	// from older than 365 days with "use archive export"; the body endpoint
+	// applies its own 180-day window.
+	mux.Handle("GET /api/console/logs", s.authed(mw.PermLogRead, s.logs.List))
+	mux.Handle("GET /api/console/logs/{request_id}", s.authed(mw.PermLogRead, s.logs.Detail))
+	mux.Handle("GET /api/console/logs/{request_id}/body", s.authed(mw.PermLogRead, s.logs.Body))
 
 	// Unknown /api paths return the shared error envelope instead of net/http's
 	// plain-text 404.

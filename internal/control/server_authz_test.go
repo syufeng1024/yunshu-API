@@ -164,9 +164,10 @@ func TestOpsCanReadChannels(t *testing.T) {
 }
 
 // The ticket consoles are split: OPS answers through ticket.reply but must not
-// open the account-scoped console routes. Ticket ids in the path are irrelevant:
-// Require rejects before the handler runs.
-func TestOpsCannotReachConsoleTickets(t *testing.T) {
+// open the account-scoped console routes. Request-log reads are account-scoped
+// for the same reason: log.read is PERSONAL/SUPER_ADMIN only. Ids in the path
+// are irrelevant because Require rejects before the handler runs.
+func TestOpsCannotReachAccountConsole(t *testing.T) {
 	rdb := redisx.New(redisx.Options{Addr: redistest.Addr(), DB: redistest.DB(), PoolSize: 5})
 	t.Cleanup(func() { _ = rdb.Close() })
 	sessMgr, err := mw.NewSessionManager(testDB, rdb, "0123456789abcdef")
@@ -195,6 +196,9 @@ func TestOpsCannotReachConsoleTickets(t *testing.T) {
 		{http.MethodGet, "/api/console/tickets/1"},
 		{http.MethodPost, "/api/console/tickets/1/close"},
 		{http.MethodGet, "/api/console/request-ids"},
+		{http.MethodGet, "/api/console/logs"},
+		{http.MethodGet, "/api/console/logs/1"},
+		{http.MethodGet, "/api/console/logs/1/body"},
 	}
 	for _, route := range routes {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
@@ -221,9 +225,9 @@ func TestOpsCannotReachConsoleTickets(t *testing.T) {
 }
 
 // Positive control: the same route table answers a PERSONAL session on the
-// console tickets list (the handler then scopes by uid). Without this pair the
-// 403 test above could pass because the whole ticket surface is broken.
-func TestPersonalCanReachConsoleTickets(t *testing.T) {
+// console tickets and logs lists (the handlers then scope by uid). Without
+// this pair the 403 test above could pass because the whole surface is broken.
+func TestPersonalCanReachAccountConsole(t *testing.T) {
 	rdb := redisx.New(redisx.Options{Addr: redistest.Addr(), DB: redistest.DB(), PoolSize: 5})
 	t.Cleanup(func() { _ = rdb.Close() })
 	sessMgr, err := mw.NewSessionManager(testDB, rdb, "0123456789abcdef")
@@ -242,12 +246,14 @@ func TestPersonalCanReachConsoleTickets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue session: %v", err)
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/console/tickets", nil)
-	req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
-	rec := httptest.NewRecorder()
-	mux.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("PERSONAL ticket list status=%d body=%s, want 200", rec.Code, rec.Body.String())
+	for _, path := range []string{"/api/console/tickets", "/api/console/logs"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PERSONAL %s status=%d body=%s, want 200", path, rec.Code, rec.Body.String())
+		}
 	}
 }
 

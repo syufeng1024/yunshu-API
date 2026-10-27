@@ -36,6 +36,11 @@ const (
 	PermTicketWrite  Permission = "ticket.write"
 	PermTicketReply  Permission = "ticket.reply"
 	PermAuditRead    Permission = "audit.read"
+	// log.read opens the account console's own request logs. Only PERSONAL
+	// and SUPER_ADMIN hold it: the operator consoles have no route that
+	// serves /api/console/logs, and a shared capability would let a customer
+	// surface an operator view (E-31/E-33 pattern).
+	PermLogRead Permission = "log.read"
 	// admin.read gates the operator console's read routes. model.read cannot
 	// do that job: PERSONAL holds model.read for /api/console/models, and the
 	// admin model view carries upstream cost prices (B-48) and channel views
@@ -62,6 +67,10 @@ const (
 // /api/console/tickets (every row there is scoped to one account), and sharing
 // one permission across both consoles would let a customer open the operator
 // queue (E-31/E-33 pattern).
+//
+// log.read is likewise account-scoped: PERSONAL (and SUPER_ADMIN for support
+// diagnostics) may read only rows whose user_id equals their session, and no
+// operator role holds the permission.
 var rolePermissions = map[string]map[Permission]bool{
 	"PERSONAL": {
 		PermUserRead:    true,
@@ -72,6 +81,7 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermFundWrite:   true,
 		PermTicketRead:  true,
 		PermTicketWrite: true,
+		PermLogRead:     true,
 	},
 	"OPS": {
 		PermUserRead:     true,
@@ -115,6 +125,7 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermTicketWrite:  true,
 		PermTicketReply:  true,
 		PermAuditRead:    true,
+		PermLogRead:      true,
 		PermAdminRead:    true,
 		PermAdminAll:     true,
 	},
