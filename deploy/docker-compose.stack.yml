@@ -28,6 +28,10 @@ x-app-env: &app-env
   CHANNEL_KEY_KEK: ${CHANNEL_KEY_KEK:-}
   # 体验版设备指纹 HMAC 密钥；留空时 /api/console/trial/claim 返回 503。
   FP_HMAC_KEY: ${FP_HMAC_KEY:-}
+  # 用量 CSV 导出：目录在容器 /tmp 下，令牌 1 小时失效，不需持久卷。
+  # EXPORT_HMAC_KEY 留空时导出接口 503 config_unavailable。
+  EXPORT_DIR: ${EXPORT_DIR:-/tmp/yunshu-exports}
+  EXPORT_HMAC_KEY: ${EXPORT_HMAC_KEY:-}
 
 x-app-image: &app-image
   image: yunshu-app:${IMAGE_TAG:-local}

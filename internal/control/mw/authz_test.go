@@ -16,13 +16,14 @@ func TestRolePermissionMatrix(t *testing.T) {
 		PermChannelWrite, PermNoticeWrite, PermRiskWrite, PermConfigWrite,
 		PermFundRead, PermFundWrite, PermFundApprove,
 		PermTicketRead, PermTicketWrite, PermTicketReply,
-		PermAuditRead, PermLogRead, PermAdminRead, PermAdminAll,
+		PermAuditRead, PermLogRead, PermUsageRead, PermAdminRead, PermAdminAll,
 	}
 	want := map[string]map[Permission]bool{
 		"PERSONAL": {
 			PermUserRead: true, PermKeyRead: true, PermKeyWrite: true,
 			PermModelRead: true, PermFundRead: true, PermFundWrite: true,
 			PermTicketRead: true, PermTicketWrite: true, PermLogRead: true,
+			PermUsageRead: true,
 		},
 		"OPS": {
 			PermUserRead: true, PermUserWrite: true, PermModelRead: true,
@@ -75,6 +76,11 @@ func TestRolePermissionMatrix(t *testing.T) {
 	// operator could open a customer's request log through the console route.
 	if Allows("OPS", PermLogRead) || Allows("FINANCE", PermLogRead) {
 		t.Error("log.read must stay with PERSONAL and SUPER_ADMIN only")
+	}
+	// usage.read has the same account scope as log.read: the operator
+	// consoles have no usage route, so no operator role may hold it.
+	if Allows("OPS", PermUsageRead) || Allows("FINANCE", PermUsageRead) {
+		t.Error("usage.read must stay with PERSONAL and SUPER_ADMIN only")
 	}
 
 	// An unknown role grants nothing.

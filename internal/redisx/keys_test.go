@@ -37,9 +37,10 @@ func TestKeyConstructors(t *testing.T) {
 		{"K24", LogStreamKey(), "log:stream"},
 		{"K25", JobHeartbeatKey("jobsd-1"), "job:heartbeat:jobsd-1"},
 		{"K26", BalanceKey(7), "bal:7"},
+		{"K27", ExportLockKey(7), "exp:user:7"},
 	}
-	if len(tests) != 26 {
-		t.Fatalf("key table has %d entries, want 26", len(tests))
+	if len(tests) != 27 {
+		t.Fatalf("key table has %d entries, want 27", len(tests))
 	}
 	for _, tt := range tests {
 		if tt.got != tt.want {

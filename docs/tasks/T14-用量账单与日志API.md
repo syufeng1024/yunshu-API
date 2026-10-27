@@ -8,7 +8,7 @@
 | 依赖 | T11、T09（日志已落库）、**T10**（错误码） |
 | 可并行 | 与 T12 / T13 / T15 并行 |
 | 交付根 | `internal/control/usage/`、`internal/control/logq/` |
-| 状态 | 🟨 第一段已交付（2026-10-27）· 日志域完成；用量与账单未派 |
+| 状态 | ✅ 两段已交付（2026-10-27）· 交付物 1–12 |
 
 ## 1. 目标
 
@@ -103,3 +103,50 @@ M "EXPLAIN SELECT * FROM t_usage_record WHERE user_id=1 AND created_at>='2026-10
 F 覆盖: F9-1..F9-3、F11-1..F11-3 → 用例名
 遗留:
 ```
+
+---
+
+## 10. 第二段交付记录（2026-10-27）· 用量 / 账单 / 导出 / metrics
+
+新增 `internal/control/usage/`（`service/query/bill/export/metrics` + 5 个测试文件）、`docs/log-retention.md`；改 `mw/authz.go`（新增 `usage.read`，仅 `PERSONAL` 与 `SUPER_ADMIN`）、`server.go`、`redisx/keys.go`（新增 **K27** `exp:user:{uid}`）、`api/openapi.yaml`（补齐 T14 全部 8 条，含第一段 logq 的缺口）、`.env.example` 与部署模板（`EXPORT_DIR` / `EXPORT_HMAC_KEY`）。**未新增迁移、未新增配置键、未新增错误码**。
+
+### 关键验收
+
+| 验收 | 结果 |
+| :--- | :--- |
+| A2 维度切换 | ✅ 近 7 日 + `model_id=3` → 切 `channel`：筛选仍生效（`model_id=9` 的 90 万微积分未出现），结果由后端 `GROUP BY channel_id` 重算 |
+| A3 金额 | ✅ 123,450,000 micro → `fen=12345` → `"123.45"`；`(micro+5000)/10000` 整数四舍五入，4999→0 / 5000→1；分账两项之和 == 总额（有断言） |
+| A12 失败不计费但计率 | ✅ 同账号 3 条（2 成功 1 失败）→ `request_total=3`、`request_success=2`、`rate_bp=6666`；失败行故意带 tokens/consumed，**未进入任何计费列**；日志列表看得到这条失败 |
+| A4 列同源 | ✅ `usageColumns` 常量同时驱动 CSV 表头与 JSON 列，13 列顺序一致；导出只含筛选内 2 行（造 3 行） |
+| A11 导出限流与失效 | ✅ 第二次 POST → 409 `resource_state_conflict`；`+1h1s` → 404「导出链接已失效」；缺 `EXPORT_HMAC_KEY` → 503 且不降级为无签名链接 |
+| 实时/历史分离 | ✅ `realtime_*` 与 `settled_*` 两族字段，附 `realtime_window` / `settled_until`；断言响应顶层不存在合计算段（禁止把两者加总） |
+| 索引 | ✅ 用量/账单/带 `model_id` 三条 `EXPLAIN` 均 `type=range` 且命中 `idx_ur_user_created`，无 `ALL` |
+
+### 一次口径修正（本轮最重要的一处）
+
+初版把「失败请求不计入用量」理解成「所有指标只算 SUCCESS」，于是 `success_rate_bp` **恒为 10000** ——仪表盘上永远 100%，比不显示更糟。
+
+根因是语义混淆：卡面硬约束 6 说的是**计费与排行口径**，不是成功率的分母。已改为分层聚合，一条 SQL 内同时取三组值：
+
+```sql
+COUNT(*)                                            AS request_total,     -- 全部（含失败）
+COALESCE(SUM(result='SUCCESS'), 0)                  AS request_success,
+COALESCE(SUM(CASE WHEN result='SUCCESS' THEN tokens_in END), 0) AS tokens_in,
+-- 积分/分账/金额同理：只在 SUCCESS 行累加
+```
+
+`request_total` 含失败、`request_success` 为成功数、`rate_bp = success*10000/total`（整数截断，`total=0` 返回 0）；**计费列仍然只算 SUCCESS**，用量排序仍按 `consumed_micro DESC`（失败行 `consumed=0` 自然沉底）。`docs/log-retention.md` 与 openapi 的口径说明同步改正。
+
+### 导出设计（仓库无对象存储）
+
+- `Exporter` 接口 + `FileExporter`（`EXPORT_DIR`，默认临时目录），文件名 16 字节随机 hex 不可猜
+- 令牌 = `HMAC-SHA256(EXPORT_HMAC_KEY, uid|exp|file)` base64url，`exp` 1h
+- **不建任务表**：`task_id` 同样是令牌，状态由「文件在 → DONE；文件不在 + K27 在 → RUNNING；都不在 → FAILED」推导
+- 单用户并发 1 个任务：Redis `SETNX exp:user:{uid}` + TTL 1h（**K27**）
+- 下载除令牌外仍要求会话 + `usage.read`，且令牌内 uid 必须等于会话 uid（比纯 bearer 链接更严）
+
+### 遗留
+
+1. 令牌 1h 后 404，但磁盘 CSV 本体未在过期时删除；物理清理留 T22/运维。
+2. 本机无 gcc，`-race` 未跑（CI 补）。
+3. 账单口径下「成功率」现在是有意义的数（含失败分母），但**账单页展示成功率**是否合适由前端定；后端已同时给 `request_total`/`request_success`，口径透明。

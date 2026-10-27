@@ -1300,6 +1300,388 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/logs:
+    get:
+      operationId: listConsoleLogs
+      tags: [console, log]
+      summary: 请求日志列表（默认近 7 天；失败请求同样出现）
+      description: |
+        与用量接口的过滤口径相反：这里不按 result 过滤，失败请求默认可见。
+        from 早于 365 天在线窗口返回 400 并提示使用归档导出。
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: from
+          in: query
+          description: RFC3339 或 YYYY-MM-DD；默认 now-7d
+          schema: {type: string}
+        - name: to
+          in: query
+          schema: {type: string}
+        - name: state
+          in: query
+          schema: {type: string, enum: [all, success, failed, partial, rate_limited]}
+        - name: model
+          in: query
+          description: 按 model_name_snap 精确匹配
+          schema: {type: string, maxLength: 128}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at]}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 日志列表
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogListResponse'
+        '400':
+          description: 查询参数非法或超出 365 天在线窗口（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 log.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/logs/{request_id}:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema: {type: string, maxLength: 36}
+    get:
+      operationId: getConsoleLogDetail
+      tags: [console, log]
+      summary: 单次请求元数据 + 重试时间线
+      description: 366 天前的元数据仍在保留期内可查；他人 request_id 与不存在返回同一 404。
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 请求详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogDetailResponse'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 log.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 请求不存在或不属于当前账号（resource_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/logs/{request_id}/body:
+    parameters:
+      - name: request_id
+        in: path
+        required: true
+        schema: {type: string, maxLength: 36}
+    get:
+      operationId: getConsoleLogBody
+      tags: [console, log]
+      summary: 请求正文（正文保留 180 天且 full_log_enabled）
+      responses:
+        '200':
+          description: 正文；敏感字段已脱敏（redacted=true）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogBodyResponse'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 log.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 正文已过 180 天保留期或未开启 full_log_enabled（resource_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/usage:
+    get:
+      operationId: getConsoleUsage
+      tags: [console, usage]
+      summary: 用量聚合（模型/渠道/日维度；计费列仅 SUCCESS）
+      description: |
+        维度切换只改 GROUP BY，model_id/channel_id 等筛选条件保持并回显在 filter。
+        排序为消耗积分降序、维度键升序。金额提供 amount_fen 与两位小数的 amount_yuan。
+        口径分层：request_total/request_success/success_rate_bp 统计全部 result（含 FAILED）；
+        tokens_in/tokens_out/consumed_* 与金额只累加 result='SUCCESS' 的行。
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: from
+          in: query
+          description: RFC3339 或 YYYY-MM-DD；默认 now-7d；不得早于 now-365d
+          schema: {type: string}
+        - name: to
+          in: query
+          schema: {type: string}
+        - name: dimension
+          in: query
+          schema: {type: string, enum: [model, channel, day], default: model}
+        - name: model_id
+          in: query
+          schema: {type: integer, format: int64, minimum: 1}
+        - name: channel_id
+          in: query
+          schema: {type: integer, format: int64, minimum: 1}
+      responses:
+        '200':
+          description: 用量聚合
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageResponse'
+        '400':
+          description: 查询参数非法或超出 365 天在线窗口（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 usage.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/bills:
+    get:
+      operationId: getConsoleBill
+      tags: [console, usage]
+      summary: 自然月账单（CST 日界；计费列仅 SUCCESS）
+      description: |
+        12,345 积分 → amount_fen=12345、amount_yuan="123.45"；前端不再做除法。
+        request_total/request_success/success_rate_bp 统计当月全部 result，金额与积分只累加 SUCCESS。
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: month
+          in: query
+          description: YYYY-MM（CST 自然月）；省略为当前月
+          schema: {type: string, pattern: '^\d{4}-(0[1-9]|1[0-2])$'}
+      responses:
+        '200':
+          description: 月度账单
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BillResponse'
+        '400':
+          description: month 格式非法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 usage.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/usage/metrics:
+    get:
+      operationId: getConsoleUsageMetrics
+      tags: [console, usage]
+      summary: 实时值（K14/K15）与历史值（t_metric_daily）分字段返回
+      description: |
+        realtime_* 与 settled_* 永不相加；realtime_window 与 settled_until 说明各自覆盖范围。
+        scope=channel 的实时值来自 K15，是平台维度（realtime_scope=PLATFORM）。
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: scope
+          in: query
+          schema: {type: string, enum: [user, channel], default: user}
+        - name: channel_id
+          in: query
+          description: scope=channel 时必填
+          schema: {type: integer, format: int64, minimum: 1}
+        - name: days
+          in: query
+          description: 历史窗口的自然日数，截止到昨天（CST）
+          schema: {type: integer, minimum: 1, maximum: 365, default: 7}
+      responses:
+        '200':
+          description: 实时与历史指标
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageMetricsResponse'
+        '400':
+          description: scope/channel_id/days 非法（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 usage.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/usage/export:
+    post:
+      operationId: startConsoleUsageExport
+      tags: [console, usage]
+      summary: 异步生成用量 CSV（202，立即返回任务令牌）
+      description: |
+        单账号同时只能有 1 个任务（K27 exp:user:{uid}，TTL 1h），第二个 409。
+        未配置 EXPORT_HMAC_KEY 时 503，绝不退化到无签名链接。
+        CSV 表头与 usage 页一致；「请求数/成功数/成功率」统计全部 result，token 与积分类只累加 SUCCESS。
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: from
+          in: query
+          schema: {type: string}
+        - name: to
+          in: query
+          schema: {type: string}
+        - name: dimension
+          in: query
+          schema: {type: string, enum: [model, channel, day], default: model}
+        - name: model_id
+          in: query
+          schema: {type: integer, format: int64, minimum: 1}
+        - name: channel_id
+          in: query
+          schema: {type: integer, format: int64, minimum: 1}
+      responses:
+        '202':
+          description: 任务已受理
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportStartResponse'
+        '400':
+          description: 查询参数非法或超出 365 天在线窗口（invalid_query_parameter）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 usage.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 已有导出任务进行中（resource_state_conflict）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: 未配置 EXPORT_HMAC_KEY（config_unavailable）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/console/exports/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema: {type: string}
+    get:
+      operationId: getConsoleExport
+      tags: [console, usage]
+      summary: 任务状态（task 令牌）或 CSV 下载（download 令牌）
+      description: |
+        同一路径由签名令牌的 kind 区分：task 返回 JSON 状态，dl 返回 text/csv。
+        状态由“文件是否存在 + K27 是否存在”推导；令牌 1 小时过期后返回 404。
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 任务状态 JSON，或 CSV 字节流
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportStatusResponse'
+            text/csv:
+              schema: {type: string}
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 usage.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 令牌无效/过期、任务不属于当前账号或文件已失效（resource_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 components:
   securitySchemes:
     sessionCookie:
@@ -2151,3 +2533,229 @@ components:
       properties:
         state: {type: string, enum: [CLOSED], description: 唯一可达目标；RESPONDED 由回复动作写入，OPEN 由用户补充回复重开}
         reason: {type: string, maxLength: 255, description: 写入审计 reason}
+    LogItem:
+      type: object
+      required: [request_id, api_key_id, model_name, request_model, inbound_protocol, group_code, is_stream, http_status, biz_code, result, tokens_in, tokens_out, consumed_micro, upstream_attempts, total_ms, upstream_ms, client_ip, client_aborted, full_log_saved, created_at]
+      properties:
+        request_id: {type: string, maxLength: 36}
+        api_key_id: {type: integer, format: int64}
+        api_key_name: {type: string}
+        model_id: {type: integer, format: int64, nullable: true}
+        model_name: {type: string}
+        request_model: {type: string}
+        inbound_protocol: {type: string}
+        channel_id: {type: integer, format: int64, nullable: true}
+        channel_name: {type: string, nullable: true}
+        group_code: {type: string}
+        is_stream: {type: boolean}
+        http_status: {type: integer}
+        biz_code: {type: string}
+        result: {type: string, enum: [SUCCESS, PARTIAL, FAILED]}
+        fail_stage: {type: string, nullable: true}
+        fail_owner: {type: string, nullable: true}
+        tokens_in: {type: integer, format: int64}
+        tokens_out: {type: integer, format: int64}
+        consumed_micro: {type: integer, format: int64}
+        upstream_attempts: {type: integer, format: int64}
+        ttft_ms: {type: integer, format: int64, nullable: true}
+        total_ms: {type: integer, format: int64}
+        upstream_ms: {type: integer, format: int64}
+        client_ip: {type: string}
+        client_aborted: {type: boolean}
+        full_log_saved: {type: boolean}
+        created_at: {type: string, format: date-time}
+    LogListResponse:
+      type: object
+      required: [items, page, page_size, total, from, to, window_days]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/LogItem'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        window_days: {type: integer, description: 365 天在线窗口}
+    LogAttempt:
+      type: object
+      required: [attempt_index, result, phase, channel_id, channel_name, protocol_code, upstream_model, total_ms, tokens_in, tokens_out, is_retryable, created_at]
+      properties:
+        attempt_index: {type: integer}
+        result: {type: string}
+        http_status: {type: integer, nullable: true}
+        phase: {type: string}
+        channel_id: {type: integer, format: int64}
+        channel_name: {type: string}
+        protocol_code: {type: string}
+        upstream_model: {type: string}
+        connect_ms: {type: integer, format: int64, nullable: true}
+        first_byte_ms: {type: integer, format: int64, nullable: true}
+        total_ms: {type: integer, format: int64}
+        tokens_in: {type: integer, format: int64}
+        tokens_out: {type: integer, format: int64}
+        is_retryable: {type: boolean}
+        retry_decision: {type: string, nullable: true}
+        error_class: {type: string, nullable: true}
+        upstream_code: {type: string, nullable: true}
+        upstream_msg: {type: string, nullable: true}
+        created_at: {type: string, format: date-time}
+    LogDetailRequest:
+      type: object
+      required: [request_id, api_key_id, api_key_name, model_name, request_model, inbound_protocol, group_code, is_stream, http_status, biz_code, result, tokens_in, tokens_out, prehold_micro, consumed_micro, consumed_recharge_micro, consumed_bonus_micro, upstream_attempts, total_ms, upstream_ms, client_ip, client_aborted, full_log_saved, created_at]
+      properties:
+        request_id: {type: string, maxLength: 36}
+        api_key_id: {type: integer, format: int64}
+        api_key_name: {type: string}
+        model_id: {type: integer, format: int64, nullable: true}
+        model_name: {type: string}
+        request_model: {type: string}
+        inbound_protocol: {type: string}
+        channel_id: {type: integer, format: int64, nullable: true}
+        channel_name: {type: string, nullable: true}
+        outbound_protocol: {type: string, nullable: true}
+        group_code: {type: string}
+        is_stream: {type: boolean}
+        http_status: {type: integer}
+        biz_code: {type: string}
+        result: {type: string, enum: [SUCCESS, PARTIAL, FAILED]}
+        fail_stage: {type: string, nullable: true}
+        fail_owner: {type: string, nullable: true}
+        tokens_in: {type: integer, format: int64}
+        tokens_out: {type: integer, format: int64}
+        prehold_micro: {type: integer, format: int64}
+        consumed_micro: {type: integer, format: int64}
+        consumed_recharge_micro: {type: integer, format: int64}
+        consumed_bonus_micro: {type: integer, format: int64}
+        upstream_attempts: {type: integer, format: int64}
+        ttft_ms: {type: integer, format: int64, nullable: true}
+        total_ms: {type: integer, format: int64}
+        upstream_ms: {type: integer, format: int64}
+        client_ip: {type: string}
+        client_aborted: {type: boolean}
+        full_log_saved: {type: boolean}
+        created_at: {type: string, format: date-time}
+    LogDetailResponse:
+      type: object
+      required: [request, timeline]
+      properties:
+        request: {$ref: '#/components/schemas/LogDetailRequest'}
+        timeline:
+          type: array
+          description: 按 attempt_index 升序；重试 1 次即 2 条
+          items: {$ref: '#/components/schemas/LogAttempt'}
+    LogBodyResponse:
+      type: object
+      required: [request_id, model_name, created_at, body, redacted]
+      properties:
+        request_id: {type: string, maxLength: 36}
+        model_name: {type: string}
+        created_at: {type: string, format: date-time}
+        body: {type: string}
+        redacted: {type: boolean, description: 敏感字段是否被替换}
+    UsageRow:
+      type: object
+      required: [dimension, id, name, request_total, request_success, success_rate_bp, tokens_in, tokens_out, consumed_micro, consumed_recharge_micro, consumed_bonus_micro, amount_fen, amount_yuan]
+      properties:
+        dimension: {type: string, enum: [model, channel, day, total]}
+        id: {type: integer, format: int64, description: 模型/渠道 id；day 与 total 为 0}
+        name: {type: string, description: 维度名称或 CST 日期 YYYY-MM-DD}
+        request_total: {type: integer, format: int64, description: 全部请求数，含 FAILED}
+        request_success: {type: integer, format: int64, description: result='SUCCESS' 的请求数}
+        success_rate_bp: {type: integer, format: int64, description: 基点，10000 = 100%；request_success*10000/request_total 整数截断，total=0 时为 0}
+        tokens_in: {type: integer, format: int64, description: 仅累加 SUCCESS 行}
+        tokens_out: {type: integer, format: int64, description: 仅累加 SUCCESS 行}
+        consumed_micro: {type: integer, format: int64, description: 微积分；仅累加 SUCCESS 行；1 积分 = 10000 微积分}
+        consumed_recharge_micro: {type: integer, format: int64}
+        consumed_bonus_micro: {type: integer, format: int64}
+        amount_fen: {type: integer, format: int64, description: 四舍五入到分}
+        amount_yuan: {type: string, description: 永远是两位小数的元字符串}
+    UsageFilter:
+      type: object
+      required: [model_id, channel_id]
+      properties:
+        model_id: {type: integer, format: int64, nullable: true}
+        channel_id: {type: integer, format: int64, nullable: true}
+    UsageResponse:
+      type: object
+      required: [from, to, dimension, filter, window_days, columns, items, totals]
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        dimension: {type: string, enum: [model, channel, day]}
+        filter: {$ref: '#/components/schemas/UsageFilter'}
+        window_days: {type: integer}
+        columns:
+          type: array
+          description: 与 CSV 表头同一份定义、同一顺序
+          items: {type: string}
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/UsageRow'}
+        totals: {$ref: '#/components/schemas/UsageRow'}
+    BillResponse:
+      type: object
+      required: [month, period_start, period_end, request_total, request_success, success_rate_bp, consumed_micro, consumed_recharge_micro, consumed_bonus_micro, amount_fen, amount_yuan]
+      properties:
+        month: {type: string, description: YYYY-MM，CST 自然月}
+        period_start: {type: string, format: date-time, description: CST 月初 00:00 对应的 UTC 时刻}
+        period_end: {type: string, format: date-time, description: 下月月初 00:00 CST 对应的 UTC 时刻（不含）}
+        request_total: {type: integer, format: int64, description: 当月全部请求数，含 FAILED}
+        request_success: {type: integer, format: int64, description: 当月 result='SUCCESS' 的请求数}
+        success_rate_bp: {type: integer, format: int64, description: request_success*10000/request_total 整数截断}
+        consumed_micro: {type: integer, format: int64, description: 仅累加 SUCCESS 行}
+        consumed_recharge_micro: {type: integer, format: int64}
+        consumed_bonus_micro: {type: integer, format: int64}
+        amount_fen: {type: integer, format: int64}
+        amount_yuan: {type: string}
+    ExportStartResponse:
+      type: object
+      required: [task_id, state]
+      properties:
+        task_id: {type: string, description: HMAC 签名的任务令牌，可直接用于状态查询}
+        state: {type: string, enum: [RUNNING]}
+    ExportStatusResponse:
+      type: object
+      required: [task_id, state]
+      properties:
+        task_id: {type: string}
+        state: {type: string, enum: [RUNNING, DONE, FAILED]}
+        url: {type: string, nullable: true, description: DONE 时的签名下载路径}
+        expires_at: {type: string, format: date-time, nullable: true, description: 令牌失效时刻}
+    RealtimeWindow:
+      type: object
+      required: [from, to, minutes, lag_seconds]
+      properties:
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        minutes: {type: integer}
+        lag_seconds: {type: integer, description: 实时值的展示延迟}
+    UsageMetricsResponse:
+      type: object
+      required: [scope, scope_id, realtime_scope, realtime_source, realtime_window, realtime_request_total, realtime_request_success, realtime_request_failed, realtime_tokens_in, realtime_tokens_out, realtime_consumed_micro, realtime_consumed_fen, settled_source, settled_from, settled_until, settled_request_total, settled_request_success, settled_request_failed, settled_tokens_in, settled_tokens_out, settled_consumed_micro, settled_consumed_recharge_micro, settled_consumed_bonus_micro, settled_consumed_fen, settled_success_rate_bp]
+      properties:
+        scope: {type: string, enum: [user, channel]}
+        scope_id: {type: integer, format: int64}
+        realtime_scope: {type: string, enum: [ACCOUNT, PLATFORM]}
+        realtime_source: {type: string, enum: [REDIS_K14, REDIS_K15]}
+        realtime_window: {$ref: '#/components/schemas/RealtimeWindow'}
+        realtime_request_total: {type: integer, format: int64}
+        realtime_request_success: {type: integer, format: int64}
+        realtime_request_failed: {type: integer, format: int64}
+        realtime_tokens_in: {type: integer, format: int64}
+        realtime_tokens_out: {type: integer, format: int64}
+        realtime_consumed_micro: {type: integer, format: int64}
+        realtime_consumed_fen: {type: integer, format: int64}
+        settled_source: {type: string, enum: [T_METRIC_DAILY]}
+        settled_from: {type: string, format: date}
+        settled_until: {type: string, format: date, description: 最新完整 CST 自然日}
+        settled_request_total: {type: integer, format: int64}
+        settled_request_success: {type: integer, format: int64}
+        settled_request_failed: {type: integer, format: int64}
+        settled_tokens_in: {type: integer, format: int64}
+        settled_tokens_out: {type: integer, format: int64}
+        settled_consumed_micro: {type: integer, format: int64}
+        settled_consumed_recharge_micro: {type: integer, format: int64}
+        settled_consumed_bonus_micro: {type: integer, format: int64}
+        settled_consumed_fen: {type: integer, format: int64}
+        settled_success_rate_bp: {type: integer, format: int64}

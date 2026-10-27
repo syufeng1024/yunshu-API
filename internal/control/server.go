@@ -29,6 +29,7 @@ import (
 	"yunshu.dev/core/internal/control/ops"
 	"yunshu.dev/core/internal/control/review"
 	"yunshu.dev/core/internal/control/ticket"
+	"yunshu.dev/core/internal/control/usage"
 	"yunshu.dev/core/internal/control/user"
 	"yunshu.dev/core/internal/cryptobox"
 	obslog "yunshu.dev/core/internal/obs/log"
@@ -92,6 +93,7 @@ type Server struct {
 	tickets *ticket.Service
 	reviews *review.Service
 	logs    *logq.Service
+	usage   *usage.Service
 }
 
 // New validates the wiring and builds the server.
@@ -144,6 +146,10 @@ func New(d Deps) (*Server, error) {
 	// service falls back to DB on its own, so both the split and the
 	// single-database deployments share one route table.
 	logs := logq.New(d.DB, d.LogDB, d.Now, d.Logger)
+	// Usage reads stay on the main pool: t_usage_record carries its dimension
+	// snapshots, so the aggregation never joins the log database and never
+	// joins t_model / t_channel.
+	usageSvc := usage.New(d.DB, d.Redis, d.Now, d.Logger)
 	return &Server{
 		d: d,
 		auth: &auth.Service{
@@ -161,6 +167,7 @@ func New(d Deps) (*Server, error) {
 		tickets: tickets,
 		reviews: reviews,
 		logs:    logs,
+		usage:   usageSvc,
 	}, nil
 }
 
@@ -303,6 +310,16 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/console/logs", s.authed(mw.PermLogRead, s.logs.List))
 	mux.Handle("GET /api/console/logs/{request_id}", s.authed(mw.PermLogRead, s.logs.Detail))
 	mux.Handle("GET /api/console/logs/{request_id}/body", s.authed(mw.PermLogRead, s.logs.Body))
+
+	// T14 second segment: usage, monthly bill, live-vs-settled metrics and the
+	// asynchronous CSV export. usage.read is account-scoped like log.read; the
+	// export download additionally verifies an HMAC token whose uid must equal
+	// the session uid.
+	mux.Handle("GET /api/console/usage", s.authed(mw.PermUsageRead, s.usage.Query))
+	mux.Handle("GET /api/console/bills", s.authed(mw.PermUsageRead, s.usage.Bill))
+	mux.Handle("GET /api/console/usage/metrics", s.authed(mw.PermUsageRead, s.usage.Metrics))
+	mux.Handle("POST /api/console/usage/export", s.authed(mw.PermUsageRead, s.usage.StartExport))
+	mux.Handle("GET /api/console/exports/{token}", s.authed(mw.PermUsageRead, s.usage.ExportToken))
 
 	// Unknown /api paths return the shared error envelope instead of net/http's
 	// plain-text 404.

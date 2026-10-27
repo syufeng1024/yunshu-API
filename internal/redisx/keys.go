@@ -131,6 +131,18 @@ func BalanceKey(userID int64) string {
 	return "bal:" + strconv.FormatInt(userID, 10)
 }
 
+// K27 exp:user:{user_id}
+//
+// The console export lock (T14 A11). SETNX with a 1h TTL is the whole
+// concurrency rule: a user may hold exactly one running export at a time, and
+// the lock expires with the download token so a crashed worker cannot wedge
+// the account forever. The value is fixed ("1"); the key's existence is the
+// fact, never a task id, because the task id is an HMAC token the client
+// already holds.
+func ExportLockKey(userID int64) string {
+	return "exp:user:" + strconv.FormatInt(userID, 10)
+}
+
 // IdemHash folds the idempotency identity required by §1.6 into the K6/K7
 // hash segment. sha1 is used because the key template is defined with it and
 // collisions here only affect cache placement, never authorization: the DB

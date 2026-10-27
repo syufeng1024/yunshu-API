@@ -199,6 +199,11 @@ func TestOpsCannotReachAccountConsole(t *testing.T) {
 		{http.MethodGet, "/api/console/logs"},
 		{http.MethodGet, "/api/console/logs/1"},
 		{http.MethodGet, "/api/console/logs/1/body"},
+		{http.MethodGet, "/api/console/usage"},
+		{http.MethodGet, "/api/console/bills"},
+		{http.MethodGet, "/api/console/usage/metrics"},
+		{http.MethodPost, "/api/console/usage/export"},
+		{http.MethodGet, "/api/console/exports/not-a-token"},
 	}
 	for _, route := range routes {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
@@ -246,7 +251,10 @@ func TestPersonalCanReachAccountConsole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("issue session: %v", err)
 	}
-	for _, path := range []string{"/api/console/tickets", "/api/console/logs"} {
+	for _, path := range []string{
+		"/api/console/tickets", "/api/console/logs",
+		"/api/console/usage", "/api/console/bills", "/api/console/usage/metrics",
+	} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.AddCookie(&http.Cookie{Name: mw.SessionCookieName, Value: cookieValue})
 		rec := httptest.NewRecorder()

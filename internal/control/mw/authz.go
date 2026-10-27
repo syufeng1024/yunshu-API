@@ -41,6 +41,11 @@ const (
 	// serves /api/console/logs, and a shared capability would let a customer
 	// surface an operator view (E-31/E-33 pattern).
 	PermLogRead Permission = "log.read"
+	// usage.read opens the account console's own usage, bills, live metrics
+	// and CSV export. Same family as log.read: account-scoped, PERSONAL and
+	// SUPER_ADMIN only. The export download token is an additional check, not
+	// a replacement for this permission.
+	PermUsageRead Permission = "usage.read"
 	// admin.read gates the operator console's read routes. model.read cannot
 	// do that job: PERSONAL holds model.read for /api/console/models, and the
 	// admin model view carries upstream cost prices (B-48) and channel views
@@ -82,6 +87,7 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermTicketRead:  true,
 		PermTicketWrite: true,
 		PermLogRead:     true,
+		PermUsageRead:   true,
 	},
 	"OPS": {
 		PermUserRead:     true,
@@ -126,6 +132,7 @@ var rolePermissions = map[string]map[Permission]bool{
 		PermTicketReply:  true,
 		PermAuditRead:    true,
 		PermLogRead:      true,
+		PermUsageRead:    true,
 		PermAdminRead:    true,
 		PermAdminAll:     true,
 	},
