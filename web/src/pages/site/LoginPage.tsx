@@ -43,10 +43,12 @@ export default function LoginPage() {
   const [error, setError] = useState<string | null>(null)
   const [hint, setHint] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
-  const [sendingCode, setSendingCode] = useState(false)
-  const [codeSent, setCodeSent] = useState(false)
+  // Verification codes and password reset are not implemented server-side
+  // (no mail/SMS delivery), so these flags are intentionally never set.
+  const [sendingCode] = useState(false)
+  const [codeSent] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
-  const [resetSent, setResetSent] = useState(false)
+  const [resetSent] = useState(false)
   const [claimNotice, setClaimNotice] = useState(false)
 
   const clearFeedback = () => {
@@ -143,16 +145,11 @@ export default function LoginPage() {
       setError('请先填写邮箱或手机号。')
       return
     }
-    setSendingCode(true)
-    try {
-      await api.post<void>('/api/v1/auth/verification-codes', { identifier: account, purpose })
-      setCodeSent(true)
-    } catch (err) {
-      setError(errorMessage(err))
-      setHint(errorHint(err))
-    } finally {
-      setSendingCode(false)
-    }
+    // The backend has no mail/SMS delivery (T11 deferred verification codes for
+    // exactly that reason), so calling it would only produce a 404. Say so
+    // instead of pretending a code was sent.
+    setError('验证码登录暂未开放，请使用密码登录。')
+    void purpose
   }
 
   const handleReset = async () => {
@@ -162,13 +159,7 @@ export default function LoginPage() {
       setError('请先填写邮箱或手机号。')
       return
     }
-    try {
-      await api.post<void>('/api/v1/auth/password-reset', { identifier: account })
-      setResetSent(true)
-    } catch (err) {
-      setError(errorMessage(err))
-      setHint(errorHint(err))
-    }
+    setError('找回密码暂未开放，请联系客服协助重置。')
   }
 
   const handleClaim = () => {
@@ -264,7 +255,6 @@ export default function LoginPage() {
           type="button"
           onClick={() => {
             setResetOpen((open) => !open)
-            setResetSent(false)
           }}
           className="text-ink-secondary hover:text-ink"
         >

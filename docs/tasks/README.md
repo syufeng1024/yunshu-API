@@ -685,6 +685,9 @@ E-28 是本轮最有价值的发现：它不是 T13 引入的，是 T11 遗留�
 | 2 | **无内容命中记录查询端点** | F19-3 内容申诉自动带出规则 ID | T16 的 `create.go` 能在提交时从 `t_content_policy_hit` 带出，但用户**无法在提交前看到并选中**该请求——被策略拦截的请求不写 `t_usage_record`，因此也不在 `/request-ids` 里 | `GET /api/console/policy-hits`：本人 90 天内被拦记录（request_id + 规则 + 分类） |
 | 3 | **无注销账号端点** | F19-4 存在未结工单阻止注销 | T16 已交付 `CheckAccountCancellable`（可导出且有用例），但**没有调用它的接口**，前端无从展示「存在未结工单无法注销」 | `POST /api/v1/auth/cancel`：先调 `CheckAccountCancellable`，未结工单则 409 并列出工单号 |
 
+| 4 | **无邮件/短信投递通道** | 找回密码（F 登录页）、验证码登录 | 前端曾直接调 `/api/v1/auth/password-reset` 与 `/api/v1/auth/verification-codes`，后端从未实现，点击即 404 | 已改为前端显式提示「暂未开放，请联系客服」，不再发无效请求。要真做，先定邮件/短信服务商 |
+| 5 | **一键导入凭据无实现** | F4-2/F4-3 导入流程 | `/api/v1/integrations/import-credentials` 仅存在于前端类型定义，无页面调用、无后端 | 需先定「一次一密临时 Key」还是「用户粘贴已有 Key」的产品方案 |
+
 另有三项**契约限制**（非缺陷，需产品决策）：`t_model` 无 vendor 列（厂商筛选只能按协议）、退款金额由服务端报价不能前端填、下单接口不返回支付链接（未接支付网关）。
 
 ## 八、风险登记
