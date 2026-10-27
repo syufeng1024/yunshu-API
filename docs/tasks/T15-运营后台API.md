@@ -193,3 +193,62 @@ F 覆盖: F14-1..6、F16-1..7、F17-1..3 → 用例名
 3. `price_conflict` 已建档但实际使用在第二段（定价唯一真相源）。
 4. 未新增迁移（`0022`/`0023` 之外无占用）、未新增配置键。
 5. 本机无 gcc，`-race` 未跑；`gofmt` 未重排既有 CRLF 文件。
+
+---
+
+## 10. 第二段交付记录（2026-10-27）
+
+**范围**：交付物 8–18（定价 / 分组 / 公告 / 风控 / 用户 / 配置）+ 404 码收口。
+
+### 步骤 0 · `resource_not_found`（404）
+
+新增第 75 码，收口后台详情语义（第一段遗留：查不存在的模型返回 400）。后台模型的详情/改/删改用它；**渠道仍用 `channel_not_found`**（更具体）。实测：`model detail 999999 → 404 resource_not_found`、`channel detail 999999 → 404 channel_not_found`。
+
+### 定价（A8/A10/A11/A12）
+
+3 条路由（`price.write`）。三条硬校验：
+
+**毛利地板（A11）—— 唯一允许的实现**：
+```go
+// 3*P*r/10000 >= 4*C/3  ⇔  3*P*r >= 40000*C
+lhs := 3 * price * ratioBP      // 3*P*r
+rhs := 40000 * cost             // 40000*C
+ok  := lhs >= rhs
+// 拒绝时展示 required = ceil(4C/3) = (40000*C + 29999) / 30000
+```
+`grep 1.25|1.333|float32|float64 pricing.go` → `OK_INTEGER_ONLY`。`internal` 分组（`ratio_bp=0`）跳过。
+
+实测：`P=1000, r=8500, C=800` → 400 并报「850 < 1067，差额 217」；`C=600` → 通过。（`3×1000×8500=25.5e6 < 40000×800=32e6`，`25.5e6 ≥ 40000×600=24e6`，与公式一致。）
+
+**公示期（A10）**：涨价且 `effective_from` 距今 < 7 天 → 400 并给出最早可生效时间；降价即时生效。判定只用服务端 `now()`，请求里的时间被钳到 now。
+
+**唯一真相源（A12）**：同模型多处生效价不一致 → 409 `price_conflict`，message 列出全部来源 `t_price_rule#328、#329 与 #330`。正常换价（单一前驱）不算冲突：前驱在 `effective_from` 处收口，历史版本保留。
+
+**缺成本价**：不静默通过——必须 `confirm_no_cost=true` 二次确认，审计记 `confirm_no_cost=true` 并落 WARN。
+
+### 分组（A16）
+
+`GET /api/admin/groups`、`PATCH /{id}`（`group.write`）。`0.85 → 8500`、`1.2 → 400`、`internal=0` 例外且 `remark` 必填。倍率变更异步写穿该分组全部 Key 的 K13 `gp`（`BulkUpdateGroupRatio`，失败仅 WARN 由 Refresher 兜底），避免与请求事务耦合。
+
+### 公告（A13/A14）
+
+4 条路由（`notice.write`）。新增内部态 `SCHEDULED`（E-32，无需迁移）：`POST` 带未来 `publish_at` → `SCHEDULED`，`PublishDueAnnouncements` 到点批量转 `PUBLISHED`；`DRAFT` 永不被时间触发。A14 用注入的 `clock.Fixed` 测，无 sleep。
+
+**活动类冲突**：模型涨价在 7 天公示期内 → 拒绝发布「活动」类公告并给出冲突模型与生效时间。
+
+**公告不回滚业务状态**（硬约束 12）：两条用例锁死——发布定时公告后、草稿发布+重复发布 409 后，`t_model.listing_state` 均未变；发布路径只 UPDATE `t_announcement`。
+
+### 风控 / 用户 / 配置
+
+- 风控（`risk.write`）：规则 CRUD（DELETE 为 `enabled=0`，保留命中归因）、命中查询、风险分调整含 before/after 审计
+- 用户（读 `admin.read`、写 `user.write`）：列表筛选、详情（余额+套餐）、禁用/启用，`disable_source=OPS_MANUAL`
+- **禁用原因不对外（硬约束 13）**：运营侧可见 `风控命中：异常退款-敏感原因-XYZ`，用户侧走真实 `auth.Service.Login` 返回「账号已被禁用，请联系客服」，断言不含原因文本
+- 配置（`config.write`）：`GET` 返回 45 键 + `runtime_writable` 标记；`PUT` 只收 12 键。第 13 键、`quota.overdraft_warn_days`、`quota.*` 未实现取值、未登记键 → 全 400 `config_value_invalid`。**无「一键清缓存」接口**（反射用例锁死 `FlushConfigCache`/`ClearCache`/`PurgeConfig` 不存在），发布只带本次涉及的 namespace
+
+### 遗留
+
+1. **`GET /api/admin/users` 用 `admin.read` 而非卡面的 `user.read`**（E-33）：`PERSONAL` 本就持有 `user.read`，复用会泄露全量用户列表与 `disable_reason`。
+2. **公告 `SCHEDULED` 态**（E-32）待回写 TDS。
+3. **PRD F16-7「未配价不得上架」第一段未实现**（E-34）：允许无价 `LISTED`。已列专项修复，回填到模型状态机。
+4. 公告 `model_ids` 只用于冲突检查，`t_announcement` 无模型列故不持久化。
+5. 分组 K13 扇出为异步，响应 `key_sync.keys=0`（不等待）；测试注入 writer 取证。

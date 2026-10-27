@@ -31,6 +31,7 @@ import (
 	"yunshu.dev/core/internal/jsonx"
 	obslog "yunshu.dev/core/internal/obs/log"
 	"yunshu.dev/core/internal/platform/clock"
+	"yunshu.dev/core/internal/redisx"
 )
 
 // Service owns the operator master-data surface.
@@ -50,6 +51,20 @@ type Service struct {
 	// rotating a key answers 503 config_unavailable instead of storing
 	// plaintext or an unopenable row.
 	Box *cryptobox.Box
+
+	// KeyAuth writes a changed group ratio through to K13 (T12's write-through
+	// surface). Nil is allowed in unit tests; production always wires it, and
+	// the one-minute Refresher repairs K13 if a pipeline write is lost.
+	KeyAuth redisx.KeyAuthWriter
+
+	// PriceRefresh rebuilds K19 after a committed price write. Nil is allowed
+	// in unit tests.
+	PriceRefresh func(ctx context.Context) error
+
+	// ConfigPublisher is the T05 publisher used by PUT /api/admin/config.
+	// Nil makes the endpoint answer 503 instead of claiming a write that no
+	// node will see.
+	ConfigPublisher ConfigPublisher
 }
 
 // New wires the service.

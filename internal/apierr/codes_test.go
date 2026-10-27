@@ -99,8 +99,8 @@ var prdE1Fixture = []fixtureRow{
 	{CodeAuthUnavailable, TypeServiceUnavailable, 503, 5, RetryYes, OwnerPlatform},
 	{CodeInternalError, TypeInternal, 500, 0, RetryNo, OwnerPlatform},
 
-	// E.1.9 控制面 (13; E-21 added account_exists, T12 added key_limit_reached,
-	// T15 added the four state/entitlement conflict codes)
+	// E.1.9 控制面 (14; E-21 added account_exists, T12 added key_limit_reached,
+	// T15 added the four state/entitlement conflict codes and resource_not_found)
 	{CodeKeyNotFound, TypeInvalidRequest, 404, 0, RetryNo, OwnerBusiness},
 	{CodeKeyLimitReached, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
 	{CodeAccountExists, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
@@ -108,6 +108,7 @@ var prdE1Fixture = []fixtureRow{
 	{CodePermissionDenied, TypeAuthorization, 403, 0, RetryNo, OwnerBusiness},
 	{CodeChannelNotFound, TypeInvalidRequest, 404, 0, RetryNo, OwnerBusiness},
 	{CodeChannelInUse, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
+	{CodeResourceNotFound, TypeInvalidRequest, 404, 0, RetryNo, OwnerBusiness},
 	{CodeConfigItemNotFound, TypeInvalidRequest, 404, 0, RetryNo, OwnerBusiness},
 	{CodeConfigValueInvalid, TypeInvalidRequest, 400, 0, RetryNo, OwnerBusiness},
 	{CodeResourceStateConflict, TypeConflict, 409, 0, RetryNo, OwnerBusiness},
@@ -122,25 +123,25 @@ var prdE1Fixture = []fixtureRow{
 	{CodeContentPolicyViolation, TypeInvalidRequest, 403, 0, RetryNo, OwnerBusiness},
 }
 
-func TestCodeCountIs74(t *testing.T) {
-	if got := len(Codes()); got != 74 {
-		t.Fatalf("len(Codes()) = %d, want 74", got)
+func TestCodeCountIs75(t *testing.T) {
+	if got := len(Codes()); got != 75 {
+		t.Fatalf("len(Codes()) = %d, want 75", got)
 	}
-	if got := len(Specs()); got != 74 {
-		t.Fatalf("len(Specs()) = %d, want 74", got)
+	if got := len(Specs()); got != 75 {
+		t.Fatalf("len(Specs()) = %d, want 75", got)
 	}
-	if got := len(prdE1Fixture); got != 74 {
-		t.Fatalf("fixture rows = %d, want 74", got)
+	if got := len(prdE1Fixture); got != 75 {
+		t.Fatalf("fixture rows = %d, want 75", got)
 	}
 	rows := strings.Split(strings.TrimSpace(MarkdownTable()), "\n")
-	if len(rows) != 2+74 {
-		t.Fatalf("markdown rows = %d, want 2 header + 74 = 76", len(rows))
+	if len(rows) != 2+75 {
+		t.Fatalf("markdown rows = %d, want 2 header + 75 = 77", len(rows))
 	}
 }
 
 // counting the constants from source, not from the registry, catches a code
 // that was added as a constant but never entered specs (or vice versa).
-func TestCodeConstantsCountIs74(t *testing.T) {
+func TestCodeConstantsCountIs75(t *testing.T) {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -168,8 +169,8 @@ func TestCodeConstantsCountIs74(t *testing.T) {
 			}
 		}
 	}
-	if count != 74 {
-		t.Fatalf("Code* constants = %d, want 74", count)
+	if count != 75 {
+		t.Fatalf("Code* constants = %d, want 75", count)
 	}
 }
 

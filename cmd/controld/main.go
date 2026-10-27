@@ -112,6 +112,10 @@ func main() {
 			_, _, err := routeBuilder.Publish(ctx)
 			return err
 		},
+		PublishPrices: func(ctx context.Context) error {
+			_, err := caches.RefreshPrices(ctx)
+			return err
+		},
 		PaySecrets:     paySecrets,
 		FingerprintKey: fpHMACKey(logger, rootCtx),
 	})

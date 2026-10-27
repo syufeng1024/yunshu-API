@@ -15,8 +15,10 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"yunshu.dev/core/internal/apierr"
+	"yunshu.dev/core/internal/config"
 	"yunshu.dev/core/internal/control/audit"
 	"yunshu.dev/core/internal/control/auth"
 	"yunshu.dev/core/internal/control/fund"
@@ -47,6 +49,11 @@ type Deps struct {
 	// all), which would make a fresh whitelist ineffective. Nil is allowed in
 	// unit tests and degrades to the timer's four-minute refresh.
 	PublishRoutes func(ctx context.Context) error
+
+	// PublishPrices rebuilds K19 (standard price per model). nil is allowed in
+	// unit tests; a committed price without a refresh answers 503
+	// config_unavailable so the operator knows gatewayd still sees the old one.
+	PublishPrices func(ctx context.Context) error
 
 	// PaySecrets maps a payment channel (WECHAT / ALIPAY) to its callback
 	// signing secret. It comes from the process environment: the 45 frozen
@@ -105,6 +112,14 @@ func New(d Deps) (*Server, error) {
 			obslog.Fields{Stage: "control"})
 	}
 	opss := ops.New(d.DB, d.Audit, d.Now, d.Logger, d.PublishRoutes, box)
+	opss.KeyAuth = redisx.NewKeyAuthCache(d.Redis)
+	opss.PriceRefresh = d.PublishPrices
+	opss.ConfigPublisher = &config.Publisher{
+		DB:          d.DB,
+		Redis:       config.NewGoRedis(d.Redis.Raw()),
+		Now:         d.Now.Now,
+		LockTimeout: 5 * time.Second,
+	}
 	return &Server{
 		d: d,
 		auth: &auth.Service{
@@ -195,6 +210,37 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/admin/models/{id}", s.authed(mw.PermModelWrite, s.ops.UpdateModel))
 	mux.Handle("POST /api/admin/models/{id}/listing-state", s.authed(mw.PermModelWrite, s.ops.SetListingState))
 	mux.Handle("POST /api/admin/models/{id}/recommend-weight", s.authed(mw.PermModelWrite, s.ops.SetRecommendWeight))
+
+	// T15 second segment: pricing, groups, announcements, risk, users and the
+	// runtime config whitelist. Reads of /api/admin/users use admin.read rather
+	// than user.read: PERSONAL holds user.read for its own profile, and this
+	// list returns every account's disable reason.
+	mux.Handle("GET /api/admin/prices", s.authed(mw.PermPriceWrite, s.ops.ListPrices))
+	mux.Handle("POST /api/admin/prices", s.authed(mw.PermPriceWrite, s.ops.CreatePrice))
+	mux.Handle("PATCH /api/admin/prices/{id}", s.authed(mw.PermPriceWrite, s.ops.UpdatePrice))
+
+	mux.Handle("GET /api/admin/groups", s.authed(mw.PermGroupWrite, s.ops.ListGroups))
+	mux.Handle("PATCH /api/admin/groups/{id}", s.authed(mw.PermGroupWrite, s.ops.UpdateGroup))
+
+	mux.Handle("GET /api/admin/announcements", s.authed(mw.PermNoticeWrite, s.ops.ListAnnouncements))
+	mux.Handle("POST /api/admin/announcements", s.authed(mw.PermNoticeWrite, s.ops.CreateAnnouncement))
+	mux.Handle("PATCH /api/admin/announcements/{id}", s.authed(mw.PermNoticeWrite, s.ops.UpdateAnnouncement))
+	mux.Handle("POST /api/admin/announcements/{id}/publish", s.authed(mw.PermNoticeWrite, s.ops.PublishAnnouncement))
+
+	mux.Handle("GET /api/admin/risk/rules", s.authed(mw.PermRiskWrite, s.ops.ListRiskRules))
+	mux.Handle("POST /api/admin/risk/rules", s.authed(mw.PermRiskWrite, s.ops.CreateRiskRule))
+	mux.Handle("PATCH /api/admin/risk/rules/{id}", s.authed(mw.PermRiskWrite, s.ops.UpdateRiskRule))
+	mux.Handle("DELETE /api/admin/risk/rules/{id}", s.authed(mw.PermRiskWrite, s.ops.DeleteRiskRule))
+	mux.Handle("GET /api/admin/risk/hits", s.authed(mw.PermRiskWrite, s.ops.ListRiskHits))
+	mux.Handle("POST /api/admin/risk/users/{id}/score", s.authed(mw.PermRiskWrite, s.ops.SetUserRiskScore))
+
+	mux.Handle("GET /api/admin/users", s.authed(mw.PermAdminRead, s.ops.ListUsers))
+	mux.Handle("GET /api/admin/users/{id}", s.authed(mw.PermAdminRead, s.ops.GetUser))
+	mux.Handle("POST /api/admin/users/{id}/disable", s.authed(mw.PermUserWrite, s.ops.DisableUser))
+	mux.Handle("POST /api/admin/users/{id}/enable", s.authed(mw.PermUserWrite, s.ops.EnableUser))
+
+	mux.Handle("GET /api/admin/config", s.authed(mw.PermConfigWrite, s.ops.GetConfig))
+	mux.Handle("PUT /api/admin/config", s.authed(mw.PermConfigWrite, s.ops.PutConfig))
 
 	// Unknown /api paths return the shared error envelope instead of net/http's
 	// plain-text 404.

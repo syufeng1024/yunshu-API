@@ -1,6 +1,6 @@
 // Package apierr is the only writer of error responses for the API data plane.
 //
-// The 74 codes, their HTTP statuses and retry semantics are copied from PRD
+// The 75 codes, their HTTP statuses and retry semantics are copied from PRD
 // V1.2 appendix E.1 (the single source of truth). Four codes were added by
 // errata E-21 because the console's session, credential, duplicate-account and
 // query-parameter conditions had no semantically correct row:
@@ -30,6 +30,15 @@
 //	trial_already_claimed   409  device, phone, IP segment or account already claimed
 //	invoice_already_issued  409  the order already has an ISSUED invoice
 //	price_conflict          409  one model has conflicting price sources (T15 pricing)
+//
+// T15's second segment added one generic 404 for the operator console:
+//
+//	resource_not_found      404  the addressed admin row does not exist
+//
+// It exists because model_not_found is a data-plane code with HTTP 400 ("模型
+// 不在可用列表"): reusing it for GET /api/admin/models/{id} told an operator that
+// their request body was wrong when the row had simply been deleted. Channel
+// detail keeps channel_not_found because that code is more specific.
 //
 // TDS §6.2 still carries older values for seven rows; those rows are
 // deliberately not followed:
@@ -94,7 +103,7 @@ const (
 	OptionalBilling
 )
 
-// The 74 codes. One constant per code; Codes() returns the same set in the
+// The 75 codes. One constant per code; Codes() returns the same set in the
 // order below. Adding or removing one requires updating codes_test.go's
 // fixture and the generated markdown table in the same change.
 const (
@@ -173,6 +182,7 @@ const (
 	CodePermissionDenied   = "permission_denied"
 	CodeChannelNotFound    = "channel_not_found"
 	CodeChannelInUse       = "channel_in_use"
+	CodeResourceNotFound   = "resource_not_found"
 	CodeConfigItemNotFound = "config_item_not_found"
 	CodeConfigValueInvalid = "config_value_invalid"
 
@@ -200,7 +210,7 @@ type Spec struct {
 	Optional          OptionalFields
 }
 
-// specs is the metadata table: exactly 74 rows.
+// specs is the metadata table: exactly 75 rows.
 var specs = []Spec{
 	// E.1.1 鉴权与账号 (9)
 	{
@@ -236,8 +246,11 @@ var specs = []Spec{
 	{
 		Code: CodeAccountDisabled, Type: TypeAuthorization, HTTPStatus: 403,
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "P05",
-		Message: "账号已被禁用",
-		Hint:    "控制台 → 工单中心提交申诉",
+		// T15 hard constraint 13: the customer-facing body never names the
+		// disable category or the operator's reason. Those live in t_user.
+		// disable_reason and are returned only by /api/admin/users.
+		Message: "账号已被禁用，请联系客服",
+		Hint:    "联系客服核实账号状态",
 	},
 	{
 		Code: CodeAccountFrozen, Type: TypeAuthorization, HTTPStatus: 403,
@@ -577,8 +590,8 @@ var specs = []Spec{
 		Hint:    "携 request_id 联系客服",
 	},
 
-	// E.1.9 控制面 (13; E-21 added account_exists, T12 added key_limit_reached,
-	// T15 added the four state/entitlement conflict codes)
+	// E.1.9 控制面 (14; E-21 added account_exists, T12 added key_limit_reached,
+	// T15 added the four state/entitlement conflict codes and resource_not_found)
 	{
 		Code: CodeKeyNotFound, Type: TypeInvalidRequest, HTTPStatus: 404,
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "控制台接口",
@@ -622,6 +635,15 @@ var specs = []Spec{
 		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "运营后台",
 		Message: "该渠道已被模型路由引用，不能直接删除",
 		Hint:    "先解除引用或改为停用",
+	},
+	{
+		Code: CodeResourceNotFound, Type: TypeInvalidRequest, HTTPStatus: 404,
+		RetryAfterSeconds: 0, Retry: RetryNo, Owner: OwnerBusiness, Stage: "运营后台",
+		// Generic on purpose: the console's detail/update paths address rows by
+		// id, and a soft-deleted or mistyped id is the same condition. The
+		// message must not promise which resource was being handled.
+		Message: "资源不存在或已被删除",
+		Hint:    "刷新列表后重试",
 	},
 	{
 		Code: CodeConfigItemNotFound, Type: TypeInvalidRequest, HTTPStatus: 404,
@@ -694,7 +716,7 @@ var codeIndex = func() map[string]Spec {
 	return idx
 }()
 
-// Codes returns the 74 code strings in E.1 order.
+// Codes returns the 75 code strings in E.1 order.
 func Codes() []string {
 	out := make([]string, len(specs))
 	for i, s := range specs {

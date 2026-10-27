@@ -41,6 +41,10 @@
 | E-30 | T11 卡交付物 15 / T11 §8 回执 / T15 卡 §2 必读 提到「**10 个角色**矩阵」 vs PRD §6.3、TDS §1.3 第 1209 行、`api/openapi.yaml` 的 `UserRole` 枚举 | 需求与原表列出的角色枚举只有 **4 个**：`PERSONAL` / `OPS` / `FINANCE` / `SUPER_ADMIN`；另外 6 个角色的名称在任何源文档里都找不到 | 照「10 个」实现会让实现方去编造 6 个角色名，编出来的名字一旦落到 `t_user.role` 就是数据污染（未知角色按 `PermissionsFor` 返回空集，登录后全 403，且难以排查） | **以 4 个角色为准**。T15 第一段已按 4 个建矩阵，权限点扩到 19 个（`user.*` / `key.*` / `model.*` / `price.write` / `group.write` / `channel.write` / `notice.write` / `risk.write` / `config.write` / `fund.*` / `ticket.reply` / `audit.read` / `admin.read` / `admin.all`）。「10 个」的原始出处待查；查到时按新角色补矩阵，**不得先造名字** |
 | E-31 | T15 卡「`PERSONAL` 请求每个 `/api/admin/*` → 403」与权限点设计 | 后台读接口若复用 `model.read`，会与 `PERSONAL` 必需的 `GET /api/console/models` 撞车；一旦用同一个点，普通用户就能读到后台模型的 `cost_*` 成本价与渠道 `base_url` | 违反 B-48（成本价仅运营可见）与硬约束 13 的精神 | **新增 `admin.read` 权限点**（OPS / FINANCE / SUPER_ADMIN 持有，`PERSONAL` 无），后台读接口一律用它，不与控制台读接口共用。T15 第一段已落地，13 条 `/api/admin/*` 路由对 `PERSONAL` 全 403 的用例已通过 |
 
+| E-32 | TDS §1.8 `t_announcement.state` 注释 vs PRD F17-2「公告定时到点自动发布」 | TDS 只列 `DRAFT / PUBLISHED / OFFLINE` 三态 | 「已排期但未到点」在库里无处表达：若复用 `DRAFT`，调度器无法区分「人工草稿」与「等待到点」，会把草稿一并发出去 | **新增 `SCHEDULED`**（`varchar(16)` 可存，**无需迁移**）：调度器只认它，`DRAFT` 永不被时间触发。回写 TDS 注释时补第四态 |
+| E-33 | T15 卡交付物 16 vs 权限矩阵 | 卡面写用户列表用 `user.read` | `PERSONAL` 角色本就持有 `user.read`（控制台看自己），若后台复用同一权限点，普通客户就能拉到全量用户列表与 `disable_reason`——而硬约束 13 要求禁用原因仅运营可见 | **后台用户列表改用 `admin.read`**（写入仍 `user.write`），与 E-31 同一原则：后台读权限不得与控制台读权限共用 |
+| E-34 | PRD §6.4 F16-7「未配价不得上架」vs T15 第一段的模型创建 | PRD 要求模型必须配价才能 `LISTED` | 第一段 `CreateModel` / `listing-state` 允许无价直接上架 → 广场会出现无价模型（前端按 0 展示或渲染失败），且网关取不到价必拒 | **补校验：切 `LISTED` 前必须存在生效中的 `t_price_rule`**，否则拒绝并提示先配价。已列专项修复 |
+
 ## 口径备忘（不是勘误，是实现约定）
 
 | 项 | 约定 | 原因 |

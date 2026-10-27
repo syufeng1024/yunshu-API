@@ -81,6 +81,8 @@ func newTestUser(t *testing.T, role string) int64 {
 	}
 	t.Cleanup(func() {
 		_, _ = testDB.ExecContext(context.Background(), `DELETE FROM t_admin_audit_log WHERE operator_id = ?`, uid)
+		_, _ = testDB.ExecContext(context.Background(), `DELETE FROM t_credit_account WHERE user_id = ?`, uid)
+		_, _ = testDB.ExecContext(context.Background(), `DELETE FROM t_risk_hit_log WHERE user_id = ?`, uid)
 		_, _ = testDB.ExecContext(context.Background(), `DELETE FROM t_user WHERE id = ?`, uid)
 	})
 	return uid
@@ -184,6 +186,8 @@ func createTestModel(t *testing.T, svc *Service, uid int64, body map[string]any)
 		ctx := context.Background()
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_announcement WHERE content LIKE ?`,
 			"%"+resp.Model.ModelName+"%")
+		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_price_rule WHERE scope_level = 'MODEL' AND scope_id = ?`,
+			resp.Model.ID)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_model_alias WHERE model_id = ?`, resp.Model.ID)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_model_capability WHERE model_id = ?`, resp.Model.ID)
 		_, _ = testDB.ExecContext(ctx, `DELETE FROM t_model WHERE id = ?`, resp.Model.ID)

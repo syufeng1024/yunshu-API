@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -1001,7 +1000,9 @@ func (s *Service) loadModel(ctx context.Context, q *sql.DB, id int64, includeDel
 		 WHERE `+where, id)
 	view, err := scanModel(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return modelView{}, apierr.Newf(apierr.CodeModelNotFound, strconv.FormatInt(id, 10))
+		// The admin surface addresses rows by id; a missing or soft-deleted
+		// model is a 404, not the data plane's 400 model_not_found.
+		return modelView{}, apierr.New(apierr.CodeResourceNotFound)
 	}
 	if err != nil {
 		s.logError(ctx, "ops_model_load_failed: "+err.Error())
@@ -1034,7 +1035,7 @@ func (s *Service) loadModelScoped(ctx context.Context, tx *sql.Tx, id int64, for
 		 WHERE m.id = ? AND m.deleted_at IS NULL`+suffix, id)
 	view, err := scanModel(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return modelView{}, apierr.Newf(apierr.CodeModelNotFound, strconv.FormatInt(id, 10))
+		return modelView{}, apierr.New(apierr.CodeResourceNotFound)
 	}
 	if err != nil {
 		s.logError(ctx, "ops_model_load_failed: "+err.Error())
