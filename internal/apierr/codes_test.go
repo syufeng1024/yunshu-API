@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -141,9 +142,11 @@ func TestCodeCountIs76(t *testing.T) {
 	}
 }
 
-// counting the constants from source, not from the registry, catches a code
-// that was added as a constant but never entered specs (or vice versa).
-func TestCodeConstantsCountIs76(t *testing.T) {
+// countCodeConstants parses codes.go rather than reading the registry. A code
+// added as a constant but never entered specs (or vice versa) is invisible to
+// len(Specs()) but visible here.
+func countCodeConstants(t *testing.T) int {
+	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("runtime.Caller failed")
@@ -171,8 +174,42 @@ func TestCodeConstantsCountIs76(t *testing.T) {
 			}
 		}
 	}
-	if count != 76 {
+	return count
+}
+
+func TestCodeConstantsCountIs76(t *testing.T) {
+	if count := countCodeConstants(t); count != 76 {
 		t.Fatalf("Code* constants = %d, want 76", count)
+	}
+}
+
+// T21 A6: the three numbers must agree, whatever they are. The card's old "65"
+// is not asserted: the registry, the constants and the generated markdown are
+// the sources, and a disagreement fails with all three values printed.
+func TestCodeCountMatchesDocsTable(t *testing.T) {
+	constants := countCodeConstants(t)
+	specs := len(Specs())
+	codes := len(Codes())
+
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("runtime.Caller failed")
+	}
+	docsPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "docs", "error-codes.md")
+	raw, err := os.ReadFile(docsPath)
+	if err != nil {
+		t.Fatalf("read docs/error-codes.md: %v", err)
+	}
+	docsRows := 0
+	for _, line := range strings.Split(string(raw), "\n") {
+		if strings.HasPrefix(line, "| `") && !strings.Contains(line, "retry_after_seconds") {
+			docsRows++
+		}
+	}
+	t.Logf("error codes: constants=%d Specs=%d Codes=%d docs-rows=%d", constants, specs, codes, docsRows)
+	if constants != specs || specs != codes || codes != docsRows {
+		t.Fatalf("error-code counts disagree: constants=%d Specs=%d Codes=%d docs-rows=%d",
+			constants, specs, codes, docsRows)
 	}
 }
 

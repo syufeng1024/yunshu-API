@@ -1,27 +1,34 @@
-// Package redistest provides the real-Redis fixture shared by the T06
-// packages. It intentionally does not use miniredis: the Lua scripts under
-// test rely on real EVAL atomicity and real server-side LIST/STREAM commands.
+// Package redistest provides the real-Redis fixture shared by the packages
+// that need Redis. It intentionally does not use miniredis: the Lua scripts
+// under test rely on real EVAL atomicity and real server-side LIST/STREAM
+// commands.
 //
-// All T06 packages use TEST_REDIS_ADDR / TEST_REDIS_DB (default
-// 127.0.0.1:16379 / DB 14) and FLUSHDB before and after a test binary. Because
-// `go test ./...` runs package binaries concurrently, a filesystem lock
-// serialises binaries that share the same Redis database.
+// Each package gets its own logical database, derived from the directory of
+// the caller that invokes Setup (normally a TestMain). `go test ./...` runs
+// package binaries concurrently; before T21 every package shared DB 14 and a
+// FLUSHDB from one binary could land inside another binary's test (T09 measured
+// roughly one failure in three full runs). Hashing the package directory to
+// DB 1..15 means two packages only collide if the hash collides, and the
+// filesystem lock still serialises that case.
 //
-// DB 14, not the T05 config tests' DB 15: config's TestMain flushes DB 15
-// without taking this lock. Sharing it made `go test ./...` fail whenever a
-// config flush landed inside a breaker/ratelimit test (T06 acceptance already
-// flagged the shared-DB hazard).
+// TEST_REDIS_DB overrides the hash. TEST_REDIS_ADDR selects the server
+// (default 127.0.0.1:16379). DB 0 (local development) is never touched.
 //
-// DB 0 (local development) is never touched.
+// internal/config keeps DB 15 for its own TestMain; it does not call Setup but
+// it does take the same lock through AcquireLock, so a package whose hash lands
+// on 15 cannot flush underneath it.
 package redistest
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
@@ -30,9 +37,11 @@ import (
 const (
 	// DefaultAddr matches the local compose overlay in scripts/dev.sh.
 	DefaultAddr = "127.0.0.1:16379"
-	// DefaultDB is 14. The T05 config tests keep DB 15 and flush it without
-	// this package's cross-binary lock.
+	// DefaultDB is used only when the caller's package cannot be identified.
+	// Setup normally derives the database from the caller's directory.
 	DefaultDB = 14
+	// DBInUse is the number of logical databases the hash spreads over.
+	DBInUse = 15
 
 	lockTimeout = 90 * time.Second
 	lockStale   = 30 * time.Second
@@ -45,13 +54,43 @@ type Env struct {
 	Client *goredis.Client
 }
 
+// PackageDB maps a package directory to DB 1..DBInUse. The mapping is stable
+// across processes, which is what lets two test binaries agree on which
+// database belongs to them without coordination.
+func PackageDB(pkgPath string) int {
+	clean := strings.ToLower(filepath.ToSlash(filepath.Clean(strings.TrimSpace(pkgPath))))
+	if clean == "" {
+		return DefaultDB
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(clean))
+	return int(h.Sum32()%DBInUse) + 1
+}
+
+// callerPackage returns the directory of the first frame outside this package.
+// TestMain calls Setup directly, so frame 1 is usually the answer; the loop
+// keeps the mapping correct if a package wraps Setup in a helper.
+func callerPackage() string {
+	for skip := 1; skip < 8; skip++ {
+		_, file, _, ok := runtime.Caller(skip)
+		if !ok {
+			break
+		}
+		if strings.Contains(filepath.ToSlash(file), "/internal/redisx/redistest/") {
+			continue
+		}
+		return filepath.Dir(file)
+	}
+	return ""
+}
+
 // Open reads the environment and pings Redis. It does not flush; Setup does.
 func Open() (*Env, error) {
 	addr := os.Getenv("TEST_REDIS_ADDR")
 	if addr == "" {
 		addr = DefaultAddr
 	}
-	db := DefaultDB
+	db := PackageDB(callerPackage())
 	if raw := os.Getenv("TEST_REDIS_DB"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
 		if err != nil {
@@ -62,6 +101,9 @@ func Open() (*Env, error) {
 	if db == 0 {
 		// Never let a test binary wipe the local development keyspace.
 		return nil, errors.New("redistest: refusing TEST_REDIS_DB=0")
+	}
+	if db < 1 || db > DBInUse {
+		return nil, fmt.Errorf("redistest: database %d outside 1..%d", db, DBInUse)
 	}
 	client := goredis.NewClient(&goredis.Options{Addr: addr, DB: db})
 	ctx, cancel := context.WithTimeout(context.TODO(), 3*time.Second)
@@ -94,7 +136,7 @@ func Setup(m Runner) int {
 	current = env
 	defer func() { current = nil }()
 
-	unlock, err := acquireLock(env)
+	unlock, err := AcquireLock(env.Addr, env.DB)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "redistest: %v\n", err)
 		return 1
@@ -138,6 +180,14 @@ func mustCurrent() *Env {
 // this package does not import testing from non-test code.
 type Runner interface {
 	Run() int
+}
+
+// AcquireLock serialises binaries that share one logical database. Setup uses
+// it directly; a package with its own TestMain (internal/config) calls it so
+// a hash collision cannot flush under a running suite.
+func AcquireLock(addr string, db int) (func(), error) {
+	env := &Env{Addr: addr, DB: db}
+	return acquireLock(env)
 }
 
 func lockPath(env *Env) string {

@@ -1,0 +1,9 @@
+# Migration SQL bytes are hashed: the engine records a checksum per applied
+# migration and refuses to run when a file changes. A checkout that rewrites
+# line endings (core.autocrlf=true on Windows) would therefore change every
+# checksum and make both `migrate up` and TestEmbeddedMigrationsMatchGoldenChecksums
+# fail for reasons that have nothing to do with the migration itself.
+#
+# Pin these to LF so the bytes are identical on every platform.
+internal/platform/migrate/sql/mysql/*.sql text eol=lf
+internal/platform/migrate/checksums.golden text eol=lf

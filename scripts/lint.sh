@@ -47,8 +47,11 @@ check_empty "no FOREIGN KEY in migrations" \
   "the ledger relies on append-only writes, not referential constraints"
 
 # 5. The balance column is derived from the ledger. Nothing may overwrite it.
+#    _test.go files may plant a drift on purpose (T21's invariant negative
+#    control); production code may not.
 check_empty "no direct balance overwrite" \
-  "$(grep -rn 'UPDATE t_credit_account SET balance_micro' --include='*.go' internal cmd 2>/dev/null)" \
+  "$(grep -rn 'UPDATE t_credit_account SET balance_micro' --include='*.go' internal cmd 2>/dev/null \
+     | grep -v '_test\.go')" \
   "append a ledger entry; balance is a materialised view"
 
 # 6. The ledger is append-only.
@@ -68,6 +71,21 @@ check_empty "no context.Background() under internal/" \
   "$(grep -rn 'context.Background()' --include='*.go' internal 2>/dev/null \
      | grep -v '_test\.go' | grep -v 'testmain')" \
   "derive from the request context so cancellation propagates"
+
+# 9. golangci-lint (T21). It is a CI dependency, not a local prerequisite:
+#    a developer machine without it must still be able to run `dev.sh ci`.
+#    The config is deliberately narrow (govet + ineffassign) so the first
+#    adoption does not turn a pre-existing style backlog into a red build.
+if command -v golangci-lint >/dev/null 2>&1; then
+  if ! golangci-lint run --timeout 5m ./...; then
+    echo "LINT FAIL: golangci-lint"
+    fail=1
+  else
+    echo "ok: golangci-lint"
+  fi
+else
+  echo "WARN: golangci-lint not installed; skipped (CI installs it)"
+fi
 
 if [ "$fail" -ne 0 ]; then
   echo

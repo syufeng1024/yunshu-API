@@ -1,0 +1,116 @@
+name: nightly
+
+on:
+  schedule:
+    # 18:00 UTC = 02:00 Asia/Shanghai.
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+
+jobs:
+  gwt:
+    name: full GWT + R-01..R-08 + ledger invariants
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: yunshu_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+          --character-set-server=utf8mb4
+          --collation-server=utf8mb4_0900_as_cs
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    env:
+      TEST_DB_DSN: "root:test@tcp(127.0.0.1:3306)/yunshu_test?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
+      TEST_REDIS_ADDR: "127.0.0.1:6379"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: GWT + reconciliation + invariants
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -count=1 -v \
+            -run 'TestGWT|TestR0|TestInvariant' \
+            ./internal/acceptance/ ./internal/recon/ ./internal/ledger/ \
+            2>&1 | tee nightly-gwt.log
+
+      - name: upload failure log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-gwt-log
+          path: nightly-gwt.log
+          if-no-files-found: warn
+
+  soak:
+    name: soak (200 QPS, 10 minutes)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: yunshu_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+          --character-set-server=utf8mb4
+          --collation-server=utf8mb4_0900_as_cs
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    env:
+      TEST_DB_DSN: "root:test@tcp(127.0.0.1:3306)/yunshu_test?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
+      TEST_REDIS_ADDR: "127.0.0.1:6379"
+      SOAK_QPS: "200"
+      SOAK_DURATION: "10m"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: soak
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -tags soak -count=1 -v -run TestSoak ./internal/load/ \
+            2>&1 | tee nightly-soak.log
+
+      - name: upload soak log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-soak-log
+          path: nightly-soak.log
+          if-no-files-found: warn

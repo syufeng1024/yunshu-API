@@ -17,6 +17,7 @@ import (
 
 	"yunshu.dev/core/internal/platform/clock"
 	"yunshu.dev/core/internal/platform/migrate"
+	"yunshu.dev/core/internal/redisx/redistest"
 )
 
 // The config tests require the same real services as the ledger tests:
@@ -33,6 +34,7 @@ var (
 	testDB         *sql.DB
 	testRedis      *goredis.Client
 	testRedisIface Redis
+	redisUnlock    func()
 
 	originalRows       []originalConfigRow
 	originalPublishMax int64
@@ -67,6 +69,9 @@ func TestMain(m *testing.M) {
 	restoreConfigState()
 	if testRedis != nil {
 		_ = testRedis.Close()
+	}
+	if redisUnlock != nil {
+		redisUnlock()
 	}
 	if testDB != nil {
 		_ = testDB.Close()
@@ -188,6 +193,13 @@ func setupRedis() error {
 		}
 		db = parsed
 	}
+	// DB 15 is fixed for this package. A redistest package whose hash lands on
+	// 15 takes the same lock, so its FLUSHDB cannot run underneath these tests.
+	unlock, err := redistest.AcquireLock(addr, db)
+	if err != nil {
+		return fmt.Errorf("acquire redis test lock: %w", err)
+	}
+	redisUnlock = unlock
 	testRedis = goredis.NewClient(&goredis.Options{Addr: addr, DB: db})
 	ctx, cancel := context.WithTimeout(context.TODO(), 3*time.Second)
 	defer cancel()

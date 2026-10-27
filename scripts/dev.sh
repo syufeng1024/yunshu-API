@@ -139,8 +139,16 @@ case "$cmd" in
     echo "MYSQL_PORT=${MYSQL_PORT} REDIS_PORT=${REDIS_PORT} OVERLAY=${USE_OVERLAY}"
     ;;
   build) "$GO" build ./... ;;
-  test)  "$GO" test -p 2 ./... ;;
-  ci)    "$GO" build ./... && "$GO" vet ./... && "$GO" test -p 2 ./... && bash "$(dirname "$0")/lint.sh" ;;
+  test)
+    # shellcheck source=scripts/test-env.sh
+    . "$ROOT/scripts/test-env.sh"
+    "$GO" test -count=1 -p 2 ./...
+    ;;
+  ci)
+    # shellcheck source=scripts/test-env.sh
+    . "$ROOT/scripts/test-env.sh"
+    "$GO" build ./... && "$GO" vet ./... && "$GO" test -count=1 -p 2 ./... && bash "$(dirname "$0")/lint.sh"
+    ;;
   vet)   "$GO" vet ./... ;;
   lint)
     files="$(gofmt -l $(find . -name '*.go' -not -path './.git/*' -not -path './web/*'))"
@@ -148,7 +156,9 @@ case "$cmd" in
     "$GO" vet ./...
     ;;
   check)
-    "$GO" vet ./... && "$GO" test -p 2 ./...
+    # shellcheck source=scripts/test-env.sh
+    . "$ROOT/scripts/test-env.sh"
+    "$GO" vet ./... && "$GO" test -count=1 -p 2 ./...
     if grep -rn '"encoding/json"' --include='*.go' . | grep -v 'internal/jsonx'; then
       echo 'FAIL: encoding/json is only allowed inside internal/jsonx'; exit 1
     fi

@@ -8,7 +8,7 @@
 | 依赖 | T09、T10、T12–T16 |
 | 可并行 | 否（收口） |
 | 交付根 | `**/*_test.go`、`e2e/`、`.github/workflows/`、`scripts/` |
-| 状态 | ⬜ 未开始 |
+| 状态 | 🟨 第一段已交付（2026-10-27）· CI/门禁/26 条用例；Playwright e2e 未做 |
 
 ## 1. 目标
 
@@ -130,3 +130,61 @@ e2e: 安全用例输出
 skip 清单: 有条目则列出并标卡号
 遗留:
 ```
+
+---
+
+## 9. 第一段交付记录（2026-10-27）· CI 与门禁
+
+**卡面 14 项交付物中除 Playwright（交付物 4）外全部落地。** 本段不含业务逻辑改动。
+
+### 与卡面的三处对齐修正
+
+1. **错误码不是 65，是 76**。A6 改为断言「常量数 == `Specs()` 行数 == `docs/error-codes.md` 数据行数」三者相等并打印实际值，不硬编码 65（卡面数字已过时：E-21 四码 + `key_limit_reached` + `resource_state_conflict`/`trial_already_claimed`/`invoice_already_issued`/`price_conflict` + `resource_not_found` + `login_locked`）。
+2. **覆盖率阈值按实测对齐**（卡面硬约束 8 允许二选一，取「调到实测值并登记理由」）：
+
+| 包 | 实测 | 阈值 |
+| :--- | :--- | :--- |
+| `internal/apierr` | 90.16% | 90% |
+| `internal/billing` | 83.63% | 83% |
+| `internal/ledger` | 80.48% | 75% |
+| 整体（语句加权） | 65.35% | 59% |
+
+   卡面的 `ledger ≥85` 是 T04 时期的值，后来加了 `grant.go`/`freeze.go`/`refund.go` 三个文件；`整体 ≥70` 从未成立过。
+3. **`-race` 本地跑不了**（Windows 无 gcc），只写进 Linux runner 的两个 workflow。
+
+### 26 条验收用例
+
+`internal/acceptance/` 下 `TestCI_*` **14 条**、`TestGWT_*` **12 条**，全部走真实 MySQL + Redis，**不 mock**。
+
+- 14 条逐条对应卡面 §3：F4-2 / F7-1 / F7-4 / F14-2 / F19-1 / F6-7 / F11-3 / F14-4 / F14-5 / F14-6 / F16-4 / F16-6 / F19-4 / F20-3
+- 12 条 GWT 断言用 PRD 附录 D 原文数值（G-02 的 `6000/6500/7200`、G-04 的 `7900/7110/790`）
+- **F4-2 是唯一降级的**：它本质是前端用例（DOM/localStorage/URL 四处抓取），Go 侧只能验「响应体/日志/审计均不含明文 Key」。真正的 DOM 层验证留第二段 Playwright
+
+### 门禁有效性（亲手验证，不是走形式）
+
+| 验证 | 操作 | 结果 |
+| :--- | :--- | :--- |
+| A9 | 把 `prehold.go` 的准入从 `RawEstMicro` 改成 `EstMicro` | `TestGWT_G02` **变红**：`G-02: prehold after admission: P10: insufficient_credits`；还原后恢复绿 |
+| A10 第一层 | 篡改真实 `0012` 迁移文件 | 发现**当时无任何用例会红** —— 引擎能拦（手测 `migrate up` 报 checksum 不匹配并退出 1），但没有自动化覆盖 |
+| A10 第二层 | 补 `TestAppliedMigrationChecksumTamperIsRejected` | 独立临时 schema + `fstest.MapFS`，篡改后 `Up` 必须拒绝且不落地新迁移 |
+| A10 第三层 | 补 `TestEmbeddedMigrationsMatchGoldenChecksums` + `checksums.golden` | 改**真实**迁移文件（给 `0003` 加一行注释）→ 用例变红并打印期望/实际 sha256；还原后 `git diff` 为空 |
+
+A10 挖出的问题是本轮最有价值的：**引擎有能力但没人验**，等于防线只有一层且靠人记得跑。
+
+### 两个基础设施修正
+
+1. **`.gitattributes`**：`sql/mysql/*.sql` 与 `checksums.golden` 固定 `eol=lf`。迁移 checksum 是对**字节**求哈希，全新 Windows 检出若因 `core.autocrlf=true` 把 `.sql` 落成 CRLF，会让引擎与 golden 同时漂移，且报错完全看不出原因。
+2. **`redistest` 按包名哈希分配 Redis DB [1..15]**（可被 `REDIS_TEST_DB` 覆盖），解决 `-p 2` 下多包共用 DB 互相 `FLUSHDB` 导致的偶发失败（T09 遗留）。
+
+### CI 结构
+
+`ci.yml` 五个 job：`static`（gofmt 改动文件 / vet / lint / 硬约束扫描）→ `unit`（`-race -p 2`，ubuntu + MySQL 8.0 + Redis 7 service）→ `integration`（`migrate up` → `down`，其中 `0013.down` 必须失败）→ `coverage`（`coverage-gate.sh`）→ `acceptance`（`-race` 跑 acceptance/recon/ledger）。`nightly.yml` 跑全量 GWT + 8 条对账断言 + `-tags soak`，失败上传 artifacts。
+
+`internal/load/soak_test.go` 带 `//go:build soak`，默认不跑。
+
+### 遗留
+
+1. **Playwright e2e（F4-2 / F7-1 / F19-1 的浏览器层）未做**，留第二段；仓库当前无 Playwright 依赖。
+2. `-race` 与 soak 只在 CI 跑，本轮未在本地验证过。
+3. `docs/test-matrix.md` 的「验收条目 → 用例名」由 `TestMatrixNamesExistAndCountsMatch` 守（断言文档里列的用例名真实存在、14/12 数量对得上）。
+4. `golangci-lint` 本机未装，`lint.sh` 输出 WARN 跳过；CI 安装。

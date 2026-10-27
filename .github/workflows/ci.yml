@@ -1,0 +1,240 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  static:
+    name: static (gofmt / vet / lint / hard constraints)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Check only the files this change touched. A full-repo gofmt run on a
+      # fresh Windows checkout would report CRLF noise on files that are not
+      # part of the change.
+      - name: gofmt changed files
+        shell: bash
+        run: |
+          base="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -n "$base" ] && git cat-file -e "$base^{commit}" 2>/dev/null; then
+            mapfile -t files < <(git diff --name-only "$base" HEAD -- '*.go')
+          else
+            mapfile -t files < <(git ls-files '*.go')
+          fi
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "no Go files changed"
+            exit 0
+          fi
+          bad="$(gofmt -l "${files[@]}")"
+          if [ -n "$bad" ]; then
+            echo "gofmt required:"
+            echo "$bad"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
+
+      - name: lint + hard-constraint scans
+        shell: bash
+        run: |
+          export PATH="$(go env GOPATH)/bin:$PATH"
+          bash scripts/lint.sh
+
+  unit:
+    name: unit (-race, real MySQL 8.0 + Redis 7)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: yunshu_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+          --character-set-server=utf8mb4
+          --collation-server=utf8mb4_0900_as_cs
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    env:
+      TEST_DB_DSN: "root:test@tcp(127.0.0.1:3306)/yunshu_test?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
+      TEST_REDIS_ADDR: "127.0.0.1:6379"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: go test -race
+        run: go test -race -count=1 -p 2 ./internal/...
+
+  integration:
+    name: migrations (compose MySQL/Redis, 0013.down must fail)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: start compose stack
+        run: docker compose -f deploy/docker-compose.yml up -d --wait --wait-timeout 240
+
+      - name: migrate up
+        env:
+          ENV: local
+          DB_DSN: "root:root@tcp(127.0.0.1:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4"
+        run: go run ./cmd/migrate up
+
+      # Rolling back 11 steps reaches 0013 after ten successful downs. Its
+      # down file is a deliberate SIGNAL, so migrate must exit non-zero.
+      - name: 0013.down must fail
+        shell: bash
+        env:
+          ENV: local
+          DB_DSN: "root:root@tcp(127.0.0.1:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4"
+        run: |
+          set +e
+          out="$(go run ./cmd/migrate down 11 2>&1)"
+          code=$?
+          set -e
+          echo "$out"
+          if [ "$code" -eq 0 ]; then
+            echo "0013.down returned 0; it must fail"
+            exit 1
+          fi
+          if ! grep -q "0013" <<<"$out"; then
+            echo "failure did not name 0013"
+            exit 1
+          fi
+          echo "0013.down failed as required (exit $code)"
+
+      - name: migrate up again
+        env:
+          ENV: local
+          DB_DSN: "root:root@tcp(127.0.0.1:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4"
+        run: go run ./cmd/migrate up
+
+      - name: migrate down 10 and up
+        shell: bash
+        env:
+          ENV: local
+          DB_DSN: "root:root@tcp(127.0.0.1:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4"
+        run: |
+          go run ./cmd/migrate down 10
+          go run ./cmd/migrate up
+
+      - name: compose logs
+        if: failure()
+        run: docker compose -f deploy/docker-compose.yml logs --no-color
+
+  coverage:
+    name: coverage gate (ledger/billing/apierr/overall)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: yunshu_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+          --character-set-server=utf8mb4
+          --collation-server=utf8mb4_0900_as_cs
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    env:
+      TEST_DB_DSN: "root:test@tcp(127.0.0.1:3306)/yunshu_test?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
+      TEST_REDIS_ADDR: "127.0.0.1:6379"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: coverage gate
+        run: bash scripts/coverage-gate.sh
+
+  acceptance:
+    name: acceptance (14 CI + 12 GWT + R-01..R-08 + ledger invariants)
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: yunshu_test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+          --character-set-server=utf8mb4
+          --collation-server=utf8mb4_0900_as_cs
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    env:
+      TEST_DB_DSN: "root:test@tcp(127.0.0.1:3306)/yunshu_test?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
+      TEST_REDIS_ADDR: "127.0.0.1:6379"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: acceptance
+        run: go test -race -count=1 ./internal/acceptance/... ./internal/recon/... ./internal/ledger/...
