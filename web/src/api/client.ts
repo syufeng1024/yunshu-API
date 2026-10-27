@@ -1,4 +1,5 @@
 import { ROUTES } from '@/lib/constants'
+import { CSRF_HEADER, getCsrfToken, isSafeMethod, rememberCsrfToken } from './csrf'
 import type { components } from './types'
 
 type ErrorEnvelope = components['schemas']['ErrorEnvelope']
@@ -102,12 +103,20 @@ async function readDevFixture<T>(path: string, method: string): Promise<T | unde
  */
 async function request<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
   const { body, redirectOn401 = true, headers: rawHeaders, ...rest } = options
+  const method = (options.method ?? 'GET').toUpperCase()
 
-  const fixture = await readDevFixture<T>(path, options.method ?? 'GET')
+  const fixture = await readDevFixture<T>(path, method)
   if (fixture !== undefined) return fixture
 
   const headers = new Headers(rawHeaders)
   headers.set('Accept', 'application/json')
+  // Session-authenticated mutations carry the double-submit token. The header
+  // is added here rather than at each call site so a new mutation cannot
+  // forget it and fail with a 403.
+  if (!isSafeMethod(method) && path.startsWith('/api/')) {
+    const token = getCsrfToken()
+    if (token) headers.set(CSRF_HEADER, token)
+  }
   const serialized = serializeBody(body)
   if (serialized !== undefined && !(serialized instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
@@ -163,6 +172,12 @@ async function request<T>(path: string, options: ApiRequestOptions = {}): Promis
     throw apiError
   }
 
+  // login/register/me repeat the CSRF token in the body. Capturing it here
+  // keeps the SPA working when the readable cookie is missing or stale.
+  if (typeof payload === 'object' && payload !== null && 'csrf_token' in payload) {
+    rememberCsrfToken((payload as { csrf_token?: unknown }).csrf_token)
+  }
+
   return payload as T
 }
 
@@ -179,8 +194,9 @@ export const api = {
   patch<T>(path: string, body?: unknown, options?: Omit<ApiRequestOptions, 'method' | 'body'>): Promise<T> {
     return request<T>(path, { ...options, method: 'PATCH', body })
   },
-  delete<T>(path: string, options?: Omit<ApiRequestOptions, 'method' | 'body'>): Promise<T> {
-    return request<T>(path, { ...options, method: 'DELETE' })
+  /** DELETE accepts a body: the key endpoints require `{"confirm":true}`. */
+  delete<T>(path: string, body?: unknown, options?: Omit<ApiRequestOptions, 'method' | 'body'>): Promise<T> {
+    return request<T>(path, { ...options, method: 'DELETE', body })
   },
 }
 

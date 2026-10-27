@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { api, ApiError, errorHint, errorMessage } from '@/api/client'
+import { clearCsrfToken } from '@/api/csrf'
 import type { components } from '@/api/types'
 
 export type CurrentUser = components['schemas']['CurrentUser']
@@ -49,6 +50,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch {
       // Intentionally ignored; the local session is discarded below.
     }
+    clearCsrfToken()
     set({ status: 'anonymous', user: null, error: null, hint: null })
   },
   clear: () => set({ status: 'anonymous', user: null, error: null, hint: null }),

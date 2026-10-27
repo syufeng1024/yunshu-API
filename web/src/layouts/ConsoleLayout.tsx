@@ -74,21 +74,9 @@ export function ConsoleLayout() {
 
       <div className="min-w-0 flex-1">
         <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
-          {/* TODO(T19): replace with the announcement API response. An empty
-              announcement list must render the empty state below, not sample copy. */}
-          <div
-            className="mb-5 flex items-start gap-3 rounded-lg border border-primary-ring bg-primary-soft px-4 py-3"
-            role="status"
-          >
-            <Icon name="megaphone" className="mt-0.5 h-4 w-4 text-primary" />
-            <div className="space-y-0.5">
-              <p className="text-xs font-medium text-primary-strong">公告位</p>
-              <p className="text-xs text-ink-secondary">
-                运营公告接口接入后在此展示；当前为空态，不展示占位数据。
-              </p>
-            </div>
-          </div>
-
+          {/* The announcement strip lives on the overview (T19): the ops
+              announcement API is not exposed to console users yet, so it
+              renders an explicit empty state there instead of sample copy. */}
           <Outlet />
         </main>
       </div>

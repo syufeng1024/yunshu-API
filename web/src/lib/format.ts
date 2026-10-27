@@ -90,6 +90,27 @@ export function formatInteger(value: number): string {
   return Number.isFinite(value) ? new Intl.NumberFormat('zh-CN').format(value) : INVALID
 }
 
+/** Credits -> micro-credits, the inverse of creditsFromMicro. */
+export function microFromCredits(credits: number): number {
+  if (!Number.isFinite(credits)) return Number.NaN
+  return roundHalfAwayFromZero(credits) * MICRO_PER_CREDIT
+}
+
+/**
+ * Basis points -> percent. 9850 -> "98.5%". Used for success_rate_bp and other
+ * integers the backend reports in 1/10000 units.
+ */
+export function formatBasisPoints(bp: number, fractionDigits = 1): string {
+  if (!Number.isFinite(bp)) return INVALID
+  return formatPercent(bp / 10_000, fractionDigits)
+}
+
+/** Basis points -> price multiplier. 12000 -> "1.20". Not a fee estimate. */
+export function formatRatioBp(bp: number, fractionDigits = 2): string {
+  if (!Number.isFinite(bp)) return INVALID
+  return (bp / 10_000).toFixed(fractionDigits)
+}
+
 /** Ratio in [0, 1] -> percent string. 0.152 -> "15.2%". */
 export function formatPercent(ratio: number, fractionDigits = 1): string {
   if (!Number.isFinite(ratio)) return INVALID
@@ -98,6 +119,18 @@ export function formatPercent(ratio: number, fractionDigits = 1): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: fractionDigits,
   }).format(ratio)
+}
+
+/** Seconds -> coarse duration copy for predictions ("1 小时 30 分钟"). */
+export function formatDurationSeconds(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return INVALID
+  const totalMinutes = Math.floor(seconds / 60)
+  if (totalMinutes < 1) return `${Math.max(1, Math.round(seconds))} 秒`
+  const hours = Math.floor(totalMinutes / 60)
+  const minutes = totalMinutes % 60
+  if (hours === 0) return `${minutes} 分钟`
+  if (minutes === 0) return `${hours} 小时`
+  return `${hours} 小时 ${minutes} 分钟`
 }
 
 /** Milliseconds -> compact duration. */
