@@ -10,6 +10,7 @@ import (
 	"yunshu.dev/core/internal/jsonx"
 	"yunshu.dev/core/internal/ledger"
 	obslog "yunshu.dev/core/internal/obs/log"
+	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 	"yunshu.dev/core/internal/ratelimit"
 	"yunshu.dev/core/internal/redisx"
 )
@@ -99,6 +100,10 @@ type Deps struct {
 
 	Logger *obslog.Logger
 	Clock  *redisx.Clock
+
+	// Metrics is optional. Recording never changes a decision: every method is
+	// nil-safe and does not return an error.
+	Metrics *obsmetrics.Recorder
 
 	// NodeID is written to t_prehold_hold.node_id.
 	NodeID string

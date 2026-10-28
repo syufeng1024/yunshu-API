@@ -9,6 +9,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -22,6 +23,7 @@ import (
 	"yunshu.dev/core/internal/control/mw"
 	"yunshu.dev/core/internal/obs/health"
 	obslog "yunshu.dev/core/internal/obs/log"
+	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 	"yunshu.dev/core/internal/platform/clock"
 	"yunshu.dev/core/internal/platform/db"
 	"yunshu.dev/core/internal/platform/env"
@@ -43,6 +45,11 @@ func main() {
 
 	logger := obslog.New(service, cfg.Env)
 	logger.Info(rootCtx, "starting", obslog.Fields{Stage: "startup"})
+
+	reg := obsmetrics.NewRegistry()
+	// The control plane has no gateway event to record, but the endpoint still
+	// exposes the TDS §5.3 family names so A8 can check one process shape.
+	_ = obsmetrics.NewRecorder(reg)
 
 	mainDB, err := db.OpenMain(cfg.DBDSN, db.MainPoolMaxOpen, db.MainPoolMaxIdle)
 	if err != nil {
@@ -190,10 +197,38 @@ func main() {
 		Register:          ctl.Register,
 	})
 
+	// /metrics is a separate listener: it has no auth by default, so it must
+	// never share the console port.
+	metricsSrv := httpsrv.New(httpsrv.Config{
+		Addr:              cfg.MetricsAddr,
+		Svc:               service,
+		Env:               cfg.Env,
+		Logger:            logger,
+		Clock:             clock.Real{},
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		Register: func(mux *http.ServeMux) {
+			mux.Handle("GET /metrics", httpsrv.MetricsHandler(cfg.MetricsToken, reg))
+		},
+	})
+
 	installSignalHandling(rootCtx, logger, cancel)
 
-	if err := srv.Run(ctx); err != nil {
-		logger.Error(rootCtx, "server exited with error: "+err.Error(), obslog.Fields{Stage: "shutdown", Status: 1})
+	errCh := make(chan error, 2)
+	go func() { errCh <- srv.Run(ctx) }()
+	go func() { errCh <- metricsSrv.Run(ctx) }()
+
+	var runErr error
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil && runErr == nil {
+			runErr = err
+			cancel()
+		}
+	}
+	if runErr != nil {
+		logger.Error(rootCtx, "server exited with error: "+runErr.Error(), obslog.Fields{Stage: "shutdown", Status: 1})
 		os.Exit(1)
 	}
 	logger.Info(rootCtx, "shutdown complete", obslog.Fields{Stage: "shutdown", Status: 0})

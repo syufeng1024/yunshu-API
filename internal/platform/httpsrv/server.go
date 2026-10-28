@@ -1,5 +1,6 @@
-// Package httpsrv assembles the standard-library HTTP server used by gatewayd
-// and controld: health endpoints, request middleware, timeouts, and drain.
+// Package httpsrv assembles the standard-library HTTP server used by
+// gatewayd, controld and the jobsd metrics listener: health endpoints, request
+// middleware, timeouts, and drain.
 package httpsrv
 
 import (

@@ -48,6 +48,9 @@ type Daily struct {
 	IdemThreshold int
 	// Location is the business zone; nil means CST.
 	Location *time.Location
+	// Metrics is optional. LedgerReconcileDiff is set only after a successful
+	// run; a skipped or failed run leaves the previous value in place.
+	Metrics Metrics
 	// UserLo/UserHi bound the internal checks to [UserLo, UserHi). Zero, zero
 	// means the whole table, which is the only shape production uses. Tests
 	// sharing a schema set them so another fixture's accounts cannot appear in
@@ -156,6 +159,12 @@ func (d *Daily) Run(ctx context.Context, day time.Time) (DailyResult, error) {
 	out.External = len(external)
 	out.P0 = p0
 	out.P0Reason = p0Reason
+	// The gauge is set before the per-diff writes and notifications: a
+	// notification failure must not hide a P0 finding. jobsd is the singleton
+	// that runs this task, so the gauge is cluster-wide.
+	if d.Metrics != nil {
+		d.Metrics.LedgerReconcileDiff(int64(len(out.Diffs)))
+	}
 
 	alerted := map[string]bool{}
 	for _, diff := range out.Diffs {

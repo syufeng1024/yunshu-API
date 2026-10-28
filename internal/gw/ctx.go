@@ -120,6 +120,10 @@ type Ctx struct {
 	// FailStage is the P-number that produced the error. For the six-slot
 	// pipeline it is the inner stage (e.g. P07) even though the slot is P05.
 	FailStage string
+	// ErrCode is the API error code written to the client, or "connection_reset"
+	// when P01 resets the TCP connection. It is empty on success and is only
+	// consumed by the request metric.
+	ErrCode string
 }
 
 // BodyHashOf returns the hex SHA-256 of the request body. It is the idempotency

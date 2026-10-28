@@ -5,16 +5,17 @@ import (
 	"crypto/subtle"
 	"net/http"
 	"strings"
+
+	"yunshu.dev/core/internal/obs/metrics"
 )
 
-// metricsBody is a valid Prometheus text exposition with no series yet. Metric
-// registration lands with the gateway pipeline; T01 only proves the isolated
-// listener and its authentication path work.
-const metricsBody = "# yunshu metrics: no series registered in T01\n"
-
-// MetricsHandler serves GET/HEAD /metrics. When token is non-empty it requires
-// "Authorization: Bearer <token>", compared in constant time.
-func MetricsHandler(token string) http.Handler {
+// MetricsHandler serves GET/HEAD /metrics from reg. When token is non-empty it
+// requires "Authorization: Bearer <token>", compared in constant time.
+//
+// The body is the cumulative Registry.Snapshot() rendering, not the window
+// deltas used by Registry.Run: a Prometheus counter must not reset on every
+// scrape (TDS §5.4).
+func MetricsHandler(token string, reg *metrics.Registry) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -35,9 +36,14 @@ func MetricsHandler(token string) http.Handler {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.WriteHeader(http.StatusOK)
-		if r.Method != http.MethodHead {
-			_, _ = w.Write([]byte(metricsBody))
+		if r.Method == http.MethodHead {
+			return
 		}
+		if reg == nil {
+			_, _ = w.Write([]byte("# yunshu metrics: registry unavailable\n"))
+			return
+		}
+		_, _ = w.Write(reg.PrometheusText())
 	})
 }
 

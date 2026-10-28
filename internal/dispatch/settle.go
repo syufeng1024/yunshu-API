@@ -2,6 +2,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"yunshu.dev/core/internal/gw"
@@ -81,10 +82,15 @@ func (d *Dispatcher) settle(ctx context.Context, c *gw.Ctx, consumed int64, reas
 	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
 	defer cancel()
 	result, err := d.opts.Ledger.Settle(settleCtx, params)
-	if err != nil && d.opts.Logger != nil {
-		d.opts.Logger.Error(settleCtx, "settle_failed: "+err.Error(), obslog.Fields{
-			Stage: "P27", RequestID: c.RequestID,
-		})
+	if err != nil {
+		if d.opts.Metrics != nil && errors.Is(err, ledger.ErrCASConflict) {
+			d.opts.Metrics.BalanceCASContended()
+		}
+		if d.opts.Logger != nil {
+			d.opts.Logger.Error(settleCtx, "settle_failed: "+err.Error(), obslog.Fields{
+				Stage: "P27", RequestID: c.RequestID,
+			})
+		}
 	}
 	return result, err
 }
@@ -115,6 +121,9 @@ func (d *Dispatcher) completeIdem(ctx context.Context, c *gw.Ctx, body []byte) {
 }
 
 func (d *Dispatcher) record(a Attempt) {
+	if d.opts.Metrics != nil {
+		d.opts.Metrics.UpstreamAttempt(a.ChannelID, attemptOutcome(a))
+	}
 	if d.opts.AttemptSink != nil {
 		d.opts.AttemptSink(a)
 	}

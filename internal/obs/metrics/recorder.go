@@ -1,0 +1,444 @@
+package metrics
+
+import (
+	"strconv"
+	"time"
+)
+
+// Recorder is the typed facade over the TDS §5.3 metric set. Every method is
+// nil-safe and non-blocking: a sampler failure must never change a request.
+//
+// Label values are closed sets. Model names and channel ids come from the
+// routing catalog (business-bounded), while dimensions, outcomes and reasons
+// are mapped to a fixed enum; anything outside the set becomes "other". The
+// recorder deliberately has no method that accepts a request id, a user id, a
+// configuration value or an upstream message.
+type Recorder struct {
+	reg *Registry
+
+	requests             *CounterVec
+	requestDuration      *HistogramVec
+	ttft                 *HistogramVec
+	upstreamAttempts     *CounterVec
+	circuitState         *GaugeVec
+	ratelimitRejected    *CounterVec
+	ratelimitDegraded    *CounterVec
+	ratelimitUnavailable *CounterVec
+
+	inflightVec *GaugeVec
+	inflight    *Gauge
+
+	preholdOrphan       *CounterVec
+	settleFallback      *CounterVec
+	ledgerReconcileDiff *GaugeVec
+	balanceCASRetry     *CounterVec
+	configStale         *GaugeVec
+	configBootstrapUsed *CounterVec
+	strategyFallback    *CounterVec
+	regionGuard         *CounterVec
+	backpressure        *CounterVec
+	upstreamMalformed   *CounterVec
+
+	logWrittenVec *CounterVec
+	logWritten    *Counter
+	logDropped    *CounterVec
+	logBacklogVec *GaugeVec
+	logBacklog    *Gauge
+
+	configItemRejected *CounterVec
+}
+
+// NewRecorder registers every TDS §5.3 family on reg. Registering a family
+// does not create a series: a label combination appears on its first record,
+// so a quiet process does not fabricate zeroes. The three exceptions are
+// label-less gauges/counters where zero is a true value at startup (in-flight,
+// log written, log backlog); those handles are cached to keep their calls off
+// the map lookup path.
+func NewRecorder(reg *Registry) *Recorder {
+	if reg == nil {
+		reg = NewRegistry()
+	}
+	r := &Recorder{
+		reg: reg,
+
+		requests: reg.Counter("gw_requests_total",
+			"Total data-plane requests.",
+			"model", "protocol_in", "protocol_out", "http_status", "err_code"),
+		requestDuration: reg.Histogram("gw_request_duration_seconds",
+			"End-to-end data-plane request latency in seconds.",
+			DurationBuckets, "model", "stream"),
+		ttft: reg.Histogram("gw_ttft_seconds",
+			"Time to the first upstream response byte for streaming requests, in seconds.",
+			DurationBuckets, "model", "channel_id"),
+		upstreamAttempts: reg.Counter("gw_upstream_attempts_total",
+			"Upstream attempts by channel and outcome.",
+			"channel_id", "outcome"),
+		circuitState: reg.Gauge("gw_circuit_state",
+			"Circuit breaker state for this process: 0=CLOSED, 1=OPEN, 2=HALF_OPEN.",
+			"channel_id"),
+		ratelimitRejected: reg.Counter("gw_ratelimit_rejected_total",
+			"Rate-limit rejections by dimension.",
+			"dim"),
+		ratelimitDegraded: reg.Counter("gw_ratelimit_degraded_total",
+			"Rate-limit decisions served by the node-local concurrency counter.",
+			"dim"),
+		ratelimitUnavailable: reg.Counter("gw_ratelimit_unavailable_total",
+			"Rate-limit decisions that failed closed because Redis was unavailable.",
+			"dim"),
+
+		inflightVec: reg.Gauge("gw_inflight",
+			"Current in-flight data-plane requests."),
+
+		preholdOrphan: reg.Counter("gw_prehold_orphan_total",
+			"Expired preholds recovered by the reconciliation job.",
+			"reason"),
+		settleFallback: reg.Counter("gw_settle_fallback_total",
+			"Settlements that fell back because usage or the client was unavailable.",
+			"reason"),
+		ledgerReconcileDiff: reg.Gauge("gw_ledger_reconcile_diff",
+			"Differences found by the latest successful daily reconciliation run."),
+		balanceCASRetry: reg.Counter("gw_balance_cas_retry_total",
+			"Balance CAS contention observed by the gateway.",
+			"result"),
+		configStale: reg.Gauge("gw_config_stale_seconds",
+			"Seconds since the oldest configuration snapshot was loaded.",
+			"instance"),
+		configBootstrapUsed: reg.Counter("gw_config_bootstrap_used",
+			"Configuration bootstrap (built-in defaults) used at startup."),
+		strategyFallback: reg.Counter("gw_strategy_fallback_total",
+			"Configured strategy values that were not registered.",
+			"kind", "configured"),
+		regionGuard: reg.Counter("gw_region_guard_violation_total",
+			"Overseas channels excluded from routing by the region guard.",
+			"channel_id"),
+		backpressure: reg.Counter("gw_backpressure_rejected_total",
+			"Requests rejected by process backpressure.",
+			"tier"),
+		upstreamMalformed: reg.Counter("gw_upstream_frame_malformed_total",
+			"Malformed upstream stream frames.",
+			"channel_id"),
+
+		logWrittenVec: reg.Counter("gw_log_written_total",
+			"Request-log entries written to the Redis stream."),
+		logDropped: reg.Counter("gw_log_dropped_total",
+			"Request-log entries dropped.",
+			"reason"),
+		logBacklogVec: reg.Gauge("gw_log_backlog",
+			"Current request-log stream length."),
+
+		configItemRejected: reg.Counter("gw_config_item_rejected_total",
+			"Configuration rows rejected while applying a snapshot.",
+			"namespace", "reason"),
+	}
+	r.inflight = r.inflightVec.With()
+	r.logWritten = r.logWrittenVec.With()
+	r.logBacklog = r.logBacklogVec.With()
+	return r
+}
+
+// Registry returns the registry this recorder writes to.
+func (r *Recorder) Registry() *Registry {
+	if r == nil {
+		return nil
+	}
+	return r.reg
+}
+
+// Request records one completed data-plane request. status is the HTTP status
+// written to the client; errCode is the API error code, empty on success.
+func (r *Recorder) Request(model, protocolIn, protocolOut, errCode string, status int) {
+	if r == nil || r.requests == nil {
+		return
+	}
+	r.requests.With(
+		modelValue(model),
+		protocolValue(protocolIn),
+		protocolValue(protocolOut),
+		strconv.Itoa(status),
+		sanitizeLabelValue(errCode),
+	).Inc()
+}
+
+// RequestDuration records the end-to-end latency. stream=true covers SSE
+// requests, whose budget is the 600s stream budget rather than the 120s unary
+// budget.
+func (r *Recorder) RequestDuration(model string, stream bool, d time.Duration) {
+	if r == nil || r.requestDuration == nil {
+		return
+	}
+	r.requestDuration.With(modelValue(model), strconv.FormatBool(stream)).ObserveDuration(d)
+}
+
+// TTFT records the first upstream byte for a streaming attempt.
+func (r *Recorder) TTFT(model string, channelID int64, d time.Duration) {
+	if r == nil || r.ttft == nil {
+		return
+	}
+	r.ttft.With(modelValue(model), channelValue(channelID)).ObserveDuration(d)
+}
+
+// UpstreamAttempt records one attempt outcome.
+func (r *Recorder) UpstreamAttempt(channelID int64, outcome string) {
+	if r == nil || r.upstreamAttempts == nil {
+		return
+	}
+	r.upstreamAttempts.With(channelValue(channelID), enumValue(attemptOutcomes, outcome)).Inc()
+}
+
+// CircuitState records the breaker state read during routing. It is refreshed
+// when this process reads K16; a channel with no traffic keeps its last value
+// (TDS §5.3 deviation note).
+func (r *Recorder) CircuitState(channelID int64, state int) {
+	if r == nil || r.circuitState == nil {
+		return
+	}
+	if state < 0 || state > 2 {
+		state = 0
+	}
+	r.circuitState.With(channelValue(channelID)).Set(int64(state))
+}
+
+// RatelimitRejected is the ratelimit.Metrics surface.
+func (r *Recorder) RatelimitRejected(dim string) {
+	if r == nil || r.ratelimitRejected == nil {
+		return
+	}
+	r.ratelimitRejected.With(enumValue(ratelimitDims, dim)).Inc()
+}
+
+// RatelimitDegraded is the ratelimit.Metrics surface.
+func (r *Recorder) RatelimitDegraded(dim string) {
+	if r == nil || r.ratelimitDegraded == nil {
+		return
+	}
+	r.ratelimitDegraded.With(enumValue(ratelimitDims, dim)).Inc()
+}
+
+// RatelimitUnavailable is the ratelimit.Metrics surface.
+func (r *Recorder) RatelimitUnavailable(dim string) {
+	if r == nil || r.ratelimitUnavailable == nil {
+		return
+	}
+	r.ratelimitUnavailable.With(enumValue(ratelimitDims, dim)).Inc()
+}
+
+// Inflight sets the process in-flight gauge.
+func (r *Recorder) Inflight(n int64) {
+	if r == nil || r.inflight == nil {
+		return
+	}
+	r.inflight.Set(n)
+}
+
+// PreholdOrphan records one expired prehold recovered by jobsd. reason is
+// ttl_expired for the 60s scan; db_sweep is reserved for a future sweep path.
+func (r *Recorder) PreholdOrphan(reason string) {
+	if r == nil || r.preholdOrphan == nil {
+		return
+	}
+	r.preholdOrphan.With(enumValue(preholdOrphanReasons, reason)).Inc()
+}
+
+// SettleFallback records a settlement that could not use upstream usage.
+func (r *Recorder) SettleFallback(reason string) {
+	if r == nil || r.settleFallback == nil {
+		return
+	}
+	r.settleFallback.With(enumValue(settleFallbackReasons, reason)).Inc()
+}
+
+// LedgerReconcileDiff sets the latest daily reconciliation difference count.
+// The series is lazy: it is created by the first successful run, not at
+// startup, so a quiet jobsd does not export a zero that would hide the P0
+// "diff != 0" alert.
+func (r *Recorder) LedgerReconcileDiff(n int64) {
+	if r == nil || r.ledgerReconcileDiff == nil {
+		return
+	}
+	r.ledgerReconcileDiff.With().Set(n)
+}
+
+// BalanceCASContended records one account-version CAS loss. V1 has no retry
+// loop, so contention itself is the signal (TDS §5.3 deviation note).
+func (r *Recorder) BalanceCASContended() {
+	if r == nil || r.balanceCASRetry == nil {
+		return
+	}
+	r.balanceCASRetry.With("contended").Inc()
+}
+
+// ConfigStale sets the staleness gauge. instance is the pod name.
+func (r *Recorder) ConfigStale(instance string, seconds int64) {
+	if r == nil || r.configStale == nil {
+		return
+	}
+	if seconds < 0 {
+		seconds = 0
+	}
+	r.configStale.With(instanceValue(instance)).Set(seconds)
+}
+
+// ConfigBootstrapUsed records that the process started on built-in defaults
+// instead of a loaded snapshot. The series is lazy for the same reason as
+// LedgerReconcileDiff: a fabricated zero would disarm the P1 alert.
+func (r *Recorder) ConfigBootstrapUsed() {
+	if r == nil || r.configBootstrapUsed == nil {
+		return
+	}
+	r.configBootstrapUsed.With().Inc()
+}
+
+// StrategyFallback records a configured strategy name that is not registered.
+// The TDS names the second label "configured"; the original value is
+// deliberately not used here (it is operator input and would make cardinality
+// a function of configuration). The value is always "unregistered"; the
+// original name is already in the config_field_fallback WARN line.
+func (r *Recorder) StrategyFallback(kind, configured string) {
+	if r == nil || r.strategyFallback == nil {
+		return
+	}
+	r.strategyFallback.With(
+		enumValue(strategyKinds, kind),
+		enumValue(configuredLabels, configured),
+	).Inc()
+}
+
+// RegionGuardViolation records an overseas channel that entered the candidate
+// loop and was excluded by the hard region filter.
+func (r *Recorder) RegionGuardViolation(channelID int64) {
+	if r == nil || r.regionGuard == nil {
+		return
+	}
+	r.regionGuard.With(channelValue(channelID)).Inc()
+}
+
+// BackpressureRejected records a shed request. tier is stream (60%..90%,
+// streaming only), reject (>90%), or backlog (GR-03 settlement backlog).
+func (r *Recorder) BackpressureRejected(tier string) {
+	if r == nil || r.backpressure == nil {
+		return
+	}
+	r.backpressure.With(enumValue(backpressureTiers, tier)).Inc()
+}
+
+// UpstreamFrameMalformed records one malformed upstream stream frame.
+func (r *Recorder) UpstreamFrameMalformed(channelID int64) {
+	if r == nil || r.upstreamMalformed == nil {
+		return
+	}
+	r.upstreamMalformed.With(channelValue(channelID)).Inc()
+}
+
+// LogWritten records one request-log entry appended to the Redis stream.
+func (r *Recorder) LogWritten() {
+	if r == nil || r.logWritten == nil {
+		return
+	}
+	r.logWritten.Inc()
+}
+
+// LogDropped records one lost request-log entry.
+func (r *Recorder) LogDropped(reason string) {
+	if r == nil || r.logDropped == nil {
+		return
+	}
+	r.logDropped.With(enumValue(logDropReasons, reason)).Inc()
+}
+
+// LogBacklog sets the request-log stream length.
+func (r *Recorder) LogBacklog(n int64) {
+	if r == nil || r.logBacklog == nil {
+		return
+	}
+	if n < 0 {
+		n = 0
+	}
+	r.logBacklog.Set(n)
+}
+
+// ConfigItemRejected records one t_config_item row that was skipped while
+// applying a snapshot. namespace is one of the five namespaces or
+// "unrecognized"; reason is a bounded loader reason.
+func (r *Recorder) ConfigItemRejected(namespace, reason string) {
+	if r == nil || r.configItemRejected == nil {
+		return
+	}
+	r.configItemRejected.With(
+		enumValue(configNamespaces, namespace),
+		enumValue(configRejectReasons, reason),
+	).Inc()
+}
+
+func modelValue(model string) string {
+	v := sanitizeLabelValue(model)
+	if v == "" {
+		return "unknown"
+	}
+	return v
+}
+
+func instanceValue(instance string) string {
+	v := sanitizeLabelValue(instance)
+	if v == "" {
+		return "unknown"
+	}
+	return v
+}
+
+func channelValue(channelID int64) string {
+	if channelID <= 0 {
+		return "0"
+	}
+	return strconv.FormatInt(channelID, 10)
+}
+
+func protocolValue(protocol string) string {
+	if protocol == "" {
+		return "none"
+	}
+	return enumValue(protocolLabels, protocol)
+}
+
+func enumValue(allowed map[string]struct{}, value string) string {
+	if _, ok := allowed[value]; ok {
+		return value
+	}
+	return "other"
+}
+
+func labelSet(values ...string) map[string]struct{} {
+	m := make(map[string]struct{}, len(values))
+	for _, v := range values {
+		m[v] = struct{}{}
+	}
+	return m
+}
+
+var (
+	protocolLabels = labelSet("OPENAI_COMPAT", "ANTHROPIC_COMPAT", "BAILIAN", "none")
+
+	attemptOutcomes = labelSet("SUCCESS", "FAILED", "PARTIAL", "CLIENT_ABORT", "UNKNOWN")
+
+	ratelimitDims = labelSet("rpm", "tpm", "concurrency", "daily")
+
+	preholdOrphanReasons = labelSet("ttl_expired", "db_sweep")
+
+	settleFallbackReasons = labelSet("no_usage", "disconnect")
+
+	strategyKinds = labelSet(
+		"deduct_policy", "refund_policy", "cost_source", "daily_meter",
+		"key_daily_quota", "reset_scope", "tier_chain", "group_switch_mode",
+	)
+	configuredLabels = labelSet("unregistered")
+
+	backpressureTiers = labelSet("stream", "reject", "backlog")
+
+	logDropReasons = labelSet("redis_down", "max_deliveries", "bad_payload", "unknown_version")
+
+	configNamespaces = labelSet(
+		"ROUTING", "RATELIMIT", "PRICING", "UPSTREAM", "FEATURE", "unrecognized",
+	)
+	configRejectReasons = labelSet(
+		"unknown_key", "wrong_namespace", "invalid_value", "strategy_unregistered",
+	)
+)

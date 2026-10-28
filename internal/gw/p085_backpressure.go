@@ -7,6 +7,7 @@ import (
 	"yunshu.dev/core/internal/apierr"
 	"yunshu.dev/core/internal/config"
 	obslog "yunshu.dev/core/internal/obs/log"
+	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 )
 
 // Backpressure thresholds (TDS §4.3). They are single-instance ratios, not
@@ -30,6 +31,10 @@ type Backpressure struct {
 	inflight atomic.Int64
 	warned   atomic.Bool
 	logger   *obslog.Logger
+
+	// Metrics is optional. Inflight is a gauge store (not a counter add) and
+	// only runs when the gauge is wired; the admission decision is unchanged.
+	Metrics *obsmetrics.Recorder
 }
 
 // NewBackpressure builds an empty gate.
@@ -55,6 +60,7 @@ func (s *InflightSlot) Release() {
 		return
 	}
 	s.b.inflight.Add(-1)
+	s.b.observeInflight(s.b.inflight.Load())
 }
 
 // Acquire reserves one slot.
@@ -74,13 +80,18 @@ func (b *Backpressure) Acquire(ctx context.Context, maxInflight int64, stream bo
 	}
 	n := b.inflight.Add(1)
 	pct := n * 100 / maxInflight
+	b.observeInflight(n)
 
 	switch {
 	case pct > BackpressureRejectPercent:
 		b.inflight.Add(-1)
+		b.observeInflight(b.inflight.Load())
+		b.reject("reject")
 		return nil, apierr.New(apierr.CodeBackpressureRejected)
 	case stream && pct >= BackpressureWarnPercent:
 		b.inflight.Add(-1)
+		b.observeInflight(b.inflight.Load())
+		b.reject("stream")
 		b.warn(ctx)
 		return nil, apierr.New(apierr.CodeBackpressureStreamRejected)
 	}
@@ -92,6 +103,18 @@ func (b *Backpressure) Acquire(ctx context.Context, maxInflight int64, stream bo
 		b.warned.Store(false)
 	}
 	return &InflightSlot{b: b}, nil
+}
+
+func (b *Backpressure) observeInflight(n int64) {
+	if b != nil && b.Metrics != nil {
+		b.Metrics.Inflight(n)
+	}
+}
+
+func (b *Backpressure) reject(tier string) {
+	if b != nil && b.Metrics != nil {
+		b.Metrics.BackpressureRejected(tier)
+	}
 }
 
 func (b *Backpressure) warn(ctx context.Context) {
@@ -123,6 +146,9 @@ func (s *BackpressureStage) Run(ctx context.Context, c *Ctx) error {
 	// after it entered.
 	if s.d.SettleBacklog != nil && s.d.SettleBacklog.Exceeded(ctx) {
 		apiErr := apierr.New(apierr.CodeBackpressureRejected)
+		if s.d.Metrics != nil {
+			s.d.Metrics.BackpressureRejected("backlog")
+		}
 		if s.d.Logger != nil {
 			s.d.Logger.Warn(ctx, "settle_backlog_exceeded", obslog.Fields{
 				Stage: "P08.5", RequestID: c.RequestID, Status: apiErr.HTTPStatus,

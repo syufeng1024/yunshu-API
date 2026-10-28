@@ -70,6 +70,11 @@ func (s *RouterStage) Run(ctx context.Context, c *Ctx) error {
 			continue
 		}
 		if route.Region != RegionDomestic || ch.Region != RegionDomestic {
+			// The region filter is a hard exclusion (PRD §3.4). An overseas row
+			// that reached this loop is a misconfiguration: P0 in TDS §5.3.
+			if s.d.Metrics != nil {
+				s.d.Metrics.RegionGuardViolation(ch.ID)
+			}
 			continue
 		}
 		if c.Stream && (!bool(route.StreamSupported) || !bool(ch.StreamSupported)) {
@@ -151,7 +156,23 @@ func (s *RouterStage) breakerOpen(ctx context.Context, channelID, nowMS int64) b
 		}
 		return false
 	}
+	if s.d.Metrics != nil {
+		s.d.Metrics.CircuitState(channelID, circuitStateValue(state))
+	}
 	return state == breaker.StateOpen && openUntilMS > nowMS
+}
+
+// circuitStateValue maps K16 to the gauge contract in TDS §5.3: 0=CLOSED,
+// 1=OPEN, 2=HALF_OPEN.
+func circuitStateValue(state breaker.State) int {
+	switch state {
+	case breaker.StateOpen:
+		return 1
+	case breaker.StateHalfOpen:
+		return 2
+	default:
+		return 0
+	}
 }
 
 // order groups by priority (ascending) and applies a weighted permutation

@@ -68,6 +68,9 @@ func (d *Dispatcher) streamAttempt(ctx context.Context, w http.ResponseWriter, c
 		out.class, out.apiErr = classifyStreamStartError(err)
 		out.attempt.ErrorClass = out.class
 		out.attempt.Phase = "P16"
+		if out.class == ClassMalformedBody && d.opts.Metrics != nil {
+			d.opts.Metrics.UpstreamFrameMalformed(t.ch.ID)
+		}
 		if err != nil {
 			out.attempt.UpstreamMsg = sanitizeUpstreamMsg(err.Error(), secret)
 		}
@@ -93,6 +96,14 @@ func (d *Dispatcher) streamAttempt(ctx context.Context, w http.ResponseWriter, c
 			reason = "UPSTREAM_FAIL"
 		}
 	}
+	if d.opts.Metrics != nil {
+		switch {
+		case result.ClientAborted && consumed == 0:
+			d.opts.Metrics.SettleFallback("disconnect")
+		case costErr != nil:
+			d.opts.Metrics.SettleFallback("no_usage")
+		}
+	}
 	out.consumedMicro = consumed
 	if _, settleErr := d.settle(ctx, c, consumed, reason); settleErr != nil && d.opts.Logger != nil {
 		d.opts.Logger.Error(ctx, "stream_settle_failed: "+settleErr.Error(), obslog.Fields{
@@ -107,12 +118,14 @@ func (d *Dispatcher) streamAttempt(ctx context.Context, w http.ResponseWriter, c
 		if consumed == 0 && result.Usage.TokensIn == 0 && result.Usage.TokensOut == 0 {
 			out.result = "FAILED"
 		}
+		c.ErrCode = apierr.CodeClientAborted
 		out.finished = true
 		return out
 	}
 
 	if result.NeedErrorFrame {
 		api := streamFailureAPI(result)
+		c.ErrCode = api.Code
 		api = api.WithRequestID(c.RequestID)
 		credits := consumed
 		api.CreditsConsumed = &credits
@@ -128,6 +141,9 @@ func (d *Dispatcher) streamAttempt(ctx context.Context, w http.ResponseWriter, c
 		out.attempt.ErrorClass = ClassTimeout
 		if errors.Is(result.LastError, stream.ErrMalformedFrame) || errors.Is(result.LastError, stream.ErrUpstreamEvent) {
 			out.attempt.ErrorClass = ClassMalformedBody
+			if d.opts.Metrics != nil {
+				d.opts.Metrics.UpstreamFrameMalformed(t.ch.ID)
+			}
 		}
 		out.finished = true
 		return out

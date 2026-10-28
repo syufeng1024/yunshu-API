@@ -61,6 +61,9 @@ type Hanging struct {
 	Cost          CostFunc
 	BatchSize     int
 	RatePerSecond int
+	// Metrics is optional. Every recovered expired hold is reason=ttl_expired;
+	// db_sweep is reserved for a future sweep path.
+	Metrics Metrics
 	// UserLo/UserHi limit the scan to [UserLo, UserHi). Zero, zero scans the
 	// whole table, which is the only shape production uses. Tests sharing a
 	// schema set them so unrelated stale holds cannot enter their counters.
@@ -197,6 +200,9 @@ func (h *Hanging) Round(ctx context.Context) (HangingResult, error) {
 			}
 		}
 		out.Processed++
+		if h.Metrics != nil {
+			h.Metrics.PreholdOrphan("ttl_expired")
+		}
 
 		processedThisSecond++
 		if h.RatePerSecond > 0 && processedThisSecond >= h.RatePerSecond {

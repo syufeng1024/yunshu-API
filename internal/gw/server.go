@@ -63,6 +63,14 @@ func NewHandler(d *Deps, terminal Terminal) *Handler {
 
 // ServeHTTP implements http.Handler.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// The recorder wraps the writer only when metrics are wired. Unwrap and
+	// Flush keep the connection-reset and SSE paths byte-for-byte identical.
+	var sw *statusRecorder
+	if h.d != nil && h.d.Metrics != nil {
+		sw = &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		w = sw
+	}
+
 	rid := obslog.MetaFrom(r.Context()).RequestID
 	if rid == "" {
 		rid = w.Header().Get("X-Request-Id")
@@ -83,6 +91,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Header:    r.Header,
 	}
 	w.Header().Set("X-Request-Id", rid)
+
+	if sw != nil {
+		defer func() { h.observeRequest(c, sw.Status()) }()
+	}
 
 	// P01: the total request budget. Streaming is only known after P04, so the
 	// non-stream budget is established first and upgraded below when the body
@@ -165,6 +177,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // finishError maps the pipeline outcome to the wire.
 func (h *Handler) finishError(w http.ResponseWriter, ctx context.Context, c *Ctx, err error) {
 	if errors.Is(err, ErrConnectionReset) {
+		c.ErrCode = "connection_reset"
 		ResetConnection(w)
 		return
 	}
@@ -185,6 +198,7 @@ func (h *Handler) finishError(w http.ResponseWriter, ctx context.Context, c *Ctx
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, ctx context.Context, c *Ctx, e *apierr.APIError) {
+	c.ErrCode = e.Code
 	e = e.WithRequestID(c.RequestID)
 	if h.d.Logger != nil {
 		fields := obslog.Fields{

@@ -25,11 +25,19 @@ const DefaultMaxLen = int64(200_000)
 // EntryVersion is the current payload schema version written to field `v`.
 const EntryVersion = "1"
 
+// Metrics is the optional observability surface. A nil value disables
+// recording; a metric failure never changes the producer's result.
+type Metrics interface {
+	LogWritten()
+	LogDropped(reason string)
+}
+
 // Producer appends to log:stream.
 type Producer struct {
-	client *redisx.Client
-	stream string
-	maxLen int64
+	client  *redisx.Client
+	stream  string
+	maxLen  int64
+	Metrics Metrics
 }
 
 // New builds a producer. maxLen <= 0 uses DefaultMaxLen.
@@ -41,13 +49,16 @@ func New(client *redisx.Client, maxLen int64) *Producer {
 }
 
 // Add appends one entry. payload is the serialized Entry (jsonx output).
+// Enqueue failure is counted and returned; it never changes the request result
+// (TDS §5.2: losing a log line must not lose a request).
 func (p *Producer) Add(ctx context.Context, payload []byte) error {
 	if len(payload) == 0 {
+		p.drop("bad_payload")
 		return errors.New("logq: empty payload")
 	}
 	cctx, cancel := p.client.CommandContext(ctx)
 	defer cancel()
-	return p.client.Raw().XAdd(cctx, &goredis.XAddArgs{
+	err := p.client.Raw().XAdd(cctx, &goredis.XAddArgs{
 		Stream: p.stream,
 		MaxLen: p.maxLen,
 		Approx: true,
@@ -56,6 +67,38 @@ func (p *Producer) Add(ctx context.Context, payload []byte) error {
 			"p": string(payload),
 		},
 	}).Err()
+	if err != nil {
+		// Every XAdd error here is a Redis-side failure; the consumer-only
+		// reasons (max_deliveries, unknown_version) are not produced here.
+		p.drop("redis_down")
+		return err
+	}
+	if p.Metrics != nil {
+		p.Metrics.LogWritten()
+	}
+	return nil
+}
+
+func (p *Producer) drop(reason string) {
+	if p != nil && p.Metrics != nil {
+		p.Metrics.LogDropped(reason)
+	}
+}
+
+// Backlog returns the current stream length. It is a monitoring read, not a
+// consumer: XADD failure stays visible through gw_log_dropped_total, while a
+// growing backlog is what gw_log_backlog watches.
+func (p *Producer) Backlog(ctx context.Context) (int64, error) {
+	if p == nil || p.client == nil {
+		return 0, nil
+	}
+	cctx, cancel := p.client.CommandContext(ctx)
+	defer cancel()
+	n, err := p.client.Raw().XLen(cctx, p.stream).Result()
+	if err != nil {
+		return 0, fmt.Errorf("logq: XLEN: %w", err)
+	}
+	return n, nil
 }
 
 // ClaimStale reclaims messages idle for at least minIdle. The 6.2

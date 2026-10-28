@@ -73,6 +73,10 @@ func (s *PreholdStage) Run(ctx context.Context, c *Ctx) error {
 		ExpiresAt:      expiresAt,
 	})
 	if err != nil {
+		if errors.Is(err, ledger.ErrCASConflict) && s.d.Metrics != nil {
+			// V1 has no retry loop; contention itself is the signal (TDS §5.3).
+			s.d.Metrics.BalanceCASContended()
+		}
 		if errors.Is(err, ledger.ErrInsufficientCredits) {
 			overdraft := float64(s.intKey(config.KeyBillingOverdraftLimitDefault, 50))
 			return StageErr(StageP10,

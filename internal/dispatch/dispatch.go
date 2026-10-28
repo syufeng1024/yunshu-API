@@ -29,6 +29,7 @@ import (
 	"yunshu.dev/core/internal/cryptobox"
 	"yunshu.dev/core/internal/gw"
 	obslog "yunshu.dev/core/internal/obs/log"
+	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 	"yunshu.dev/core/internal/settle"
 	"yunshu.dev/core/internal/stream"
 	"yunshu.dev/relaykit/anthropic"
@@ -66,6 +67,9 @@ type Options struct {
 	Config  *config.Store
 	Logger  *obslog.Logger
 	Idem    gw.IdemStore
+
+	// Metrics is optional. Recording never changes an attempt decision.
+	Metrics *obsmetrics.Recorder
 
 	KEK *cryptobox.Box
 
@@ -305,6 +309,10 @@ func (d *Dispatcher) dispatch(w http.ResponseWriter, r *http.Request, c *gw.Ctx,
 	var upstreamMS int64
 	for {
 		if r.Context().Err() != nil {
+			if d.opts.Metrics != nil {
+				d.opts.Metrics.SettleFallback("disconnect")
+			}
+			c.ErrCode = apierr.CodeClientAborted
 			d.settle(r.Context(), c, 0, "CLIENT_ABORT")
 			return outcome{clientAborted: true, class: ClassClientAbort, result: "FAILED", attempts: attempts}
 		}
@@ -333,6 +341,10 @@ func (d *Dispatcher) dispatch(w http.ResponseWriter, r *http.Request, c *gw.Ctx,
 		d.record(out.attempt)
 
 		if out.clientAborted {
+			if d.opts.Metrics != nil {
+				d.opts.Metrics.SettleFallback("disconnect")
+			}
+			c.ErrCode = apierr.CodeClientAborted
 			d.settle(r.Context(), c, 0, "CLIENT_ABORT")
 			out.attempts = attempts
 			out.upstreamMS = upstreamMS
@@ -375,6 +387,7 @@ func (d *Dispatcher) failFrom(w http.ResponseWriter, r *http.Request, c *gw.Ctx,
 	d.settle(r.Context(), c, 0, reason)
 	if r.Context().Err() != nil {
 		// The client is gone; writing would only fail. The hold is released.
+		c.ErrCode = apierr.CodeClientAborted
 		return
 	}
 	d.fail(w, r, c, api, out.class, attempts)
@@ -385,6 +398,7 @@ func (d *Dispatcher) fail(w http.ResponseWriter, r *http.Request, c *gw.Ctx, api
 		_ = apierr.Write(w, api)
 		return
 	}
+	c.ErrCode = api.Code
 	api = api.WithRequestID(c.RequestID)
 	if d.opts.Logger != nil {
 		d.opts.Logger.Warn(r.Context(), "upstream_dispatch_failed: "+api.Code, obslog.Fields{
@@ -470,6 +484,10 @@ func (d *Dispatcher) try(ctx context.Context, w http.ResponseWriter, c *gw.Ctx, 
 	out.attempt.FirstByteMS = times.firstByte.Load()
 	if out.attempt.FirstByteMS == 0 {
 		out.attempt.FirstByteMS = out.attempt.TotalMS
+	}
+	if c.Stream && out.attempt.FirstByteMS > 0 && d.opts.Metrics != nil {
+		d.opts.Metrics.TTFT(modelLabel(c), t.ch.ID,
+			time.Duration(out.attempt.FirstByteMS)*time.Millisecond)
 	}
 
 	if resp.StatusCode == http.StatusTooManyRequests {

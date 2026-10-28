@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -23,8 +24,10 @@ import (
 	"yunshu.dev/core/internal/gw"
 	"yunshu.dev/core/internal/idemstore"
 	"yunshu.dev/core/internal/ledger"
+	"yunshu.dev/core/internal/logq"
 	"yunshu.dev/core/internal/obs/health"
 	obslog "yunshu.dev/core/internal/obs/log"
+	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 	"yunshu.dev/core/internal/platform/clock"
 	"yunshu.dev/core/internal/platform/db"
 	"yunshu.dev/core/internal/platform/env"
@@ -48,6 +51,10 @@ func main() {
 
 	logger := obslog.New(service, cfg.Env)
 	logger.Info(rootCtx, "starting", obslog.Fields{Stage: "startup"})
+
+	startedAt := time.Now()
+	reg := obsmetrics.NewRegistry()
+	rec := obsmetrics.NewRecorder(reg)
 
 	// The restricted gateway channel: 8 connections by default, 5min lifetime.
 	gwDB, err := db.OpenGateway(cfg.GWWriteDSN, cfg.GatewayDBMaxConns)
@@ -88,6 +95,12 @@ func main() {
 		// retrying. /readyz reports the dependency state to the load balancer.
 		logger.Warn(rootCtx, "initial config snapshot unavailable: "+err.Error(), obslog.Fields{Stage: "startup"})
 	}
+	// TDS §5.3: a zero LoadedAt here means the process is serving built-in
+	// defaults. The counter is lazy, so a normal startup produces no series at
+	// all; a fabricated zero would disarm the ">0 即 P1" alert.
+	if snap := store.Snapshot(config.NsUpstream); snap == nil || snap.LoadedAt().IsZero() {
+		rec.ConfigBootstrapUsed()
+	}
 
 	ctx, cancel := context.WithCancel(rootCtx)
 	defer cancel()
@@ -109,8 +122,13 @@ func main() {
 	defer stopClock()
 
 	nodeID := hostname()
+	go observeConfig(ctx, store, rec, nodeID, startedAt)
+	logStream := logq.New(rdb, 0)
+	logStream.Metrics = rec
+	go observeLogBacklog(ctx, logStream, rec)
+
 	deg := ratelimit.NewDegrader(rdb, redisClock, nodeID, ratelimit.ModeOff, 200_000)
-	limiter := ratelimit.New(rdb, redisClock, deg, nil, logger)
+	limiter := ratelimit.New(rdb, redisClock, deg, rec, logger)
 
 	idemOpts := idemstore.DefaultOptions()
 	if v, ok := store.Int(config.KeyIdemLeaseTTLSeconds); ok {
@@ -142,6 +160,9 @@ func main() {
 	go func() { defer close(writerDone); _ = usageWriter.Run(bgCtx) }()
 	go func() { defer close(metricDone); _ = metricAcc.Run(bgCtx) }()
 
+	backpressure := gw.NewBackpressure(logger)
+	backpressure.Metrics = rec
+
 	deps := &gw.Deps{
 		Config:        store,
 		Catalog:       gw.NewCatalog(store),
@@ -154,11 +175,12 @@ func main() {
 		Breaker:       brk,
 		Tokens:        gw.HeuristicCounter{},
 		CounterReader: gw.RedisCounters{Client: rdb},
-		Backpressure:  gw.NewBackpressure(logger),
+		Backpressure:  backpressure,
 		ConnGuard:     gw.NewConnGuard(logger),
 		SettleBacklog: backlog,
 		Logger:        logger,
 		Clock:         redisClock,
+		Metrics:       rec,
 		NodeID:        nodeID,
 	}
 	if err := deps.Validate(); err != nil {
@@ -183,6 +205,7 @@ func main() {
 		Config:         deps.Config,
 		Logger:         logger,
 		Idem:           deps.Idem,
+		Metrics:        rec,
 		KEK:            box,
 		Cooldown:       brk,
 		SettleEnqueuer: enqueuer,
@@ -230,7 +253,7 @@ func main() {
 		},
 	})
 
-	metrics := httpsrv.New(httpsrv.Config{
+	metricsSrv := httpsrv.New(httpsrv.Config{
 		Addr:              cfg.MetricsAddr,
 		Svc:               service,
 		Env:               cfg.Env,
@@ -241,7 +264,7 @@ func main() {
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       30 * time.Second,
 		Register: func(mux *http.ServeMux) {
-			mux.Handle("GET /metrics", httpsrv.MetricsHandler(cfg.MetricsToken))
+			mux.Handle("GET /metrics", httpsrv.MetricsHandler(cfg.MetricsToken, reg))
 		},
 	})
 
@@ -249,7 +272,7 @@ func main() {
 
 	errCh := make(chan error, 2)
 	go func() { errCh <- api.Run(ctx) }()
-	go func() { errCh <- metrics.Run(ctx) }()
+	go func() { errCh <- metricsSrv.Run(ctx) }()
 
 	var runErr error
 	for i := 0; i < 2; i++ {
@@ -275,6 +298,109 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info(rootCtx, "shutdown complete", obslog.Fields{Stage: "shutdown", Status: 0})
+}
+
+// observeConfig exports the two config-plane signals that only gatewayd can
+// see: staleness of the oldest namespace snapshot, and rows that were skipped
+// while a snapshot was applied. The version check makes the rejection counter
+// count each bad row once per published version, not once per tick.
+func observeConfig(ctx context.Context, store *config.Store, rec *obsmetrics.Recorder, instance string, startedAt time.Time) {
+	if store == nil || rec == nil {
+		return
+	}
+	last := make(map[config.Namespace]int64, len(config.SnapshotNamespaces))
+	for _, ns := range config.SnapshotNamespaces {
+		last[ns] = -1
+	}
+	collect := func() {
+		var oldest time.Time
+		for _, ns := range config.SnapshotNamespaces {
+			snap := store.Snapshot(ns)
+			if snap == nil {
+				continue
+			}
+			loaded := snap.LoadedAt()
+			if loaded.IsZero() {
+				// Built-in defaults have no load time; measuring from process
+				// start is the honest "configuration has never loaded" value.
+				loaded = startedAt
+			}
+			if oldest.IsZero() || loaded.Before(oldest) {
+				oldest = loaded
+			}
+			if last[ns] != snap.Version() {
+				last[ns] = snap.Version()
+				recordConfigFallbacks(rec, ns, snap.Fallbacks())
+			}
+		}
+		if !oldest.IsZero() {
+			rec.ConfigStale(instance, int64(time.Since(oldest).Seconds()))
+		}
+	}
+	collect()
+	ticker := time.NewTicker(obsmetrics.DefaultWindow)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			collect()
+		}
+	}
+}
+
+func recordConfigFallbacks(rec *obsmetrics.Recorder, ns config.Namespace, fallbacks []string) {
+	for _, fb := range fallbacks {
+		key, reason, ok := strings.Cut(fb, ": ")
+		if !ok {
+			rec.ConfigItemRejected(string(ns), "invalid_value")
+			continue
+		}
+		switch {
+		case reason == "unknown key":
+			// The key is not in the metadata table, so there is no namespace
+			// to attribute it to; "unrecognized" is one of the bounded values.
+			rec.ConfigItemRejected("unrecognized", "unknown_key")
+		case reason == "key belongs to another namespace":
+			rec.ConfigItemRejected(string(ns), "wrong_namespace")
+		case strings.HasPrefix(reason, "invalid value"):
+			rec.ConfigItemRejected(string(ns), "invalid_value")
+		case strings.HasPrefix(reason, "strategy not registered"):
+			rec.ConfigItemRejected(string(ns), "strategy_unregistered")
+			if m, ok := config.Meta(config.Key(key)); ok && m.Strategy != "" {
+				// The original value is deliberately not a label; it stays in
+				// the existing config_field_fallback WARN line.
+				rec.StrategyFallback(string(m.Strategy), "unregistered")
+			}
+		default:
+			rec.ConfigItemRejected(string(ns), "invalid_value")
+		}
+	}
+}
+
+// observeLogBacklog exports the Redis request-log stream length. It is a
+// monitoring read, not a consumer; a growing value means the consumer is stuck.
+func observeLogBacklog(ctx context.Context, producer *logq.Producer, rec *obsmetrics.Recorder) {
+	if producer == nil || rec == nil {
+		return
+	}
+	collect := func() {
+		if n, err := producer.Backlog(ctx); err == nil {
+			rec.LogBacklog(n)
+		}
+	}
+	collect()
+	ticker := time.NewTicker(obsmetrics.DefaultWindow)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			collect()
+		}
+	}
 }
 
 func hostname() string {

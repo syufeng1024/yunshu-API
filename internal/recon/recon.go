@@ -18,6 +18,13 @@ import (
 	"yunshu.dev/core/internal/platform/clock"
 )
 
+// Metrics is the optional observability surface for the reconciliation jobs.
+// A nil value disables recording; it never changes a reconciliation result.
+type Metrics interface {
+	PreholdOrphan(reason string)
+	LedgerReconcileDiff(n int64)
+}
+
 // Match modes stored in t_reconcile_diff.match_mode.
 //
 // INTERNAL is the D-19 namespace for R-01..R-08 violations. The four upstream

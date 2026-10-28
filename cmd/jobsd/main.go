@@ -11,6 +11,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -22,9 +23,11 @@ import (
 	"yunshu.dev/core/internal/ledger"
 	"yunshu.dev/core/internal/lock"
 	obslog "yunshu.dev/core/internal/obs/log"
+	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 	"yunshu.dev/core/internal/platform/clock"
 	"yunshu.dev/core/internal/platform/db"
 	"yunshu.dev/core/internal/platform/env"
+	"yunshu.dev/core/internal/platform/httpsrv"
 	"yunshu.dev/core/internal/recon"
 	"yunshu.dev/core/internal/redisx"
 	"yunshu.dev/core/internal/settle"
@@ -47,6 +50,9 @@ func main() {
 
 	logger := obslog.New(service, cfg.Env)
 	logger.Info(rootCtx, "starting", obslog.Fields{Stage: "startup"})
+
+	reg := obsmetrics.NewRegistry()
+	rec := obsmetrics.NewRecorder(reg)
 
 	mainDB, err := db.OpenMain(cfg.DBDSN, db.JobsPoolMaxOpen, db.MainPoolMaxIdle)
 	if err != nil {
@@ -88,6 +94,31 @@ func main() {
 
 	var wg sync.WaitGroup
 
+	// jobsd has no public HTTP port, so /metrics is the only listener. It is
+	// still a separate port with the same Bearer-token switch as the other two
+	// processes (T22 §9 errata #2; TDS §5.4's "no HTTP port" predates it).
+	metricsSrv := httpsrv.New(httpsrv.Config{
+		Addr:              cfg.MetricsAddr,
+		Svc:               service,
+		Env:               cfg.Env,
+		Logger:            logger,
+		Clock:             clock.Real{},
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       30 * time.Second,
+		Register: func(mux *http.ServeMux) {
+			mux.Handle("GET /metrics", httpsrv.MetricsHandler(cfg.MetricsToken, reg))
+		},
+	})
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		if err := metricsSrv.Run(ctx); err != nil {
+			logger.Error(rootCtx, "metrics server stopped: "+err.Error(), obslog.Fields{Stage: "shutdown", Status: 1})
+		}
+	}()
+
 	ledgerStore := ledger.NewStore(mainDB, clock.Real{})
 
 	// P26 consumer. Every jobsd replica runs one worker: the claim uses
@@ -106,7 +137,9 @@ func main() {
 	locker := lock.New(rdb, nil)
 	hanging := recon.NewHanging(mainDB, rdb, ledgerStore,
 		settle.NewEnqueuer(mainDB, clock.Real{}), logger, clock.Real{})
+	hanging.Metrics = rec
 	daily := recon.NewDaily(mainDB, locker, logger, clock.Real{}, instanceID)
+	daily.Metrics = rec
 	expire := jobs.NewExpireBatch(mainDB, locker, logger, clock.Real{}, instanceID)
 	purge := jobs.NewPurgeLog(mainDB, logger, clock.Real{})
 	rollup := jobs.NewRollup(mainDB, logger, clock.Real{})

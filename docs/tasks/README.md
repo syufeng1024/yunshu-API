@@ -148,7 +148,7 @@
 | :--- | :--- | :--- | :--- | :--- |
 | [T21](T21-测试与CI.md) | 测试与 CI（14 条必进 CI + G-01–G-12） | T09,T10,T12–T16 | `**/*_test.go`、`e2e/`、`.github/workflows/` | ✅ 两段（含 Playwright 3 条） |
 | [T24](T24-运营与控制面后端补口.md) | 运营与控制面后端补口（T19/T20 反查 16 项） | T15,T16,T19,T20 | `internal/control/`、`internal/ledger/`、`api/openapi.yaml`、`web/src/pages/admin/` | ✅ 两段完成（11 项） |
-| [T22](T22-部署与可观测.md) | 部署·可观测·灰度回滚 | T09,T21 | `deploy/`、`internal/obs/` | ⬜ |
+| [T22](T22-部署与可观测.md) | 部署·可观测·灰度回滚 | T09,T21 | `deploy/`、`internal/obs/` | 🟨 段 1 ✅（23 项指标）/ 2–4 未开始 |
 | [T23](T23-验收对照与交付.md) | 验收对照与交付（82 项功能点） | 全部 | `docs/tasks/acceptance/` | ⬜ |
 
 ---
@@ -240,6 +240,7 @@ flowchart LR
 | T21 段2 | 2026-10-28 | 2026-10-28 | ✅ 通过 | 2 项（CI 首跑待确认） | Playwright 三条 e2e（F4-2/F7-1/F19-1）真栈 **3 passed 13.0s**；`playwright.config.ts` + `e2e` CI job + `scripts/e2e-backend.sh`；test-matrix 守卫仍绿 |
 | T24 段1 | 2026-10-28 | 2026-10-28 | ✅ 通过 | 2 项（`-race` 由 CI 覆盖、段 2 未做） | 5 项只读接口（overview / 工单详情 / key_count / 成功率 / 审计 target 过滤）；容器内全 control 包 `ok`；vitest **44 文件 163 用例**；`types.ts` 补生成 5205 行（存量欠账） |
 | T24 段2 | 2026-10-28 | 2026-10-28 | ✅ **通过** | 4 项非阻塞 | 6 项写接口（余额调整全链路 / 公告 effective_from+offline / model_ids / clear_fields / recommend_weight≤1000 / 注销）；迁移 0025 两表、checksums 已重生；`go build/vet/test ./internal/...` `EXIT=0`（**串行口径**，`-p 2` 本机假红）、vitest **44 文件 169 用例**、构建两道门禁通过；四处偏离见卡 §11.4 |
+| T22 段1 | 2026-10-28 | 2026-10-28 | ✅ **通过** | 3 项（1 项须段 3 前定） | 指标子系统：`internal/obs/metrics` 1625 行（Registry/Recorder/A8 门禁）、23/23 项在真实调用点打点、三进程挂 `/metrics`；热路径栈上拼 key + `atomic.Pointer[map]` 命中、无锁无分配；counter 窗口增量与快照累计双通道；桶编码累加成 `le` 语义；`TEST_EXIT=0`（4m58s，`-p 1`）、`lint.sh` 绿；**遗留 P1：三进程共用 `GATEWAY_METRICS_ADDR`（默认 :9090），同机双进程会绑不上端口** |
 
 **T15 全卡验收结论（交付总监复核）**
 
