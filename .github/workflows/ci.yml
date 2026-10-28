@@ -202,6 +202,94 @@ jobs:
       - name: coverage gate
         run: bash scripts/coverage-gate.sh
 
+  e2e:
+    name: e2e (Playwright F4-2 / F7-1 / F19-1)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: test
+          MYSQL_DATABASE: yunshu_e2e
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -ptest --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=20
+    env:
+      E2E_DB_DSN: "root:test@tcp(127.0.0.1:3306)/yunshu_e2e?parseTime=true&loc=UTC&charset=utf8mb4"
+      E2E_REDIS_ADDR: "127.0.0.1:6379"
+      E2E_DB_NAME: "yunshu_e2e"
+      E2E_MYSQL_HOST: "127.0.0.1"
+      E2E_MYSQL_PORT: "3306"
+      E2E_MYSQL_USER: "root"
+      E2E_MYSQL_PASSWORD: "test"
+      TEST_DB_DSN: "root:test@tcp(127.0.0.1:3306)/yunshu_test?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
+      TEST_REDIS_ADDR: "127.0.0.1:6379"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: install MySQL client (F19-1 seeding)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y default-mysql-client
+
+      - name: migrate e2e schema
+        env:
+          ENV: dev
+          DB_DSN: "root:test@tcp(127.0.0.1:3306)/yunshu_e2e?parseTime=true&loc=UTC&charset=utf8mb4"
+          LOG_SQL_DSN: "root:test@tcp(127.0.0.1:3306)/yunshu_e2e?parseTime=true&loc=UTC&charset=utf8mb4"
+        run: go run ./cmd/migrate up
+
+      - name: test matrix still parses
+        run: go test -count=1 -run TestMatrix ./internal/acceptance/
+
+      - name: install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: install Chromium
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+
+      # The Playwright config starts `npm run dev` on 5180 and, when no server
+      # already answers :8081/healthz, starts `go run ./cmd/controld` against
+      # the service containers. F7-1 and F19-1 hit this real control plane.
+      - name: run e2e
+        working-directory: web
+        run: npm run e2e
+
+      - name: upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-test-results
+          path: |
+            web/test-results/
+            web/playwright-report/
+          if-no-files-found: ignore
+
   acceptance:
     name: acceptance (14 CI + 12 GWT + R-01..R-08 + ledger invariants)
     runs-on: ubuntu-latest

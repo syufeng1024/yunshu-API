@@ -40,6 +40,16 @@
 | G-11 四维限流与账户日额度 | `TestGWT_G11_DailyQuotaIsAccountScoped` | `bash scripts/test-gwt.sh` |
 | G-12 对外价格一致性 | `TestGWT_G12_PriceConsistency` | `bash scripts/test-gwt.sh` |
 
+## Playwright e2e（浏览器层）
+
+| 验收条目 | spec 文件 | 运行方式 |
+| :--- | :--- | :--- |
+| F4-2 密钥详情页无明文 Key（DOM / URL / localStorage / sessionStorage / network） | `web/e2e/security/key-plaintext.spec.ts` | `cd web && npx playwright test e2e/security/key-plaintext.spec.ts` |
+| F7-1 用户 B 访问用户 A 的 Key（两个独立 browser context，可见文本逐字一致） | `web/e2e/security/cross-user-key.spec.ts` | `cd web && npx playwright test e2e/security/cross-user-key.spec.ts` |
+| F19-1 请求选择器只列本人 90 天 request_id | `web/e2e/security/request-picker.spec.ts` | `cd web && npx playwright test e2e/security/request-picker.spec.ts` |
+
+F7-1 / F19-1 必须连真实 controld + MySQL/Redis；跑 fixtures 或 mock 视为无效。F4-2 的观测层级在 spec 注释中写明（全栈时用真实创建返回的明文做哨兵；组件层才允许 fixtures）。
+
 ## 对账与账本不变量
 
 | 断言 | 用例名 | 运行方式 |

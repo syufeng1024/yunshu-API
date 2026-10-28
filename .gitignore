@@ -31,3 +31,8 @@ build/
 
 # Go 编译产物
 bin/
+
+# Playwright（T21 段2）
+web/test-results/
+web/playwright-report/
+web/blob-report/

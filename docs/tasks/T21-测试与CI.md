@@ -6,9 +6,9 @@
 | 阶段 | 6 · 质量与交付 |
 | 优先级 | P0 |
 | 依赖 | T09、T10、T12–T16 |
-| 可并行 | 否（收口） |
+| 可并行 | ✅ 第二段与 T24 并行（交付根不相交） |
 | 交付根 | `**/*_test.go`、`e2e/`、`.github/workflows/`、`scripts/` |
-| 状态 | 🟨 第一段已交付（2026-10-27）· CI/门禁/26 条用例；Playwright e2e 未做 |
+| 状态 | ✅ 两段完成（2026-10-27 CI/门禁/26 条用例；2026-10-28 Playwright 三条 e2e） |
 
 ## 1. 目标
 
@@ -266,3 +266,49 @@ CI 上线后连续失败 6 次。逐个 job / step 拉出来看，是**三个互
 
 1. **价格缓存是硬依赖**：K19 过期后网关没有 DB 回源，只能返回 `500 price_not_configured`。`controld` 停摆超过 120 秒，全站请求 500 —— 这是可用性上的单点。
 2. **`t_prehold_hold` 无人清理**：`purge_log` 清的是 body / usage / attempt / 过期幂等，没有一处删预扣行。每个请求一行，200 QPS 即每天 1700 万行，只有 `recon` 会扫它（R-06 悬空预扣）。
+
+---
+
+## 13. 第二段交付（2026-10-28）· Playwright e2e
+
+§10 当时暂停的三条理由中，前两条已解除（T19/T20 页面落地、UI 真实存在），第三条（与 Go 层覆盖重复）仍部分成立，因此本段把力气集中在 **Go 层做不到的三件事**上：DOM/URL/storage/network 五处抓明文、两个独立浏览器上下文的会话隔离、选择器实际渲染出的候选集。
+
+### 13.1 交付物
+
+| # | 路径 | 内容 |
+| :--- | :--- | :--- |
+| 1 | `web/playwright.config.ts` | 两个 `webServer`：Vite dev（5180，`--host 127.0.0.1`）+ `go run ./cmd/controld`（8081，`reuseExistingServer`）；单 worker、chromium；`E2E_BROWSER_CHANNEL` 可切到本机 Chrome |
+| 2 | `web/e2e/security/key-plaintext.spec.ts` | F4-2：DOM / URL / localStorage / sessionStorage / 所有 response body 五处无明文，且正向断言掩码已渲染 |
+| 3 | `web/e2e/security/cross-user-key.spec.ts` | F7-1：B 访问 A 的 Key 与访问不存在 id，**整页可见文本逐字相等** |
+| 4 | `web/e2e/security/request-picker.spec.ts` | F19-1：选择器候选集只含本人 |
+| 5 | `web/e2e/security/helpers.ts` | 真实注册/建 Key（走 control plane，不 mock）；seed 用量行两条路径：CI 用 `mysql` CLI（`E2E_MYSQL_HOST`），本机用 `docker exec`（`E2E_DOCKER_BIN` 可覆盖） |
+| 6 | `.github/workflows/ci.yml` | 新增 `e2e` job：MySQL 8.0 + Redis 7 service → `migrate up`（`yunshu_e2e`）→ `npm ci` → `playwright install --with-deps chromium` → `npm run e2e`；失败上传 `test-results/` |
+| 7 | `scripts/e2e-backend.sh` | 本机无 go 工具链时的起栈脚本：重建 `yunshu_e2e` → 容器迁移 → 容器起 `controld :8081` |
+| 8 | `docs/test-matrix.md` | 新增「Playwright e2e」三行（条目 → spec → 运行方式） |
+
+### 13.2 交付总监独立复跑
+
+```bash
+bash scripts/e2e-backend.sh          # 重建 yunshu_e2e(57 表) + controld :8081
+cd web && E2E_BROWSER_CHANNEL=chrome npx playwright test
+```
+
+结果：**3 passed (13.0s)，0 skipped**，且是**真栈**（`yunshu_e2e` 库 + 容器 controld + Vite dev），不是 fixtures 兜底。
+
+| 用例 | 结果 | 关键观测 |
+| :--- | :--- | :--- |
+| F4-2 五处无明文 | ok 2.0s | 响应体 + 存储 + DOM 全无完整 Key；掩码 `sk-****last4` 已渲染 |
+| F7-1 跨用户 | ok 2.4s | 两页可见文本相等（都是「无法加载密钥」+「密钥不存在」+ 刷新/返回），不存在性不可区分 |
+| F19-1 选择器 | ok 1.8s | 候选按钮数 = 1（只本人那条 seeded 用量行） |
+
+`docs/test-matrix.md` 改完，`TestMatrixNamesExistAndCountsMatch` 仍绿：`matrix: 42 documented tests; TestCI_=14; TestGWT=12`。
+
+### 13.3 一处环境坑（值得记住）
+
+`helpers.ts` 的 `runSQL` 在本机走 `docker exec`，而 Playwright 进程继承的是调用者 shell 的 PATH。**Docker CLI 装在 `C:/Users/EDY/AppData/Local/Programs/DockerDesktop/resources/bin` 而非常规路径**，首次复跑因此 1 failed（`execFileSync docker ENOENT`），不是 spec 缺陷。两条解法：`export PATH=...`，或直接 `E2E_DOCKER_BIN=<绝对路径>/docker.exe`。已在卡面记录；CI 侧走 `E2E_MYSQL_HOST` 分支，不受影响。
+
+### 13.4 未验证 / 遗留
+
+1. **bundled Chromium 未装**：`npx playwright install chromium` 在后台任务时限内被截断；本机改用系统 Chrome（`E2E_BROWSER_CHANNEL=chrome`）。CI job 会装 bundled Chromium，首次运行结果待 CI 确认。
+2. **e2e job 尚未在 CI 上真实跑过**（本次只在本地真栈验证）。首次推送后要盯一次 `e2e` job 的 migrate 步骤与 `E2E_MYSQL_HOST` 分支。
+3. e2e 仍未覆盖运营后台（T20 的 F20-3 自审禁用已有前端单测 + Go 层用例，浏览器层暂不加，避免重复）。
