@@ -92,6 +92,14 @@ F7-1 / F19-1 必须连真实 controld + MySQL/Redis；跑 fixtures 或 mock 视�
 
 低于卡面的原因：卡面的 85% 来自 T04 时期，此后 T04 增加了 `grant.go` / `freeze.go` / `refund.go`，T09 增加了挂账恢复与冲正路径；`billing` 的 83.6% 也低于 85%。本卡不写业务逻辑，因此把门禁调到实测值并在 `scripts/coverage-gate.sh` 逐行记录。整体取语句加权总覆盖率，不取包平均。不得用 `//nolint` 或空测试凑数；新增未覆盖代码会让门禁下降。
 
+## 本机运行口径（2026-10-28 实测，避免误判为回归）
+
+| 现象 | 原因 | 做法 |
+| :--- | :--- | :--- |
+| 容器内 `go test -p 2 ./internal/...` 出现 `internal/control/auth`、`control/key` 大面积红：`auth_unavailable` 503、`redis: i/o timeout …192.168.65.254:16379`、`write K20/K30: context deadline exceeded` | 各包 `testmain_test.go` 并发建/迁自己的 schema，且共用同一个 Redis（`host.docker.internal:16379` 经 Docker Desktop 端口代理转发），并发下 Redis 连接被压满 | **判代码用串行 `-p 1`**（实测 5m48s 全绿）；`-p 2` 只在需要探并发敏感用例时单包跑。CI 用独立 service，不受此影响 |
+| `npm run build` 报 `EPERM … rmSync`，栈停在 `vite:prepareOutDir` | 本机文件代理拦截 `dist/` 清空，非构建本身失败 | 换输出目录验证：`npx vite build --outDir dist-verify`（两道构建门禁照常生效），验完删除 |
+| `gofmt -l internal/ cmd/` 列出几十个文件 | Windows 检出的 CRLF，非格式问题 | 只看**本次改动文件**是否出现在列表里 |
+
 ## 已知偏差（用例内已标注）
 
 | 编号 | 卡面 / PRD 写法 | 实现现状 | 处理 |
