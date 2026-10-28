@@ -119,6 +119,20 @@ func NewStore(db *sql.DB, clk clock.Clock) *Store {
 
 func (s *Store) now() time.Time { return s.Clock.Now().UTC() }
 
+// txMaxAttempts bounds how many times one logical transaction is replayed
+// after InnoDB aborted it. Three matches the entry_no retry budget.
+const txMaxAttempts = 3
+
+// withTx runs fn inside one transaction, replaying the whole transaction when
+// InnoDB aborts it as a deadlock victim (1213) or because the lock wait timed
+// out (1205). Both mean "you lost a race, re-issue the transaction", which is
+// what MySQL asks of every client. The replay is safe because fn writes only
+// through tx, and every failed attempt is rolled back before the next begins.
+//
+// nightly #2 showed why this is not optional: 80.7% of the 200 QPS load came
+// back as 503 settlement_unavailable, all of them 1213s on the prehold insert.
+// The gap-lock root cause is fixed in preholdTx; this is the net for the next
+// lock ordering mistake, wherever it is.
 func (s *Store) withTx(ctx context.Context, timeout time.Duration, fn func(context.Context, *sql.Tx) error) error {
 	if s.DB == nil {
 		return fmt.Errorf("%w: database is nil", ErrInvalidParam)
@@ -129,6 +143,32 @@ func (s *Store) withTx(ctx context.Context, timeout time.Duration, fn func(conte
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	var lastErr error
+	for attempt := 1; attempt <= txMaxAttempts; attempt++ {
+		if attempt > 1 {
+			// Growing backoff inside the caller's budget. A deadlock is
+			// detected in microseconds, so the winner has normally committed
+			// before 2ms have passed.
+			select {
+			case <-ctx.Done():
+				return lastErr
+			case <-time.After(time.Duration(attempt-1) * 2 * time.Millisecond):
+			}
+		}
+		err := s.runTx(ctx, fn)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !isRetryableTxError(err) {
+			return err
+		}
+	}
+	return lastErr
+}
+
+// runTx is one attempt: begin, fn, commit.
+func (s *Store) runTx(ctx context.Context, fn func(context.Context, *sql.Tx) error) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("ledger: begin transaction: %w", err)
@@ -259,6 +299,15 @@ func isDuplicateIdem(err error) bool {
 		return strings.Contains(me.Message, "uk_le_idem")
 	}
 	return false
+}
+
+// isRetryableTxError reports the two InnoDB errors that mean "this transaction
+// lost a race, run it again": 1213 deadlock and 1205 lock wait timeout. Every
+// write path in this package is a single transaction over the same few rows,
+// so the victim is always correct to re-issue.
+func isRetryableTxError(err error) bool {
+	var me *mysql.MySQLError
+	return errors.As(err, &me) && (me.Number == 1213 || me.Number == 1205)
 }
 
 // EntryNoGenerator produces monotonic ULID-shaped 26-character numbers. It

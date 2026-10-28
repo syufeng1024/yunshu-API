@@ -99,9 +99,15 @@ func (s *Store) preholdTx(ctx context.Context, tx *sql.Tx, p PreholdParams) (Pre
 		return PreholdResult{}, err
 	}
 
-	// Idempotency: the unique key on request_id is the final guard, but this
-	// SELECT ... FOR UPDATE makes the common replay path cheap and also takes
-	// a gap lock that serialises a concurrent first insert.
+	// Idempotency: the unique key on request_id is the only guard needed. The
+	// read deliberately does NOT take FOR UPDATE. The row does not exist yet,
+	// so InnoDB would put a gap lock on uk_ph_request, and gap locks do not
+	// conflict with each other: every concurrent prehold would hold the same
+	// trailing gap (request_id is UUIDv7, so new keys are always appended) and
+	// then deadlock on the INSERT's insert-intention lock. nightly #2 measured
+	// 80.7% 1213s on exactly that path. A plain read lets the race resolve on
+	// the unique key (1062), which isDuplicate turns into ErrPreholdExists and
+	// Prehold answers by re-reading the winner's row outside this transaction.
 	if existing, err := s.readHoldTx(ctx, tx, p.RequestID); err == nil {
 		return existing, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {
@@ -204,9 +210,11 @@ func validatePrehold(p PreholdParams) error {
 	return nil
 }
 
+// readHoldTx is the idempotency lookup. It is a plain read on purpose: see the
+// call site in preholdTx for why FOR UPDATE here is a deadlock generator.
 func (s *Store) readHoldTx(ctx context.Context, tx *sql.Tx, requestID string) (PreholdResult, error) {
 	const q = `SELECT request_id, hold_micro, estimated_micro, state
-	             FROM t_prehold_hold WHERE request_id = ? FOR UPDATE`
+	             FROM t_prehold_hold WHERE request_id = ?`
 	var r PreholdResult
 	err := tx.QueryRowContext(ctx, q, requestID).Scan(
 		&r.RequestID, &r.HoldMicro, &r.EstimatedMicro, &r.State,

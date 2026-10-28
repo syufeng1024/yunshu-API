@@ -42,11 +42,14 @@ const (
 	defaultDuration = 10 * time.Minute
 	// PRD §9.4: gateway-added latency P99 ≤ 200ms.
 	maxP99 = 200 * time.Millisecond
-	// §9.3's 99.5% is a monthly SLO, not a 30-second sample. The measured
-	// baseline on the local MySQL is ~1.5% 503s, all of them InnoDB 1213
-	// deadlocks on the prehold INSERT; the ledger has no deadlock retry. The
-	// gate is therefore a regression bound, not the SLO. Raise it only with a
-	// new measurement in docs/test-matrix.md.
+	// §9.3's 99.5% is a monthly SLO, not a 30-second sample. nightly #2
+	// measured 80.7% 503s on this exact load, every one of them an InnoDB 1213
+	// on the prehold INSERT: the idempotency read took a FOR UPDATE gap lock
+	// on a row that did not exist yet, so concurrent preholds deadlocked
+	// instead of serialising. preholdTx now reads without the lock and withTx
+	// replays 1213/1205, so the gate stays a regression bound rather than an
+	// aspirational SLO. Raise it only with a new measurement in
+	// docs/test-matrix.md.
 	defaultMaxErrorPct = 2.5
 )
 

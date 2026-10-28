@@ -225,3 +225,22 @@ CI 上线后连续失败 6 次。逐个 job / step 拉出来看，是**三个互
 
 1. **`services.*.options` 不是给镜像传参的地方**。需要服务端参数时要么用 `command:`，要么在应用侧解决。写进 `options` 会让容器起不来，而错误信息（`unknown flag`）跟 MySQL 毫无关系，很容易误判成镜像问题。
 2. **`-race` 在 Linux 上是能过的**。这一条之前一直悬着（本机无 gcc），现在有 CI 证据：`unit (-race, real MySQL 8.0 + Redis 7)` 通过。并发正确性（幂等、预扣、结算、导出锁）第一次得到真实工具验证。
+
+---
+
+## 12. nightly 首跑：一个配置缺陷掩盖了一个资金链路缺陷（2026-10-28，nightly #1–#2）
+
+`nightly` 的第一印象是「红了」，实际是**两层**问题：第一层挡住第二层，只修第一层会把一个真实缺陷留到上线。
+
+| # | run | 现象 | 根因 | 修法 |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | #1 | soak job 在 `10m0s` 处 `panic: test timed out`，栈停在 `soak_test.go:238` 的 `<-ticker.C` | `go test` 默认 `-timeout` 是 10 分钟，而 `SOAK_DURATION` 本身就是 `10m`，且 deadline 在 seed 完 64 个账号与 API Key 之后才起算 —— 净时长必然超过默认上限，P99 与错误率门禁一次都没执行到 | soak 步骤加 `-timeout 20m`；job 加 `timeout-minutes: 25` 兜住"卡死就烧 6 小时" |
+| 2 | #2 | 修完超时后跑满 `600.88s`，但 `error rate 80.748% > 2.5%`；`p99=9.4ms` 很低 | 全部是 `Error 1213 deadlock` 打在 `ledger: insert prehold`。`preholdTx` 的幂等预读对**尚不存在的行**做 `SELECT ... FOR UPDATE`：InnoDB 会在 `uk_ph_request` 上放间隙锁，而间隙锁彼此**不互斥**；`request_id` 是 UUIDv7（时间有序），并发新行全部落在同一个尾部间隙 → 插入意向锁互撞，两两成环 | `readHoldTx` 去掉 `FOR UPDATE`（竞态交给 `uk_ph_request` 的 1062 → `ErrPreholdExists` → `getPrehold` 回读）；`withTx` 对 1213/1205 做 3 次重放兜底 |
+
+**为什么 P99 只有 9.4ms 反而是坏消息**：延迟没问题说明数据库和网关都健康，80.7% 的失败纯粹来自锁行为。如果只看"红了"，很容易归因为"CI 的 MySQL 太慢"而把门禁阈值调宽 —— 那等于把 4/5 的请求在 200 QPS 下返回 503 当成正常。
+
+**三个值得记住的教训**：
+
+1. **`-timeout` 必须大于测试自己声明的时长**。凡是压测/长跑用例，`-timeout` 与业务时长同值就是必红；本机按 `docs/test-matrix.md` 手跑也会撞上，所以文档命令一并补了 `-timeout 20m`。
+2. **对"还不存在的唯一键"做 `SELECT ... FOR UPDATE` 是死锁生成器**，不是串行化手段。原注释写的是"takes a gap lock that serialises a concurrent first insert"，这个假设是错的：间隙锁之间不冲突，它只负责挡住别人的插入意向锁。幂等预读用普通 `SELECT`，让唯一键去仲裁。
+3. **`1213` / `1205` 是"重发即可"的信号**，不是业务失败。MySQL 要求客户端对每个事务都做好重放准备；`internal/control/fund/service.go` 早有 `isRetryableTxError`，但资金内核 `ledger` 一直没有，导致一次锁顺序失误就直接变成用户可见的 503 `settlement_unavailable`。
