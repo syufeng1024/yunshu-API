@@ -161,6 +161,14 @@ func (s *Store) withTx(ctx context.Context, timeout time.Duration, fn func(conte
 			return nil
 		}
 		lastErr = err
+		// database/sql rolls the transaction back itself when ctx expires, so
+		// the Commit that follows reports sql.ErrTxDone: "transaction has
+		// already been committed or rolled back". That reads like a double
+		// commit bug but means "the 200ms budget ran out" - surface the
+		// deadline instead, which is what a reader needs.
+		if ctxErr := ctx.Err(); ctxErr != nil && errors.Is(err, sql.ErrTxDone) {
+			return fmt.Errorf("ledger: transaction deadline: %w", ctxErr)
+		}
 		if !isRetryableTxError(err) {
 			return err
 		}
