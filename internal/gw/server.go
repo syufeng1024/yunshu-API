@@ -71,17 +71,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w = sw
 	}
 
+	// The id is resolved once, in httpsrv's RequestID middleware: client
+	// X-Request-Id, then a valid traceparent trace-id, then a UUIDv7. Trust the
+	// value it stored in Meta. traceparent is deliberately not re-parsed here —
+	// doing so produced a second, divergent id path (T22 §12.4).
 	rid := obslog.MetaFrom(r.Context()).RequestID
 	if rid == "" {
-		rid = w.Header().Get("X-Request-Id")
-	}
-	if rid == "" {
-		rid = r.Header.Get("X-Request-Id")
-	}
-	if rid == "" {
-		// Hard constraint 15: every response carries X-Request-Id, and it is
-		// the same value as the body's request_id.
-		rid = apierr.NewRequestID()
+		// Handler used outside the httpsrv chain: sanitise the client header and
+		// generate a UUIDv7 when it is empty or unsafe.
+		rid = apierr.ResolveRequestID(r.Header.Get("X-Request-Id"), "")
 	}
 	c := &Ctx{
 		RequestID: rid,

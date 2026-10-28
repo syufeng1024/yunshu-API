@@ -279,11 +279,9 @@ func (w *UsageWriter) insertUsage(ctx context.Context, rows []UsageRecord) error
 		return nil
 	}
 	args := make([]any, 0, len(rows)*usageColumnCount)
-	for _, r := range rows {
-		created := r.CreatedAt
-		if created.IsZero() {
-			created = w.now()
-		}
+	created := make([]time.Time, len(rows))
+	for i, r := range rows {
+		created[i] = w.createdAt(r.CreatedAt)
 		args = append(args,
 			cut(r.RequestID, 36), r.UserID, r.APIKeyID, cut(r.APIKeyName, 64),
 			nullID(r.ModelID), cut(r.ModelName, 128), cut(r.RequestModel, 128), cut(r.InboundProto, 24),
@@ -302,7 +300,7 @@ func (w *UsageWriter) insertUsage(ctx context.Context, rows []UsageRecord) error
 			clampInt(r.UpstreamAttempts, 0, 255), r.TTFTMS,
 			clampInt(r.TotalMS, 0, 4294967295), clampInt(r.UpstreamMS, 0, 4294967295),
 			nullBytes(r.ClientIP), nullableString(cut(r.UserAgent, 255)),
-			boolInt(r.ClientAborted), 0, "meta", created.UTC(),
+			boolInt(r.ClientAborted), 0, "meta", created[i].UTC(),
 		)
 	}
 	q := "INSERT INTO t_usage_record (" + usageColumns + ") VALUES " +
@@ -311,6 +309,13 @@ func (w *UsageWriter) insertUsage(ctx context.Context, rows []UsageRecord) error
 	_, err := w.DB.ExecContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("settle: insert usage rows: %w", err)
+	}
+	// Request-level log lines are emitted only after the row is durable, so a
+	// dropped batch never leaves a log line for a row that was not written.
+	if w.Logger != nil {
+		for i, r := range rows {
+			w.Logger.WriteRequest(ctx, requestLogRecord(r, created[i]))
+		}
 	}
 	return nil
 }
@@ -328,11 +333,9 @@ func (w *UsageWriter) insertAttempts(ctx context.Context, rows []AttemptRecord) 
 		return nil
 	}
 	args := make([]any, 0, len(rows)*attemptColumnCount)
-	for _, r := range rows {
-		created := r.CreatedAt
-		if created.IsZero() {
-			created = w.now()
-		}
+	created := make([]time.Time, len(rows))
+	for i, r := range rows {
+		created[i] = w.createdAt(r.CreatedAt)
 		args = append(args,
 			cut(r.RequestID, 36), clampInt(int64(r.AttemptIndex), 0, 255), r.UserID, r.ModelID,
 			r.RouteID, r.ChannelID, cut(r.ChannelName, 64), cut(r.ProtocolCode, 32),
@@ -343,7 +346,7 @@ func (w *UsageWriter) insertAttempts(ctx context.Context, rows []AttemptRecord) 
 			nullPositive64(r.FirstByteMS), clampInt(r.TotalMS, 0, 4294967295),
 			clampInt(r.TokensIn, 0, 4294967295), clampInt(r.TokensOut, 0, 4294967295),
 			clampInt(r.BytesIn, 0, 4294967295), clampInt(r.BytesOut, 0, 4294967295),
-			nullableString(cut(r.ErrorClass, 24)), created.UTC(),
+			nullableString(cut(r.ErrorClass, 24)), created[i].UTC(),
 		)
 	}
 	q := "INSERT INTO t_upstream_attempt (" + attemptColumns + ") VALUES " +
@@ -352,6 +355,11 @@ func (w *UsageWriter) insertAttempts(ctx context.Context, rows []AttemptRecord) 
 	_, err := w.DB.ExecContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("settle: insert attempt rows: %w", err)
+	}
+	if w.Logger != nil {
+		for _, r := range rows {
+			w.Logger.WriteAttempt(ctx, attemptLogRecord(r))
+		}
 	}
 	return nil
 }
@@ -376,6 +384,15 @@ func (w *UsageWriter) now() time.Time {
 		return time.Now().UTC()
 	}
 	return w.Clock.Now().UTC()
+}
+
+// createdAt resolves the value written to created_at once, so the row and its
+// log line cannot disagree at the UTC+8 midnight boundary.
+func (w *UsageWriter) createdAt(t time.Time) time.Time {
+	if t.IsZero() {
+		return w.now()
+	}
+	return t.UTC()
 }
 
 func placeholders(rows, cols int) string {

@@ -1,14 +1,13 @@
 package httpsrv
 
 import (
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
+	"yunshu.dev/core/internal/apierr"
 	"yunshu.dev/core/internal/jsonx"
 	obslog "yunshu.dev/core/internal/obs/log"
 	"yunshu.dev/core/internal/platform/clock"
@@ -25,14 +24,18 @@ func Chain(h http.Handler, mws ...Middleware) http.Handler {
 	return h
 }
 
-// RequestID accepts a client-supplied X-Request-Id or generates a UUIDv7.
-func RequestID(c clock.Clock) Middleware {
+// RequestID resolves the request id: a client X-Request-Id wins, then a valid
+// W3C traceparent trace-id, otherwise a fresh UUIDv7. Resolution goes through
+// apierr.ResolveRequestID so the middleware and the gateway cannot disagree
+// about what a valid traceparent is (T22 §12.4).
+//
+// The clock parameter is unused: id formatting is owned by apierr, and keeping
+// the parameter lets every listener pass the same constructor arguments.
+func RequestID(_ clock.Clock) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			rid := sanitizeHeaderValue(r.Header.Get("X-Request-Id"), 128)
-			if rid == "" {
-				rid = newUUIDv7(c.Now())
-			}
+			rid := apierr.ResolveRequestID(
+				r.Header.Get("X-Request-Id"), r.Header.Get("traceparent"))
 			meta := obslog.MetaFrom(r.Context())
 			meta.RequestID = rid
 			w.Header().Set("X-Request-Id", rid)
@@ -143,30 +146,6 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	_, _ = w.Write(b)
 }
 
-// newUUIDv7 generates a UUIDv7 string. The 48-bit timestamp comes from the
-// injectable clock; the remaining bits are random.
-func newUUIDv7(now time.Time) string {
-	var b [16]byte
-	ms := uint64(now.UnixMilli())
-	b[0] = byte(ms >> 40)
-	b[1] = byte(ms >> 32)
-	b[2] = byte(ms >> 24)
-	b[3] = byte(ms >> 16)
-	b[4] = byte(ms >> 8)
-	b[5] = byte(ms)
-	if _, err := rand.Read(b[6:]); err != nil {
-		// crypto/rand failures are effectively fatal; retain monotonic-ish
-		// uniqueness from the clock and a per-call nanosecond value.
-		ns := uint64(now.UnixNano())
-		for i := 6; i < 16; i++ {
-			b[i] = byte(ns >> (8 * uint(i-6)))
-		}
-	}
-	b[6] = (b[6] & 0x0f) | 0x70 // version 7
-	b[8] = (b[8] & 0x3f) | 0x80 // RFC 4122 variant
-	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
-}
-
 func traceIDFromHeaders(h http.Header) string {
 	if tp := strings.TrimSpace(h.Get("traceparent")); tp != "" {
 		parts := strings.Split(tp, "-")
@@ -209,22 +188,4 @@ func allZero(s string) bool {
 		}
 	}
 	return true
-}
-
-func sanitizeHeaderValue(v string, max int) string {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return ""
-	}
-	var b strings.Builder
-	for _, r := range v {
-		if r < 0x20 || r == 0x7f {
-			continue
-		}
-		b.WriteRune(r)
-		if b.Len() >= max {
-			break
-		}
-	}
-	return strings.TrimSpace(b.String())
 }
