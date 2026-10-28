@@ -5,6 +5,18 @@ on:
     # 18:00 UTC = 02:00 Asia/Shanghai.
     - cron: "0 18 * * *"
   workflow_dispatch:
+    # The scheduled run always uses the PRD target (200 QPS / 10m). The inputs
+    # exist so a capacity question can be answered with a 2-minute run instead
+    # of guessing from a 10-minute red.
+    inputs:
+      qps:
+        description: "Target QPS (PRD §9.4 target is 200)"
+        required: false
+        default: "200"
+      duration:
+        description: "Load duration (PRD soak is 10m)"
+        required: false
+        default: "10m"
 
 jobs:
   gwt:
@@ -91,8 +103,8 @@ jobs:
     env:
       TEST_DB_DSN: "root:test@tcp(127.0.0.1:3306)/yunshu_test?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
       TEST_REDIS_ADDR: "127.0.0.1:6379"
-      SOAK_QPS: "200"
-      SOAK_DURATION: "10m"
+      SOAK_QPS: ${{ inputs.qps || '200' }}
+      SOAK_DURATION: ${{ inputs.duration || '10m' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
