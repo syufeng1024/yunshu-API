@@ -27,6 +27,14 @@ func (s *AuthStage) Name() string { return "P05" }
 // HGETALL) and never touches MySQL: gatewayd has no general primary pool, so a
 // cache miss is a 401 by construction (TDS §1, §3.2 P05).
 func (s *AuthStage) Run(ctx context.Context, c *Ctx) error {
+	// Pre-set identity means the internal entry (T27) already verified the
+	// signed claims. Its only legitimate injector is InternalHandler, after
+	// VerifyInternal succeeded; the public /v1 path always arrives here with a
+	// nil Auth. Returning early is the one behaviour change this card allows.
+	if c.Auth != nil {
+		return nil
+	}
+
 	token, authErr := Credential(c.Header)
 	if authErr != nil {
 		return StageErr("P05", authErr)

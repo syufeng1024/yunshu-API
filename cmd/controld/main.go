@@ -21,6 +21,7 @@ import (
 	"yunshu.dev/core/internal/control"
 	"yunshu.dev/core/internal/control/audit"
 	"yunshu.dev/core/internal/control/mw"
+	"yunshu.dev/core/internal/cryptobox"
 	"yunshu.dev/core/internal/obs/health"
 	obslog "yunshu.dev/core/internal/obs/log"
 	obsmetrics "yunshu.dev/core/internal/obs/metrics"
@@ -127,6 +128,20 @@ func main() {
 		}
 	}
 
+	// T27 playground relay. INTERNAL_CALL_SECRET signs the call to gatewayd's
+	// internal entry; it must be its own secret. Reusing the session key or
+	// either KEK is treated as unconfigured, so the relay answers 503 instead
+	// of letting one leaked value weaken two boundaries.
+	internalSecret := strings.TrimSpace(os.Getenv(config.EnvInternalCallSecret))
+	internalURL := strings.TrimSpace(os.Getenv(config.EnvGatewayInternalURL))
+	if internalSecret != "" && reusesProcessSecret(internalSecret, cfg.SessionSecret,
+		os.Getenv(cryptobox.EnvKEK), os.Getenv(config.EnvLogBodyKEK)) {
+		logger.Error(rootCtx,
+			"INTERNAL_CALL_SECRET must not reuse SESSION_SECRET / CHANNEL_KEY_KEK / LOG_BODY_KEK; playground relay disabled",
+			obslog.Fields{Stage: "startup", Status: 1})
+		internalSecret = ""
+	}
+
 	ctl, err := control.New(control.Deps{
 		DB:       mainDB,
 		LogDB:    logDB,
@@ -146,6 +161,9 @@ func main() {
 		PaySecrets:     paySecrets,
 		FingerprintKey: fpHMACKey(logger, rootCtx),
 		Metrics:        rec,
+
+		GatewayInternalURL: internalURL,
+		InternalCallSecret: internalSecret,
 	})
 	if err != nil {
 		logger.Error(rootCtx, "control server: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
@@ -251,6 +269,18 @@ func fpHMACKey(logger *obslog.Logger, ctx context.Context) string {
 			obslog.Fields{Stage: "startup"})
 	}
 	return key
+}
+
+// reusesProcessSecret reports whether secret equals any other configured
+// process secret. Empty candidates are ignored: an unset KEK must not count as
+// a match.
+func reusesProcessSecret(secret string, others ...string) bool {
+	for _, other := range others {
+		if other = strings.TrimSpace(other); other != "" && other == secret {
+			return true
+		}
+	}
+	return false
 }
 
 // payCallbackSecrets reads the per-channel callback signing secrets. An unset

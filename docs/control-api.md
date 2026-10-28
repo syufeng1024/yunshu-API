@@ -190,6 +190,122 @@ OpenAPI 已同步：`/api/admin/overview`、`/api/admin/tickets/{id}`、`/api/ad
 2. 事务内 `t_user.status='DISABLED'`、`disable_source='SELF_CANCEL'`、`disable_reason='用户主动注销'`、`disabled_at=now`、`cancel_apply_at=now`，并写一条 `USER/CANCEL` 审计（before/after 含 status 与 disable_source）。不新增 `t_user.status` 枚举值。
 3. 提交后调用 `SessionManager.RevokeAll`：删除 K30 `sess:admin:uid:{uid}` 中的全部 K20 `sess:admin:{sid}` 与集合本身。旧 sid 再访问返回 401 `session_expired`。吊销失败返回 503 `auth_unavailable`，不谎报成功。
 
+## T27：调试台内网扣费链路
+
+`POST /api/console/playground/chat` 把一次调试调用交给 gatewayd 的
+`POST /internal/v1/chat/completions`。扣费走 gatewayd 既有的 P10 预扣与 P14 结算；
+controld 不读余额、不扣余额，也不写 `t_usage_record`。
+
+### 控制台端点
+
+| 项 | 值 |
+| :--- | :--- |
+| 方法 + 路径 | `POST /api/console/playground/chat` |
+| 权限 | `key.read`，叠加会话鉴权与 CSRF 双提交校验 |
+| 请求体上限 | `gw.MaxBodyBytes + 65536` = 10551296 字节（10 MiB + 64 KiB）；超限 413 |
+| 上游 | `<GATEWAY_INTERNAL_URL>/internal/v1/chat/completions`，必须是绝对 http(s) URL |
+| 超时 | 建连 5s；响应头 130s（gatewayd 非流式 P01 预算 120s）；SSE 由 gatewayd 的 600s 预算兜底，controld 侧无读超时 |
+
+请求体只有两个字段：
+
+| 字段 | 类型 | 约束与处理 |
+| :--- | :--- | :--- |
+| `key_id` | `bigint` | `> 0`；必须属于当前会话用户且 `deleted_at IS NULL`。越权与不存在返回同一 404，不暴露 Key 是否存在 |
+| `body` | JSON 对象 | trim 后非空；**原样转发**给 gatewayd，controld 不改写、不校验 `model` / `max_tokens` / `temperature`（校验属 P04） |
+
+请求头透传：
+
+| 头 | 行为 |
+| :--- | :--- |
+| `X-Request-Id` | 控制面已有时沿用；否则取合法的请求头值；仍为空则生成 UUIDv7。同一个值写入 gatewayd 请求头与错误体 `request_id` |
+| `Idempotency-Key` | 非空时原样转发，交给 P08 幂等；controld 不缓存响应 |
+| `Accept-Encoding` | 固定 `identity`；传输层压缩会破坏 SSE 字节流 |
+
+响应：gatewayd 的状态码、响应体与端到端响应头逐项回传，包括 402 的
+`X-Credits-Remaining`、429 的 `Retry-After` / `X-RateLimit-*` / `X-Quota-Daily-*`。
+`stream=true` 时：
+
+| 响应头 | 值 |
+| :--- | :--- |
+| `Content-Type` | `text/event-stream; charset=utf-8` |
+| `Cache-Control` | `no-cache` |
+| `X-Accel-Buffering` | `no` |
+| `Content-Length` | 删除（分块传输） |
+
+SSE 用 32 KiB 缓冲逐块读写，每块写后调用 `http.Flusher`；controld 的
+`WriteTimeout` 是 30s，处理器在入口用 `http.ResponseController.SetWriteDeadline(time.Time{})`
+只清掉本请求的写截止时间，不改变其他控制面路由的 30s 上限。
+
+controld 侧错误码：
+
+| 错误码 | HTTP | 触发条件 |
+| :--- | :---: | :--- |
+| `session_expired` | 401 | 无 `sid`、签名非法、K20 不存在 |
+| `permission_denied` | 403 | 角色缺少 `key.read`；CSRF 校验失败 |
+| `invalid_request_body` | 400 | 外层不是 JSON 对象；`key_id ≤ 0`；`body` 为空 |
+| `request_too_large` | 413 | 外层请求体超过上限 |
+| `key_not_found` | 404 | `key_id` 不属于当前用户，或行不存在 / 已软删 |
+| `resource_state_conflict` | 409 | Key 状态不是 `ENABLED`；message 为 `当前状态不允许该操作：<status>`，hint 指向密钥管理页 |
+| `key_expired` | 401 | `expire_at` 不晚于当前时间；message 为 `密钥已于 <RFC3339> 过期` |
+| `config_unavailable` | 503 | `INTERNAL_CALL_SECRET` 缺失或短于 32 字节、`GATEWAY_INTERNAL_URL` 缺失/非绝对 URL、分组倍率 > 10000、签名前声明校验失败 |
+| `upstream_all_failed` | 502 | 连接 gatewayd 失败或响应头前断开；`retry_after_seconds=0` |
+
+gatewayd 返回的业务错误原样透传，不在 controld 重新映射：
+`ip_not_allowed`（403）、`model_not_authorized` / `model_not_in_group`（403）、
+`request_in_flight`（409）、`insufficient_credits`（402）、`rpm_limit_exceeded` /
+`concurrency_limit_exceeded`（429）、`upstream_all_failed`（502）。
+
+### 内网入口
+
+`POST /internal/v1/chat/completions` 只存在于 gatewayd 的容器网络：
+
+| 门 | 实现 |
+| :--- | :--- |
+| 端口 | compose 不新增 ports 映射；现有 `18080:8080` 只到公网 `/v1/` 路由 |
+| 反向代理 | `deploy/nginx/gateway.conf` 的 `location /internal/` 返回 404 |
+| 路由 | `INTERNAL_CALL_SECRET` 短于 32 字节时不注册 `POST /internal/v1/chat/completions`，启动日志 warn |
+
+签名协议（段 1 唯一定义）：
+
+```
+canonical = "v1\n" + ts_sec + "\n" + body_sha256_hex + "\n" +
+            user_id + "\n" + key_id + "\n" + key_name + "\n" +
+            group_code + "\n" + group_ratio_bp + "\n" +
+            ip_rule_ver + "\n" + key_expiry_ms
+sig = base64(HMAC-SHA256(INTERNAL_CALL_SECRET, canonical))
+X-Yunshu-Internal-Sig: v1:<ts_sec>:<sig>
+```
+
+| 项 | 约束 |
+| :--- | :--- |
+| `body_sha256_hex` | 请求体的 SHA-256 小写十六进制；改一字节即验签失败 |
+| 时间窗 | `ts_sec` 与 gatewayd 时钟（Redis 校正）偏差 ≤ 60s；超出 401 |
+| 比较 | `hmac.Equal` 常量时间；`sig ==` 形式的字符串比较零命中 |
+| 失败响应 | 一律 401 `invalid_api_key`，不区分 MAC 错误、时间戳过期、头缺失 |
+| 身份字段 | `X-Yunshu-Internal-User-Id`、`X-Yunshu-Internal-Key-Id`、`X-Yunshu-Internal-Key-Name`（base64url 传输）、`X-Yunshu-Internal-Group-Code`、`X-Yunshu-Internal-Group-Ratio-Bp`、`X-Yunshu-Internal-Ip-Rule-Ver`、`X-Yunshu-Internal-Key-Expiry-Ms`；逐字段单值，重复头拒绝 |
+| `key_id` | 真实 `t_api_key.id`，`0` / `-1` 一律 401；注入后由 P06/P07/P08/P10/P11/模型列表/日志/并发槽使用 |
+| 验签顺序 | P02 读体后立即验签，**先于 P04**；未通过签名的请求拿不到解析诊断 |
+| Key 状态 | 非 `ENABLED` 或已过期由 controld 直接拒绝，gatewayd 不重复查主库（无主库连接） |
+
+`Auth` 注入后流水线装配为 P06 → P07 → P08 → P08.5 → P12（P13 熔断状态在
+RouterStage 内读取）→ P09 → P11 → P10 → P14，唯一缺席的是 P05：
+`AuthStage.Run` 在 `c.Auth != nil` 时直接返回，避免用 K13 覆盖已验签的声明。
+
+### 已知边界：P06 看到的客户端 IP
+
+`/internal/` 的 TCP 对端是 controld 容器，gatewayd 按 `r.RemoteAddr` 取 IP；
+协议不含客户端 IP 字段，controld 也没有可信的 XFF 来源，因此**不转发浏览器 IP**。
+Key 开启 `ip_whitelist_mode=ON` 时，白名单必须包含 controld 所在网段（compose 为
+`backend` 网络），否则调试台调用返回 403 `ip_not_allowed`。这是 IP 白名单与调试台
+的既有冲突，段 1 不做绕过。
+
+### 部署变量
+
+| 变量 | 进程 | 说明 |
+| :--- | :--- | :--- |
+| `INTERNAL_CALL_SECRET` | gatewayd + controld | 同值，≥ 32 字节，不得与 `SESSION_SECRET` / `CHANNEL_KEY_KEK` / `LOG_BODY_KEK` 复用；controld 检测到复用会记 Error 并禁用转发 |
+| `GATEWAY_INTERNAL_URL` | controld | 默认 `http://gatewayd:8080`；缺失或非绝对 URL 时端点返回 503 |
+
 ## 错误码映射
 
 只列控制面会返回的码。完整 76 码见 `docs/error-codes.md`。

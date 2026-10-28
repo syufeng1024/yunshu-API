@@ -22,6 +22,7 @@ import (
 	"yunshu.dev/core/internal/control/audit"
 	"yunshu.dev/core/internal/control/auditq"
 	"yunshu.dev/core/internal/control/auth"
+	"yunshu.dev/core/internal/control/console"
 	"yunshu.dev/core/internal/control/fund"
 	"yunshu.dev/core/internal/control/key"
 	"yunshu.dev/core/internal/control/logq"
@@ -87,6 +88,22 @@ type Deps struct {
 	// Nil is allowed in tests; the daemon passes the same registry it serves
 	// on /metrics.
 	Metrics *obsmetrics.Recorder
+
+	// GatewayInternalURL is gatewayd's internal base URL (compose:
+	// http://gatewayd:8080). The console playground posts to
+	// <GatewayInternalURL>/internal/v1/chat/completions. Empty leaves the relay
+	// disabled with 503 config_unavailable.
+	GatewayInternalURL string
+
+	// InternalCallSecret signs the relayed request. It must equal gatewayd's
+	// INTERNAL_CALL_SECRET and must not reuse SESSION_SECRET or either KEK.
+	// Shorter than 32 bytes leaves the relay disabled.
+	InternalCallSecret string
+
+	// InternalHTTPClient is optional. Nil builds the no-proxy relay transport
+	// with a 130s response-header budget (the gateway's non-stream P01 budget
+	// is 120s). Tests inject one to observe the stream.
+	InternalHTTPClient *http.Client
 }
 
 // Server holds the route table and its dependencies.
@@ -104,6 +121,7 @@ type Server struct {
 	usage   *usage.Service
 	auditQ  *auditq.Service
 	pub     *publicapi.Service
+	console *console.Service
 }
 
 // New validates the wiring and builds the server.
@@ -171,6 +189,17 @@ func New(d Deps) (*Server, error) {
 	// joins t_model / t_channel.
 	usageSvc := usage.New(d.DB, d.Redis, d.Now, d.Logger)
 	auditSvc := auditq.New(d.DB, d.Now, d.Logger)
+	// The playground relay owns no balance and writes no usage row: it only
+	// signs the DB-authoritative key attributes and forwards to gatewayd, where
+	// P10/P14 do the billing (T27 hard constraint 8).
+	consoleSvc := console.New(console.Deps{
+		DB:         d.DB,
+		GatewayURL: d.GatewayInternalURL,
+		Secret:     d.InternalCallSecret,
+		Client:     d.InternalHTTPClient,
+		Logger:     d.Logger,
+		Now:        d.Now,
+	})
 	return &Server{
 		d:       d,
 		auth:    authSvc,
@@ -185,6 +214,7 @@ func New(d Deps) (*Server, error) {
 		usage:   usageSvc,
 		auditQ:  auditSvc,
 		pub:     publicapi.New(d.DB, d.Now, d.Logger),
+		console: consoleSvc,
 	}, nil
 }
 
@@ -227,6 +257,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/console/keys/{id}", s.authed(mw.PermKeyWrite, s.keys.Delete))
 	mux.Handle("GET /api/console/keys/{id}/audit", s.authed(mw.PermKeyRead, s.keys.ListAudit))
 	mux.Handle("POST /api/console/keys/{id}/rotate", s.authed(mw.PermKeyWrite, s.keys.Rotate))
+	// T27 playground. key.read is enough: the handler proves the key belongs to
+	// the session and is ENABLED, then relays to gatewayd where P06..P14 run.
+	// The CSRF check comes from s.authed like every other POST.
+	mux.Handle("POST /api/console/playground/chat", s.authed(mw.PermKeyRead, s.console.Chat))
 
 	// Console model catalog.
 	mux.Handle("GET /api/console/models", s.authed(mw.PermModelRead, s.models.List))

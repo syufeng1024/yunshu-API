@@ -78,6 +78,17 @@ const (
 // does not change KeyCount.
 const EnvLogBodyKEK = "LOG_BODY_KEK"
 
+// EnvInternalCallSecret signs controld's request to the gateway's internal
+// playground entry (T27). It is an environment variable, not a configuration
+// Key: a signing secret in t_config_item would be readable by every process
+// that loads configuration. Both daemons must read the same value; a missing
+// value keeps the gateway route unregistered and makes controld answer 503.
+const EnvInternalCallSecret = "INTERNAL_CALL_SECRET"
+
+// EnvGatewayInternalURL is gatewayd's in-network base URL as seen from
+// controld (compose: http://gatewayd:8080). Empty disables the relay with 503.
+const EnvGatewayInternalURL = "GATEWAY_INTERNAL_URL"
+
 // KeyCount is asserted against the metadata table and the t_config_item seed.
 const KeyCount = 45
 

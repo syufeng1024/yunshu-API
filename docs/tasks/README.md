@@ -8,7 +8,7 @@
 | 需求基线 | PRD V1.2（2026-10-25） |
 | 技术基线 | TDS V1.2（2026-10-25） |
 | 任务卡版本 | T-1.0（2026-10-26） |
-| 卡片总数 | 26 张（阶段 0–6，含补口卡 T24/T25 与防线卡 T26） |
+| 卡片总数 | 27 张（阶段 0–6，含补口卡 T24/T25、防线卡 T26、功能补口 T27） |
 | 交付总监（需求拆分 / 派单 / 验收） | 齐活林（本会话主理人） |
 | 实现方（按卡执行） | Claude Code（`claude_code_run`） |
 
@@ -150,6 +150,7 @@
 | [T24](T24-运营与控制面后端补口.md) | 运营与控制面后端补口（T19/T20 反查 16 项） | T15,T16,T19,T20 | `internal/control/`、`internal/ledger/`、`api/openapi.yaml`、`web/src/pages/admin/` | ✅ 两段完成（11 项） |
 | [T25](T25-日志请求正文落库.md) | 日志请求正文落库（迁移 0022 + 写入端 + 解密接线） | T14,T22 段1/2,T24 | `internal/platform/migrate/`、`internal/settle/`、`internal/logq/` | ✅ 一次通过（2026-10-28） |
 | [T26](T26-行尾一致性与迁移校验守卫.md) | 行尾一致性与迁移校验守卫（防 checksum 跨平台漂移） | T25 | `scripts/`、`.gitattributes`、`docs/dev-setup.md` | ✅ 通过（2026-10-28） |
+| [T27](T27-在线调试台段1内网扣费链路.md) | 在线调试台 · 段 1（内网扣费链路 + 控制面代理） | T07–T09,T11,T12,T19 | `internal/gw/`、`internal/control/console/`、`deploy/` | 🟨 段 1 ✅ / 段 2（前端接入）未开始 |
 | [T22](T22-部署与可观测.md) | 部署·可观测·灰度回滚 | T09,T21 | `deploy/`、`internal/obs/` | 🟨 段 1–3 ✅（指标 / 日志+trace / 容器化+灰度）；段 4 未开始 |
 | [T23](T23-验收对照与交付.md) | 验收对照与交付（82 项功能点） | 全部 | `docs/tasks/acceptance/` | ⬜ |
 
@@ -245,6 +246,7 @@ flowchart LR
 | T22 段1 | 2026-10-28 | 2026-10-28 | ✅ **通过** | 3 项（1 项须段 3 前定） | 指标子系统：`internal/obs/metrics` 1625 行（Registry/Recorder/A8 门禁）、23/23 项在真实调用点打点、三进程挂 `/metrics`；热路径栈上拼 key + `atomic.Pointer[map]` 命中、无锁无分配；counter 窗口增量与快照累计双通道；桶编码累加成 `le` 语义；`TEST_EXIT=0`（4m58s，`-p 1`）、`lint.sh` 绿；**遗留 P1：三进程共用 `GATEWAY_METRICS_ADDR`（默认 :9090），同机双进程会绑不上端口** |
 | T22 段2 | 2026-10-28 | 2026-10-28 | ✅ **通过**（打回 1 项已修） | 5 项（1 项 P1 须 T23 裁定） | 请求级+尝试级两型固定 schema（35/24 字段，键序全比对）、W3C traceparent 单点解析、六个掩码函数；`TEST_EXIT=0`（5m10s）、A10/A11 全 PASS。打回 R-1：首版 traceparent 解析在 gw 里是死代码（中间件已先写 Meta），已下沉到 `httpsrv.RequestID` 并补端到端测试；**遗留 P1：无 traceparent 时 `X-Request-Id`(UUIDv7) ≠ `X-Trace-Id`(派生 32hex)，与 TDS §5.2 不符** |
 | T22 段3 | 2026-10-28 | 2026-10-28 | ✅ **通过**（打回 2 项已修） | 4 项需真集群演练 | 镜像 30.4/31.2/28.7MB（均 <60）、非 root、单二进制；k8s 11 资源、探针 4/4 绑定 healthz/readyz、jobsd `Recreate`；nginx 双段分流 `nginx -t` 通过；`deploy.sh --dry-run` 输出四指标且不改配置；`TEST_EXIT=0`。打回：R-1 派生镜像 68.1MB→30.4MB；R-2 灰度池 `gateway-canary` 的 Service/Deployment 缺失（会 502）。**段 1 的 P1（三进程抢 :9090）已解**。遗留：k8s schema 校验与 A3–A6 演练需 CI/真集群 |
+| T27 段1 | 2026-10-28 | 2026-10-28 | ✅ **通过** | 3 项（段 2 未做、端到端未验证、密钥待配） | 打通调试台真实扣费链路的内网段：`gw.InternalHandler`（验签→注入 Auth→跑 P06–P12+P08.5+terminal，**P05 加 8 行短路**）+ controld `POST /api/console/playground/chat`（会话鉴权→查 Key 属主→签名转发→**SSE 逐块 flush**）。三重门：不发布额外端口 / nginx `location /internal/` 404 / secret 缺失即不注册路由。`Auth.KeyID` 用真实 Key（8 处依赖，含反向用例拒绝哨兵）。超出卡面的加固：terminal nil 即构造报错、controld 检测密钥复用即禁用。`BUILD_VET_OK`、`EXIT=0`（gw + console 两包）。过程拦截：44 个 M 中 34 个是 stat 假 M，已清 |
 | T26 | 2026-10-28 | 2026-10-28 | ✅ **通过**（一次过） | 2 项 | `scripts/check-eol.sh` 守卫 46 个 SQL + `checksums.golden` 的 CR 检测，接入 `lint.sh` 第 10 条；`.gitattributes` 补 `*.lua eol=lf` 并归一 6 个 Lua；`dev-setup.md` 补 Windows 行尾说明。零依赖、无 xargs（本机 xargs 假阴性）、有 `checked==0` 保护。独立复跑：造 CRLF→`EXIT=1` 精确点名、恢复→`EXIT=0` 静默、**按其给出的修复命令原样执行确能修好且不误改内容**、`LINT_EXIT=0`。实测 HEAD 中 46 个 SQL 全为纯 LF，证明故障纯由旧工作区未 renormalize 造成。遗留：镜像产物的 embed checksum 仍未校验，待单独立项 |
 | T25 | 2026-10-28 | 2026-10-28 | ✅ **通过**（一次过，无需打回） | 3 项 | 补齐空缺的迁移 **0022**（`t_request_body` 7 列 + 3 索引）、正文写入落在 `settle.UsageWriter` 异步批（**不进 gw 热路径**，零命中审计通过）、读取端接上 `LOG_BODY_KEK` 独立信封解密；`BUILD_VET_OK`、四包 `EXIT=0`、测试库业务表 **59**。三处偏离已核实接受，其中**卡面 §5.1 的 `CHAR(26)` 是错的**（全项目实为 `char(36)`），实现方正确纠错。过程拦截：42 个历史迁移文件被 Windows 换行符重写（零内容改动）已还原，避免 `checksums.golden` 失效 |
 

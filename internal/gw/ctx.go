@@ -49,6 +49,11 @@ const (
 // AuthContext is the P05 output. It carries only what the snapshot can prove:
 // account status and overdraft live in a separate cache (TDS §3.2 P05 note),
 // so the gateway never fabricates them here.
+//
+// The internal entry (T27) is the one exception to "P05 output": InternalHandler
+// verifies controld's HMAC and injects these seven fields before the pipeline
+// runs, so KeyName and the group attributes are the control plane's signed
+// declaration rather than a K13 read. KeyID is always a real t_api_key.id.
 type AuthContext struct {
 	UserID       int64
 	KeyID        int64

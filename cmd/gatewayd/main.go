@@ -242,6 +242,24 @@ func main() {
 	})
 	handler := gw.NewHandler(deps, dispatcher)
 
+	// T27 internal entry. An unset or short secret means the route does not
+	// exist at all: an unconfigured deployment must not expose an endpoint that
+	// answers 401 and can be probed. The secret is not a configuration key and
+	// is never logged.
+	internalSecret := strings.TrimSpace(os.Getenv(config.EnvInternalCallSecret))
+	var internalHandler *gw.InternalHandler
+	if len(internalSecret) < gw.InternalMinSecretBytes {
+		logger.Warn(rootCtx,
+			"INTERNAL_CALL_SECRET missing or shorter than 32 bytes: POST "+gw.InternalPath+" is not registered",
+			obslog.Fields{Stage: "startup"})
+	} else {
+		internalHandler, err = gw.NewInternalHandler(deps, dispatcher, internalSecret)
+		if err != nil {
+			logger.Error(rootCtx, "internal handler: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
+			os.Exit(1)
+		}
+	}
+
 	h := health.New()
 	h.Add("redis", func(ctx context.Context) error {
 		return rdb.Ping(ctx)
@@ -275,6 +293,11 @@ func main() {
 		IdleTimeout:       120 * time.Second,
 		Register: func(mux *http.ServeMux) {
 			mux.Handle("/v1/", handler)
+			if internalHandler != nil {
+				// Not reachable through nginx (location /internal/ returns 404)
+				// and not published on the host; the HMAC is the third gate.
+				mux.Handle("POST "+gw.InternalPath, internalHandler)
+			}
 		},
 	})
 

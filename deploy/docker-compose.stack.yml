@@ -113,6 +113,11 @@ services:
       GATEWAY_METRICS_ADDR: ":9090"
       GATEWAY_METRICS_TOKEN: ${GATEWAY_METRICS_TOKEN:-}
       GATEWAY_DB_MAX_CONNS: ${GATEWAY_DB_MAX_CONNS:-8}
+      # T27 内网入口的 HMAC 密钥。留空 = 不注册
+      # POST /internal/v1/chat/completions（启动日志 warn）。
+      # 必须与 controld 同值，且不得与 SESSION_SECRET / CHANNEL_KEY_KEK /
+      # LOG_BODY_KEK 复用——controld 启动时会检测复用并禁用转发。
+      INTERNAL_CALL_SECRET: ${INTERNAL_CALL_SECRET:-}
     ports:
       - "${GATEWAY_PORT:-18080}:8080"
     depends_on:
@@ -144,6 +149,10 @@ services:
       # 控制面 metrics 独立端口；不再回落 :9090（否则同机与 gatewayd 抢端口）。
       CONTROL_METRICS_ADDR: ":9091"
       GATEWAY_METRICS_TOKEN: ${GATEWAY_METRICS_TOKEN:-}
+      # T27 调试台转发。密钥与 gatewayd 同值；缺失或与 SESSION_SECRET /
+      # CHANNEL_KEY_KEK / LOG_BODY_KEK 复用时，端点返回 503 config_unavailable。
+      INTERNAL_CALL_SECRET: ${INTERNAL_CALL_SECRET:-}
+      GATEWAY_INTERNAL_URL: ${GATEWAY_INTERNAL_URL:-http://gatewayd:8080}
     ports:
       - "${CONTROL_PORT:-18081}:8081"
     depends_on:
