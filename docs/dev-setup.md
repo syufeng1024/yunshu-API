@@ -108,7 +108,7 @@ docker compose -f deploy/docker-compose.yml start redis
 
 ```bash
 go build ./... && go vet ./... && go test ./...
-make check          # vet + test + encoding/json、context.Background、许可字符串断言
+make check          # vet + test + encoding/json、context.Background、许可断言（Go/SQL 无 new-api 代码字符串）
 make down           # 停止依赖，保留数据卷
 ```
 

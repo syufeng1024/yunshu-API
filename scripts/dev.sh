@@ -166,7 +166,7 @@ case "$cmd" in
     bad="$(printf '%s\n' "$bad" | grep -v '^cmd/' | grep -v '^$' || true)"
     if [ -n "$bad" ]; then echo 'FAIL: context.Background() outside cmd/'; echo "$bad"; exit 1; fi
     if grep -rn 'QuantumNous' --include='*.go' --include='*.sql' .; then
-      echo 'FAIL: forbidden upstream attribution string found'; exit 1
+      echo 'FAIL: new-api source string in Go/SQL — we do not copy AGPL code into a closed-source product (errata E-23)'; exit 1
     fi
     echo 'check: grep assertions passed'
     ;;

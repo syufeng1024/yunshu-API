@@ -60,11 +60,15 @@ check_empty "no UPDATE/DELETE on t_ledger_entry" \
      | grep -v '_test\.go')" \
   "correct mistakes with a REVERSAL entry"
 
-# 7. Licence hygiene: new-api is AGPLv3, not a single line may be copied.
-check_empty "no QuantumNous / new-api references" \
-  "$(grep -rn 'QuantumNous' --include='*.go' --include='*.sql' --include='*.md' \
+# 7. Licence hygiene: new-api allows secondary development and needs no
+#    attribution for referencing its code or architecture (errata E-23). What
+#    we must not do is carry its AGPL code into this closed-source product, so
+#    the grep looks for the upstream project's identifying string in Go/SQL
+#    only — docs and comments may cite the project by name.
+check_empty "no new-api source string in Go/SQL (we do not copy AGPL code)" \
+  "$(grep -rn 'QuantumNous' --include='*.go' --include='*.sql' \
      relaykit internal cmd 2>/dev/null)" \
-  "see TDS licensing note"
+  "see TDS §0 licensing note / errata E-23"
 
 # 8. Request paths must inherit the caller's context, never invent one.
 check_empty "no context.Background() under internal/" \
