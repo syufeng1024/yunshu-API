@@ -28,25 +28,48 @@ const EnvKEK = "CHANNEL_KEY_KEK"
 // old node never silently misreads a new envelope.
 const EnvelopePrefix = "v1:"
 
-// keyVersionAAD binds the envelope prefix to the ciphertext.
-var keyVersionAAD = []byte("yunshu:channel-key:v1")
+// BodyKeyID identifies the request-body KEK in t_request_body.body_key_id.
+// It is deliberately not derived from CHANNEL_KEY_KEK: the two keys rotate
+// independently and a channel-key rotation must not invalidate stored bodies.
+const BodyKeyID = "body-v1"
+
+// AAD binds each ciphertext to its purpose. Channel keys and request bodies
+// use different AADs, so an envelope sealed for one purpose cannot be opened
+// by a Box built for the other even when both use the same 32-byte KEK.
+var (
+	channelAAD = []byte("yunshu:channel-key:v1")
+	bodyAAD    = []byte("yunshu:request-body:v1")
+)
 
 // Errors are deliberately value-free: they never contain the KEK, the
 // envelope or the plaintext.
 var (
 	ErrNoKEK       = errors.New("cryptobox: CHANNEL_KEY_KEK is not set")
+	ErrNoBodyKEK   = errors.New("cryptobox: LOG_BODY_KEK is not set")
 	ErrInvalidKEK  = errors.New("cryptobox: KEK must be 32 bytes of base64")
 	ErrBadEnvelope = errors.New("cryptobox: envelope is not v1:base64")
 	ErrDecrypt     = errors.New("cryptobox: envelope authentication failed")
 )
 
-// Box holds the AEAD built from one KEK.
+// Box holds the AEAD built from one KEK plus the purpose AAD.
 type Box struct {
 	aead cipher.AEAD
+	aad  []byte
 }
 
-// New builds a Box from raw KEK bytes. The length must be 32 (AES-256).
+// New builds a Box for channel upstream keys from raw KEK bytes. The length
+// must be 32 (AES-256).
 func New(kek []byte) (*Box, error) {
+	return newWithAAD(kek, channelAAD)
+}
+
+// NewBody builds a Box for request bodies. It uses a different AAD from New,
+// so the two ciphertext families are not interchangeable.
+func NewBody(kek []byte) (*Box, error) {
+	return newWithAAD(kek, bodyAAD)
+}
+
+func newWithAAD(kek, aad []byte) (*Box, error) {
 	if len(kek) != 32 {
 		return nil, ErrInvalidKEK
 	}
@@ -59,20 +82,38 @@ func New(kek []byte) (*Box, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cryptobox: init GCM: %w", err)
 	}
-	return &Box{aead: aead}, nil
+	return &Box{aead: aead, aad: aad}, nil
 }
 
-// NewFromBase64 decodes a base64 KEK and builds the Box.
+// NewFromBase64 decodes a base64 channel KEK and builds the Box.
 func NewFromBase64(encoded string) (*Box, error) {
+	raw, err := decodeKEK(encoded, ErrNoKEK)
+	if err != nil {
+		return nil, err
+	}
+	return New(raw)
+}
+
+// NewBodyFromBase64 decodes a base64 request-body KEK (LOG_BODY_KEK) and
+// builds the Box. An empty value is ErrNoBodyKEK, never a plaintext fallback.
+func NewBodyFromBase64(encoded string) (*Box, error) {
+	raw, err := decodeKEK(encoded, ErrNoBodyKEK)
+	if err != nil {
+		return nil, err
+	}
+	return NewBody(raw)
+}
+
+func decodeKEK(encoded string, emptyErr error) ([]byte, error) {
 	encoded = strings.TrimSpace(encoded)
 	if encoded == "" {
-		return nil, ErrNoKEK
+		return nil, emptyErr
 	}
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, ErrInvalidKEK
 	}
-	return New(raw)
+	return raw, nil
 }
 
 // FromEnv reads CHANNEL_KEY_KEK and builds the Box.
@@ -91,7 +132,7 @@ func (b *Box) Seal(plaintext []byte) (string, error) {
 	}
 	out := make([]byte, 0, len(nonce)+len(plaintext)+b.aead.Overhead())
 	out = append(out, nonce...)
-	out = b.aead.Seal(out, nonce, plaintext, keyVersionAAD)
+	out = b.aead.Seal(out, nonce, plaintext, b.aad)
 	return EnvelopePrefix + base64.StdEncoding.EncodeToString(out), nil
 }
 
@@ -119,7 +160,7 @@ func (b *Box) Open(envelope string) ([]byte, error) {
 		return nil, ErrBadEnvelope
 	}
 	nonce, ciphertext := raw[:nonceSize], raw[nonceSize:]
-	plaintext, err := b.aead.Open(nil, nonce, ciphertext, keyVersionAAD)
+	plaintext, err := b.aead.Open(nil, nonce, ciphertext, b.aad)
 	if err != nil {
 		return nil, ErrDecrypt
 	}

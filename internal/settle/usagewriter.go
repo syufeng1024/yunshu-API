@@ -8,7 +8,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"yunshu.dev/core/internal/config"
+	"yunshu.dev/core/internal/cryptobox"
 	obslog "yunshu.dev/core/internal/obs/log"
+	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 	"yunshu.dev/core/internal/platform/clock"
 )
 
@@ -19,7 +22,29 @@ const (
 	// usageQueueSize bounds memory when the database is slow. A full queue
 	// drops log rows; it never blocks the request and never touches money.
 	usageQueueSize = 4096
+	// bodyQueueSize bounds the number of retained bodies. Bodies are handed
+	// over by reference (the 10 MB P02 cap is an upper bound), so this queue is
+	// deliberately much smaller than usageQueueSize: a full queue drops the
+	// body and leaves the usage row untouched.
+	bodyQueueSize = 64
+	// bodyFlushBatch caps rows per INSERT. A 10 MB body becomes a ~13.3 MB
+	// envelope after base64; 4 rows stay below MySQL's default 64 MB
+	// max_allowed_packet instead of failing the whole batch.
+	bodyFlushBatch = 4
+	// DefaultBodyRetentionDays matches log.retention_days' default. It is used
+	// only when the caller supplies no RetentionDays function.
+	DefaultBodyRetentionDays = 180
 )
+
+// bodyItem is one queued request body. Ciphertext is filled by the flush
+// goroutine; the plaintext reference is cleared as soon as Seal returns.
+type bodyItem struct {
+	RequestID  string
+	UserID     int64
+	Body       []byte
+	Ciphertext []byte
+	CreatedAt  time.Time
+}
 
 // UsageRecord is one t_usage_record row (P28). IDs of 0 mean SQL NULL.
 type UsageRecord struct {
@@ -68,6 +93,15 @@ type UsageRecord struct {
 	UserAgent             string
 	ClientAborted         bool
 	CreatedAt             time.Time
+	// RawBody is the request body handed over by the relay after the response
+	// is complete. It is never inserted as-is: WriteUsage transfers it to the
+	// body queue and the async flush seals it with BodyBox. Nil means there is
+	// no body to keep (for example GET /v1/models).
+	RawBody []byte
+	// FullLogSaved is written to t_usage_record.full_log_saved. The console
+	// body endpoint reads it before touching t_request_body, so it is set only
+	// when the body was accepted into the queue.
+	FullLogSaved bool
 }
 
 // AttemptRecord is one t_upstream_attempt row (P29).
@@ -111,11 +145,29 @@ type UsageWriter struct {
 	FlushInterval time.Duration
 	BatchSize     int
 
+	// BodyMode reports log.body_mode. A nil function means meta_only: bodies
+	// are never queued. The function is read per WriteUsage so a runtime config
+	// change (opt_in ↔ meta_only) takes effect without a restart.
+	BodyMode func() string
+	// BodyBox seals bodies with LOG_BODY_KEK and the request-body AAD. Nil
+	// means the key is unavailable: bodies are dropped and counted with
+	// reason="no_kek"; usage rows are still written.
+	BodyBox *cryptobox.Box
+	// BodyKeyID is written to t_request_body.body_key_id. Empty means the
+	// default cryptobox.BodyKeyID.
+	BodyKeyID string
+	// RetentionDays reports log.retention_days. Nil or <=0 means 180.
+	RetentionDays func() int
+	// Metrics receives the body counters. Nil is safe.
+	Metrics *obsmetrics.Recorder
+
 	usageCh   chan UsageRecord
 	attemptCh chan AttemptRecord
+	bodyCh    chan bodyItem
 
-	written atomic.Int64
-	dropped atomic.Int64
+	written     atomic.Int64
+	dropped     atomic.Int64
+	bodyDropped atomic.Int64
 }
 
 // NewUsageWriter builds the writer.
@@ -129,21 +181,69 @@ func NewUsageWriter(db *sql.DB, logger *obslog.Logger, clk clock.Clock) *UsageWr
 		Clock:         clk,
 		FlushInterval: DefaultFlushInterval,
 		BatchSize:     DefaultFlushBatch,
+		BodyKeyID:     cryptobox.BodyKeyID,
 		usageCh:       make(chan UsageRecord, usageQueueSize),
 		attemptCh:     make(chan AttemptRecord, usageQueueSize),
+		bodyCh:        make(chan bodyItem, bodyQueueSize),
 	}
 }
 
-// WriteUsage enqueues one request-level row.
+// WriteUsage enqueues one request-level row. It also hands the body to the
+// body queue when log.body_mode=opt_in; sealing happens later, on the flush
+// goroutine, never on the gateway request path.
 func (w *UsageWriter) WriteUsage(r UsageRecord) {
 	if w == nil {
 		return
+	}
+	body := r.RawBody
+	r.RawBody = nil
+	r.FullLogSaved = false
+	if len(body) > 0 && w.bodyMode() == config.EnumOptIn {
+		switch {
+		case w.BodyBox == nil:
+			w.dropBody("no_kek")
+		default:
+			select {
+			case w.bodyCh <- bodyItem{
+				RequestID: r.RequestID,
+				UserID:    r.UserID,
+				Body:      body,
+				CreatedAt: r.CreatedAt,
+			}:
+				r.FullLogSaved = true
+			default:
+				w.dropBody("queue_full")
+			}
+		}
 	}
 	select {
 	case w.usageCh <- r:
 	default:
 		w.drop("usage")
 	}
+}
+
+func (w *UsageWriter) bodyMode() string {
+	if w.BodyMode == nil {
+		return config.EnumMetaOnly
+	}
+	return w.BodyMode()
+}
+
+func (w *UsageWriter) bodyKeyID() string {
+	if w.BodyKeyID == "" {
+		return cryptobox.BodyKeyID
+	}
+	return w.BodyKeyID
+}
+
+func (w *UsageWriter) retentionDays() int {
+	if w.RetentionDays != nil {
+		if v := w.RetentionDays(); v > 0 {
+			return v
+		}
+	}
+	return DefaultBodyRetentionDays
 }
 
 // WriteAttempt enqueues one attempt-level row.
@@ -200,6 +300,10 @@ func (w *UsageWriter) Flush(ctx context.Context) error {
 	}
 	usage := w.drainUsage()
 	attempts := w.drainAttempts()
+	bodies := w.drainBodies()
+	// Bodies go first: a usage row carrying full_log_saved=1 must not become
+	// visible before the row it points at exists.
+	w.flushBodies(ctx, bodies)
 	var firstErr error
 	for start := 0; start < len(usage); start += w.batchSize() {
 		end := start + w.batchSize()
@@ -260,6 +364,91 @@ func (w *UsageWriter) drainAttempts() []AttemptRecord {
 	}
 }
 
+func (w *UsageWriter) drainBodies() []bodyItem {
+	var out []bodyItem
+	for {
+		select {
+		case r := <-w.bodyCh:
+			out = append(out, r)
+		default:
+			return out
+		}
+	}
+}
+
+// flushBodies seals and inserts the queued bodies. Every failure drops that
+// body and increments gw_log_body_dropped_total{reason}; it never returns an
+// error to Flush, because a body failure must not be reported as a usage
+// failure and must not affect the settlement rows.
+func (w *UsageWriter) flushBodies(ctx context.Context, rows []bodyItem) {
+	if len(rows) == 0 {
+		return
+	}
+	if w.BodyBox == nil {
+		for range rows {
+			w.dropBody("no_kek")
+		}
+		return
+	}
+	sealed := make([]bodyItem, 0, len(rows))
+	for _, r := range rows {
+		envelope, err := w.BodyBox.Seal(r.Body)
+		r.Body = nil // release the plaintext reference before the batch is built
+		if err != nil {
+			w.dropBody("seal_failed")
+			continue
+		}
+		r.Ciphertext = []byte(envelope)
+		sealed = append(sealed, r)
+	}
+	for start := 0; start < len(sealed); start += bodyFlushBatch {
+		end := start + bodyFlushBatch
+		if end > len(sealed) {
+			end = len(sealed)
+		}
+		if err := w.insertBodies(ctx, sealed[start:end]); err != nil {
+			for range sealed[start:end] {
+				w.dropBody("db_error")
+			}
+			if w.Logger != nil {
+				w.Logger.Warn(ctx, "log_body_insert_failed: "+err.Error(), obslog.Fields{Stage: "P28"})
+			}
+			continue
+		}
+		if w.Metrics != nil {
+			for range sealed[start:end] {
+				w.Metrics.LogBodyWritten()
+			}
+		}
+	}
+}
+
+const bodyColumns = `request_id, user_id, ciphertext, body_key_id, created_at, expires_at`
+
+const bodyColumnCount = 6
+
+func (w *UsageWriter) insertBodies(ctx context.Context, rows []bodyItem) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	args := make([]any, 0, len(rows)*bodyColumnCount)
+	for _, r := range rows {
+		created := w.createdAt(r.CreatedAt)
+		expires := created.AddDate(0, 0, w.retentionDays())
+		args = append(args,
+			cut(r.RequestID, 36), r.UserID, r.Ciphertext, w.bodyKeyID(),
+			created.UTC(), expires.UTC(),
+		)
+	}
+	q := "INSERT INTO t_request_body (" + bodyColumns + ") VALUES " +
+		placeholders(len(rows), bodyColumnCount) +
+		" ON DUPLICATE KEY UPDATE ciphertext = VALUES(ciphertext), body_key_id = VALUES(body_key_id), expires_at = VALUES(expires_at)"
+	if _, err := w.DB.ExecContext(ctx, q, args...); err != nil {
+		return fmt.Errorf("settle: insert request bodies: %w", err)
+	}
+	return nil
+}
+
 const usageColumns = `request_id, user_id, api_key_id, api_key_name_snap,
 model_id, model_name_snap, request_model_req, inbound_protocol,
 channel_id, channel_name_snap, outbound_protocol, route_id, price_rule_id,
@@ -300,7 +489,7 @@ func (w *UsageWriter) insertUsage(ctx context.Context, rows []UsageRecord) error
 			clampInt(r.UpstreamAttempts, 0, 255), r.TTFTMS,
 			clampInt(r.TotalMS, 0, 4294967295), clampInt(r.UpstreamMS, 0, 4294967295),
 			nullBytes(r.ClientIP), nullableString(cut(r.UserAgent, 255)),
-			boolInt(r.ClientAborted), 0, "meta", created[i].UTC(),
+			boolInt(r.ClientAborted), boolInt(r.FullLogSaved), "meta", created[i].UTC(),
 		)
 	}
 	q := "INSERT INTO t_usage_record (" + usageColumns + ") VALUES " +
@@ -375,6 +564,20 @@ func (w *UsageWriter) drop(kind string) {
 	n := w.dropped.Add(1)
 	if w.Logger != nil && n%100 == 1 {
 		w.Logger.Warn(context.TODO(), fmt.Sprintf("usage_queue_full kind=%s dropped=%d", kind, n),
+			obslog.Fields{Stage: "P28"})
+	}
+}
+
+// dropBody records a discarded body. The metric is unconditional (it is the
+// only signal that separates "logging off" from "logging on but broken"); the
+// WARN line is throttled like drop() so a full queue cannot flood the log.
+func (w *UsageWriter) dropBody(reason string) {
+	n := w.bodyDropped.Add(1)
+	if w.Metrics != nil {
+		w.Metrics.LogBodyDropped(reason)
+	}
+	if w.Logger != nil && n%100 == 1 {
+		w.Logger.Warn(context.TODO(), fmt.Sprintf("log_body_dropped reason=%s dropped=%d", reason, n),
 			obslog.Fields{Stage: "P28"})
 	}
 }

@@ -19,37 +19,31 @@ func TestPurgeLogRetentionBoundaries(t *testing.T) {
 	bodyCutoff := now.AddDate(0, 0, -180)
 	metaCutoff := now.AddDate(0, 0, -365)
 
-	if _, err := testDB.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS t_request_body (
-		id bigint unsigned NOT NULL AUTO_INCREMENT,
-		request_id char(36) NOT NULL,
-		body mediumtext,
-		created_at datetime(3) NOT NULL,
-		PRIMARY KEY (id),
-		KEY idx_rb_created (created_at)
-	) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`); err != nil {
-		t.Fatalf("create t_request_body: %v", err)
-	}
+	// t_request_body is created by migration 0022, which jobs tests apply in
+	// TestMain. The fixture must use the real shape: expires_at is what the
+	// purge reads, and the table is not dropped here (dropping it would leave
+	// schema_migrations claiming 0022 is applied).
 	cleanupPurge(t)
-	t.Cleanup(func() {
-		cleanupPurge(t)
-		_, _ = testDB.Exec(`DROP TABLE IF EXISTS t_request_body`)
-	})
+	t.Cleanup(func() { cleanupPurge(t) })
 
-	// Body rows: one past the cutoff, one exactly on it, one inside it, plus
-	// enough recent rows that EXPLAIN has an index choice.
-	insertBody := func(i int, at time.Time) {
+	// Body rows: one past the expiry, one exactly on now, one inside the
+	// window, plus enough recent rows that EXPLAIN has an index choice.
+	// expires_at = created_at + 180 days.
+	insertBody := func(i int, createdAt, expiresAt time.Time) {
 		t.Helper()
 		if _, err := testDB.ExecContext(ctx,
-			`INSERT INTO t_request_body (request_id, body, created_at) VALUES (?,?,?)`,
-			jobRID("pbdy", i), "x", at); err != nil {
+			`INSERT INTO t_request_body
+			   (request_id, user_id, ciphertext, body_key_id, created_at, expires_at)
+			 VALUES (?,942001,?, 'body-v1', ?, ?)`,
+			jobRID("pbdy", i), []byte("x"), createdAt, expiresAt); err != nil {
 			t.Fatalf("insert body: %v", err)
 		}
 	}
-	insertBody(1, bodyCutoff.Add(-24*time.Hour))
-	insertBody(2, bodyCutoff)
-	insertBody(3, bodyCutoff.Add(24*time.Hour))
+	insertBody(1, bodyCutoff.Add(-24*time.Hour), now.Add(-24*time.Hour))
+	insertBody(2, bodyCutoff, now)
+	insertBody(3, bodyCutoff.Add(24*time.Hour), now.Add(24*time.Hour))
 	for i := 0; i < 200; i++ {
-		insertBody(100+i, now.Add(-24*time.Hour))
+		insertBody(100+i, now.Add(-24*time.Hour), now.AddDate(0, 0, 156))
 	}
 
 	insertUsage := func(i int, at time.Time) {
@@ -106,15 +100,17 @@ func TestPurgeLogRetentionBoundaries(t *testing.T) {
 	plans := []struct {
 		name string
 		q    string
-		arg  time.Time
+		args []any
 	}{
-		{"body delete", `DELETE FROM t_request_body WHERE created_at < ? ORDER BY created_at LIMIT 5000`, bodyCutoff},
-		{"usage delete", `DELETE FROM t_usage_record WHERE created_at < ? ORDER BY created_at LIMIT 5000`, metaCutoff},
-		{"attempt delete", `DELETE FROM t_upstream_attempt WHERE created_at < ? ORDER BY created_at LIMIT 5000`, metaCutoff},
-		{"idem delete", `DELETE FROM t_idempotency_record WHERE expires_at < ? ORDER BY expires_at LIMIT 5000`, now},
+		{"body delete",
+			`DELETE FROM t_request_body WHERE expires_at < ? AND created_at < ? ORDER BY expires_at LIMIT 10000`,
+			[]any{now.UTC(), bodyCutoff.UTC()}},
+		{"usage delete", `DELETE FROM t_usage_record WHERE created_at < ? ORDER BY created_at LIMIT 5000`, []any{metaCutoff.UTC()}},
+		{"attempt delete", `DELETE FROM t_upstream_attempt WHERE created_at < ? ORDER BY created_at LIMIT 5000`, []any{metaCutoff.UTC()}},
+		{"idem delete", `DELETE FROM t_idempotency_record WHERE expires_at < ? ORDER BY expires_at LIMIT 5000`, []any{now.UTC()}},
 	}
 	for _, p := range plans {
-		plan := explainJobs(t, p.q, p.arg.UTC())
+		plan := explainJobs(t, p.q, p.args...)
 		for _, row := range plan {
 			if row.Type == "ALL" {
 				t.Fatalf("%s uses type=ALL: %+v", p.name, plan)
@@ -137,8 +133,8 @@ func TestPurgeLogRetentionBoundaries(t *testing.T) {
 
 	// yunshu_test accumulates rows from other packages; count this fixture's
 	// user only so the assertion stays exact without touching foreign data.
-	if n := countRows(t, `SELECT COUNT(*) FROM t_request_body`); n != 202 {
-		t.Fatalf("body rows = %d; want 202 (181-day row deleted)", n)
+	if n := countRows(t, `SELECT COUNT(*) FROM t_request_body WHERE user_id = 942001`); n != 202 {
+		t.Fatalf("body rows = %d; want 202 (expired row deleted)", n)
 	}
 	if n := countRows(t, `SELECT COUNT(*) FROM t_usage_record WHERE user_id = 942001`); n != 202 {
 		t.Fatalf("usage rows = %d; want 202 (366-day row deleted)", n)
@@ -210,7 +206,7 @@ func cleanupPurge(t *testing.T) {
 		`DELETE FROM t_usage_record WHERE user_id = 942001`,
 		`DELETE FROM t_upstream_attempt WHERE user_id = 942001`,
 		`DELETE FROM t_idempotency_record WHERE user_id = 942001`,
-		`DELETE FROM t_request_body`,
+		`DELETE FROM t_request_body WHERE user_id = 942001`,
 	} {
 		if _, err := testDB.Exec(q); err != nil {
 			t.Fatalf("purge cleanup: %v\nquery: %s", err, q)

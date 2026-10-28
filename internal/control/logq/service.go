@@ -30,6 +30,7 @@ import (
 	"yunshu.dev/core/internal/apierr"
 	"yunshu.dev/core/internal/control/mw"
 	obslog "yunshu.dev/core/internal/obs/log"
+	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 	"yunshu.dev/core/internal/platform/clock"
 )
 
@@ -59,22 +60,26 @@ type Service struct {
 	Now    clock.Clock
 	Logger *obslog.Logger
 
-	// BodyStore is the request-body seam. The default reads t_request_body,
-	// which T22 creates with migration 0022; until then the table is absent
-	// and every body read answers resource_not_found. Tests replace it to
-	// exercise the success path without inventing production schema here.
+	// Metrics records gw_log_body_open_failed_total. Nil is safe; the daemon
+	// wires the registry into the service after New so the default body store
+	// can be built lazily with the recorder attached.
+	Metrics *obsmetrics.Recorder
+
+	// BodyStore is the request-body seam. Nil builds the default store on the
+	// first body read, which reads t_request_body (0022) and opens the
+	// envelope with LOG_BODY_KEK. Tests replace it to exercise both the
+	// success path and the missing-table fallback.
 	BodyStore bodyStore
 }
 
-// New wires the service. A nil clock falls back to the production clock; the
-// default body store binds to whichever pool serves log reads.
+// New wires the service. A nil clock falls back to the production clock. The
+// default body store is built on first use (Body), so a Metrics recorder
+// assigned after New is still attached to it.
 func New(db, logDB *sql.DB, now clock.Clock, logger *obslog.Logger) *Service {
 	if now == nil {
 		now = clock.Real{}
 	}
-	s := &Service{DB: db, LogDB: logDB, Now: now, Logger: logger}
-	s.BodyStore = &sqlBodyStore{DB: s.logs()}
-	return s
+	return &Service{DB: db, LogDB: logDB, Now: now, Logger: logger}
 }
 
 // logs returns the pool every log read must use. A nil LogDB is the

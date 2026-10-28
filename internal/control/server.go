@@ -35,6 +35,7 @@ import (
 	"yunshu.dev/core/internal/control/user"
 	"yunshu.dev/core/internal/cryptobox"
 	obslog "yunshu.dev/core/internal/obs/log"
+	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 	"yunshu.dev/core/internal/platform/clock"
 	"yunshu.dev/core/internal/redisx"
 )
@@ -81,6 +82,11 @@ type Deps struct {
 	// is accepted as a fallback). Empty makes the trial claim answer 503
 	// rather than hash device identifiers with no key.
 	FingerprintKey string
+
+	// Metrics receives log-read counters (gw_log_body_open_failed_total).
+	// Nil is allowed in tests; the daemon passes the same registry it serves
+	// on /metrics.
+	Metrics *obsmetrics.Recorder
 }
 
 // Server holds the route table and its dependencies.
@@ -159,6 +165,7 @@ func New(d Deps) (*Server, error) {
 	// service falls back to DB on its own, so both the split and the
 	// single-database deployments share one route table.
 	logs := logq.New(d.DB, d.LogDB, d.Now, d.Logger)
+	logs.Metrics = d.Metrics
 	// Usage reads stay on the main pool: t_usage_record carries its dimension
 	// snapshots, so the aggregation never joins the log database and never
 	// joins t_model / t_channel.

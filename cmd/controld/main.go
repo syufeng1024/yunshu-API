@@ -47,9 +47,10 @@ func main() {
 	logger.Info(rootCtx, "starting", obslog.Fields{Stage: "startup"})
 
 	reg := obsmetrics.NewRegistry()
-	// The control plane has no gateway event to record, but the endpoint still
-	// exposes the TDS §5.3 family names so A8 can check one process shape.
-	_ = obsmetrics.NewRecorder(reg)
+	// The recorder is passed to control for the log-body read counter
+	// (gw_log_body_open_failed_total); registering all families also keeps the
+	// /metrics endpoint shape consistent with gatewayd.
+	rec := obsmetrics.NewRecorder(reg)
 
 	mainDB, err := db.OpenMain(cfg.DBDSN, db.MainPoolMaxOpen, db.MainPoolMaxIdle)
 	if err != nil {
@@ -144,6 +145,7 @@ func main() {
 		},
 		PaySecrets:     paySecrets,
 		FingerprintKey: fpHMACKey(logger, rootCtx),
+		Metrics:        rec,
 	})
 	if err != nil {
 		logger.Error(rootCtx, "control server: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})

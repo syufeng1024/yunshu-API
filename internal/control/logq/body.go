@@ -5,10 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"os"
+	"sync"
 	"time"
 
 	"yunshu.dev/core/internal/apierr"
+	"yunshu.dev/core/internal/config"
 	"yunshu.dev/core/internal/control/mw"
+	"yunshu.dev/core/internal/cryptobox"
+	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 )
 
 // errBodyNotFound means "no retained body", covering three conditions that
@@ -30,6 +35,14 @@ type bodyStore interface {
 // pretending to be the stored content.
 type sqlBodyStore struct {
 	DB *sql.DB
+	// Box opens the body envelopes. Nil means "load LOG_BODY_KEK lazily"; a
+	// test injects a Box to exercise the success path without touching env.
+	Box *cryptobox.Box
+	// Metrics counts open failures. Nil is safe.
+	Metrics *obsmetrics.Recorder
+
+	boxOnce sync.Once
+	boxErr  error
 }
 
 func (s *sqlBodyStore) fetch(ctx context.Context, uid int64, requestID string) (string, error) {
@@ -70,10 +83,47 @@ func (s *sqlBodyStore) fetch(ctx context.Context, uid int64, requestID string) (
 	if len(ciphertext) == 0 {
 		return "", errBodyNotFound
 	}
-	// T22 owns decryption (body_key_id selects the key). Until then no row can
-	// exist, and returning the stored bytes is the contract this seam will
-	// keep once decrypt is wired inside the store.
-	return string(ciphertext), nil
+	// The body key is independent of the channel KEK. A row naming a key this
+	// node does not know is not readable, so it gets the same 404 as a missing
+	// row; gw_log_body_open_failed_total is the operator-facing signal that
+	// separates "never stored" from "stored but the key is gone".
+	if !bodyKeyID.Valid || bodyKeyID.String != cryptobox.BodyKeyID {
+		s.openFailed()
+		return "", errBodyNotFound
+	}
+	box, err := s.bodyBox()
+	if err != nil {
+		s.openFailed()
+		return "", errBodyNotFound
+	}
+	plaintext, err := box.Open(string(ciphertext))
+	if err != nil {
+		s.openFailed()
+		return "", errBodyNotFound
+	}
+	if len(plaintext) == 0 {
+		return "", errBodyNotFound
+	}
+	return string(plaintext), nil
+}
+
+// bodyBox lazily loads LOG_BODY_KEK. A missing or malformed key makes every
+// retained body unreadable, which is reported as 404 with
+// gw_log_body_open_failed_total, never as 500.
+func (s *sqlBodyStore) bodyBox() (*cryptobox.Box, error) {
+	if s.Box != nil {
+		return s.Box, nil
+	}
+	s.boxOnce.Do(func() {
+		s.Box, s.boxErr = cryptobox.NewBodyFromBase64(os.Getenv(config.EnvLogBodyKEK))
+	})
+	return s.Box, s.boxErr
+}
+
+func (s *sqlBodyStore) openFailed() {
+	if s.Metrics != nil {
+		s.Metrics.LogBodyOpenFailed()
+	}
 }
 
 type bodyResponse struct {
@@ -122,7 +172,7 @@ func (s *Service) Body(w http.ResponseWriter, r *http.Request) {
 
 	store := s.BodyStore
 	if store == nil {
-		store = &sqlBodyStore{DB: s.logs()}
+		store = &sqlBodyStore{DB: s.logs(), Metrics: s.Metrics}
 	}
 	body, err := store.fetch(ctx, uid, requestID)
 	if errors.Is(err, errBodyNotFound) {

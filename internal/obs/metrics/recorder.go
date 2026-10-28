@@ -45,6 +45,10 @@ type Recorder struct {
 	logBacklogVec *GaugeVec
 	logBacklog    *Gauge
 
+	logBodyWritten *Counter
+	logBodyDropped *CounterVec
+	logBodyOpen    *Counter
+
 	configItemRejected *CounterVec
 }
 
@@ -125,6 +129,14 @@ func NewRecorder(reg *Registry) *Recorder {
 			"reason"),
 		logBacklogVec: reg.Gauge("gw_log_backlog",
 			"Current request-log stream length."),
+
+		logBodyWritten: reg.Counter("gw_log_body_written_total",
+			"Request bodies sealed and inserted into t_request_body.").With(),
+		logBodyDropped: reg.Counter("gw_log_body_dropped_total",
+			"Request bodies dropped before persistence.",
+			"reason"),
+		logBodyOpen: reg.Counter("gw_log_body_open_failed_total",
+			"Stored request bodies that could not be decrypted.").With(),
 
 		configItemRejected: reg.Counter("gw_config_item_rejected_total",
 			"Configuration rows rejected while applying a snapshot.",
@@ -356,6 +368,35 @@ func (r *Recorder) LogBacklog(n int64) {
 	r.logBacklog.Set(n)
 }
 
+// LogBodyWritten records one request body sealed and persisted.
+func (r *Recorder) LogBodyWritten() {
+	if r == nil || r.logBodyWritten == nil {
+		return
+	}
+	r.logBodyWritten.Inc()
+}
+
+// LogBodyDropped records one request body discarded before persistence.
+// reason is one of the bounded logBodyDropReasons; anything else becomes
+// "other" so a malformed label cannot grow cardinality.
+func (r *Recorder) LogBodyDropped(reason string) {
+	if r == nil || r.logBodyDropped == nil {
+		return
+	}
+	r.logBodyDropped.With(enumValue(logBodyDropReasons, reason)).Inc()
+}
+
+// LogBodyOpenFailed records one stored body whose envelope could not be
+// opened: a missing/rotated LOG_BODY_KEK, an unknown body_key_id, or tampered
+// ciphertext. The HTTP response stays 404; this counter is the only place the
+// difference between "never stored" and "stored but unreadable" is visible.
+func (r *Recorder) LogBodyOpenFailed() {
+	if r == nil || r.logBodyOpen == nil {
+		return
+	}
+	r.logBodyOpen.Inc()
+}
+
 // ConfigItemRejected records one t_config_item row that was skipped while
 // applying a snapshot. namespace is one of the five namespaces or
 // "unrecognized"; reason is a bounded loader reason.
@@ -434,6 +475,8 @@ var (
 	backpressureTiers = labelSet("stream", "reject", "backlog")
 
 	logDropReasons = labelSet("redis_down", "max_deliveries", "bad_payload", "unknown_version")
+
+	logBodyDropReasons = labelSet("queue_full", "seal_failed", "db_error", "no_kek")
 
 	configNamespaces = labelSet(
 		"ROUTING", "RATELIMIT", "PRICING", "UPSTREAM", "FEATURE", "unrecognized",

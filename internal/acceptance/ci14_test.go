@@ -297,34 +297,31 @@ func TestCI_F06_7(t *testing.T) {
 
 // F11-3 — request bodies are deleted after 180 days, metadata after 365.
 func TestCI_F11_3(t *testing.T) {
-	if _, err := testDB.ExecContext(context.Background(), `
-		CREATE TABLE IF NOT EXISTS t_request_body (
-			id bigint unsigned NOT NULL AUTO_INCREMENT,
-			request_id char(36) NOT NULL,
-			body mediumtext,
-			created_at datetime(3) NOT NULL,
-			PRIMARY KEY (id),
-			KEY idx_rb_created (created_at)
-		) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_as_cs`); err != nil {
-		t.Fatalf("F11-3: create t_request_body: %v", err)
-	}
+	// t_request_body comes from migration 0022; the retention column is
+	// expires_at (= created_at + log.retention_days), not created_at.
 	uid := newUser(t, userOpts{})
 	modelID := newModel(t, modelName(), "LISTED")
 	now := time.Now().UTC()
 	bodyCut := now.AddDate(0, 0, -180)
 	metaCut := now.AddDate(0, 0, -365)
+	t.Cleanup(func() {
+		_, _ = testDB.ExecContext(context.Background(),
+			`DELETE FROM t_request_body WHERE user_id = ?`, uid)
+	})
 
-	insertBody := func(id string, at time.Time) {
+	insertBody := func(id string, createdAt, expiresAt time.Time) {
 		if _, err := testDB.ExecContext(context.Background(),
-			`INSERT INTO t_request_body (request_id, body, created_at) VALUES (?,?,?)`,
-			id, "x", at); err != nil {
+			`INSERT INTO t_request_body
+			   (request_id, user_id, ciphertext, body_key_id, created_at, expires_at)
+			 VALUES (?,?,?, 'body-v1', ?, ?)`,
+			id, uid, []byte("x"), createdAt, expiresAt); err != nil {
 			t.Fatalf("F11-3: insert body: %v", err)
 		}
 	}
 	oldBody, edgeBody, keepBody := rid(), rid(), rid()
-	insertBody(oldBody, bodyCut.Add(-time.Hour))
-	insertBody(edgeBody, bodyCut.Add(time.Hour))
-	insertBody(keepBody, now.Add(-24*time.Hour))
+	insertBody(oldBody, bodyCut.Add(-time.Hour), now.Add(-time.Hour))
+	insertBody(edgeBody, bodyCut.Add(time.Hour), now.Add(time.Hour))
+	insertBody(keepBody, now.Add(-24*time.Hour), now.AddDate(0, 0, 156))
 
 	oldMeta, edgeMeta, keepMeta := rid(), rid(), rid()
 	insertUsage(t, oldMeta, uid, modelID, metaCut.Add(-time.Hour), "SUCCESS", 1)

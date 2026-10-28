@@ -197,6 +197,31 @@ func main() {
 		box = nil
 	}
 
+	// The request-body KEK is independent of the channel KEK. A missing key
+	// does not stop the process and does not affect requests: bodies are
+	// simply not stored and gw_log_body_dropped_total{reason="no_kek"} keeps
+	// the condition visible.
+	bodyBox, bodyErr := cryptobox.NewBodyFromBase64(os.Getenv(config.EnvLogBodyKEK))
+	if bodyErr != nil {
+		logger.Warn(rootCtx, "log body KEK unavailable; request bodies will not be stored: "+bodyErr.Error(),
+			obslog.Fields{Stage: "startup"})
+		bodyBox = nil
+	}
+	usageWriter.BodyBox = bodyBox
+	usageWriter.Metrics = rec
+	usageWriter.BodyMode = func() string {
+		if v, ok := store.String(config.KeyLogBodyMode); ok {
+			return v
+		}
+		return config.EnumMetaOnly
+	}
+	usageWriter.RetentionDays = func() int {
+		if v, ok := store.Int(config.KeyLogRetentionDays); ok && v > 0 {
+			return int(v)
+		}
+		return settle.DefaultBodyRetentionDays
+	}
+
 	dispatcher := dispatch.New(dispatch.Options{
 		Catalog:        deps.Catalog,
 		Tokens:         deps.Tokens,

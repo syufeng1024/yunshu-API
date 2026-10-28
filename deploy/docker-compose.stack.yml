@@ -30,6 +30,9 @@ x-app-env: &app-env
   REDIS_PASSWORD: ${REDIS_PASSWORD:-}
   SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET 缺失，请用 openssl rand -base64 32 生成后写入 deploy/.env.stack}
   CHANNEL_KEY_KEK: ${CHANNEL_KEY_KEK:-}
+  # 请求正文 KEK，独立于 CHANNEL_KEY_KEK。留空 = 正文不落库，请求不受影响；
+  # gatewayd 与 controld 必须同值，否则写入端与读取端互相解不开。
+  LOG_BODY_KEK: ${LOG_BODY_KEK:-}
   # 体验版设备指纹 HMAC 密钥；留空时 /api/console/trial/claim 返回 503。
   FP_HMAC_KEY: ${FP_HMAC_KEY:-}
   # 用量 CSV 导出：目录在容器 /tmp 下，令牌 1 小时失效，不需持久卷。

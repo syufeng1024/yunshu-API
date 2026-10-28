@@ -70,6 +70,14 @@ const (
 	KeyQuotaOverdraftWarnDays Key = "quota.overdraft_warn_days"
 )
 
+// EnvLogBodyKEK is the request-body envelope KEK (base64 of exactly 32
+// bytes). It is deliberately separate from CHANNEL_KEY_KEK: the two ciphertext
+// families use different AADs, so an upstream key envelope cannot be opened
+// as a request body or the reverse. An empty value disables body storage
+// without blocking startup; it is an environment variable, not a Key, so it
+// does not change KeyCount.
+const EnvLogBodyKEK = "LOG_BODY_KEK"
+
 // KeyCount is asserted against the metadata table and the t_config_item seed.
 const KeyCount = 45
 

@@ -61,13 +61,14 @@
 
 ## 进程环境变量（非 `t_config_item`）
 
-以下三个键是进程监听地址，不写入 `t_config_item`，不计入上面的 45 键。三进程共用 `GATEWAY_METRICS_TOKEN` 一个 Bearer token，隔离靠端口与网络策略。
+下表前三个键是进程监听地址，不写入 `t_config_item`，不计入上面的 45 键。三进程共用 `GATEWAY_METRICS_TOKEN` 一个 Bearer token，隔离靠端口与网络策略。`LOG_BODY_KEK` 是正文加密密钥，同样不进入 `t_config_item`：配置表对所有加载快照的进程可读，放进去等于把密钥发给每一个进程。
 
 | 环境变量 | 进程 | 默认值 | 说明 |
 | :--- | :--- | :--- | :--- |
 | `GATEWAY_METRICS_ADDR` | gatewayd | `:9090` | 数据面 metrics 监听；保留旧键名向后兼容 |
 | `CONTROL_METRICS_ADDR` | controld | `:9091` | 为空时回落 `:9091`，不再回落 `:9090` |
 | `JOBSD_METRICS_ADDR` | jobsd | `:9092` | 与 `/healthz`、`/readyz` 同端口 |
+| `LOG_BODY_KEK` | gatewayd、controld | 空 | `log.body_mode=opt_in` 时加密 `t_request_body.ciphertext` 的 KEK，base64 编码的 32 字节。独立于 `CHANNEL_KEY_KEK`：渠道密钥轮换不得使历史正文失效。为空或非法时进程照常启动，正文不落库（gatewayd 记 `gw_log_body_dropped_total{reason="no_kek"}`），读取端把已存正文一律按 404 处理并记 `gw_log_body_open_failed_total`；请求与账务不受影响。两进程必须配置同一值，否则写入端与读取端互相解不开 |
 
 ## 命名空间分布
 

@@ -15,8 +15,12 @@ const (
 	BodyRetentionDays = 180
 	MetaRetentionDays = 365
 	PurgeBatchSize    = 5000
-	PurgeInterval     = 200 * time.Millisecond
-	PurgeMaxBatches   = 100
+	// BodyPurgeBatchSize is the TDS §5.7 body batch (10,000 rows/run) and is
+	// deliberately larger than PurgeBatchSize: body rows are short-lived and
+	// the expires_at index makes a bigger batch cheap.
+	BodyPurgeBatchSize = 10000
+	PurgeInterval      = 200 * time.Millisecond
+	PurgeMaxBatches    = 100
 )
 
 // PurgeLog deletes log rows with batched DELETE statements.
@@ -81,7 +85,7 @@ func (p *PurgeLog) Run(ctx context.Context) (PurgeResult, error) {
 	}
 	out.BodyTable = exists
 	if exists {
-		n, more, batches, err := p.purgeCreated(ctx, "t_request_body", bodyCutoff)
+		n, more, batches, err := p.purgeExpiredBodies(ctx, now, bodyCutoff)
 		if err != nil {
 			return out, err
 		}
@@ -142,21 +146,39 @@ func (p *PurgeLog) purgeCreated(ctx context.Context, table string, cutoff time.T
 	// Table names are compile-time constants from this package, never input.
 	q := fmt.Sprintf(
 		`DELETE FROM %s WHERE created_at < ? ORDER BY created_at LIMIT ?`, table)
-	return p.purge(ctx, q, cutoff)
+	return p.purge(ctx, q, p.BatchSize, cutoff.UTC())
+}
+
+// purgeExpiredBodies deletes request bodies by their own expiry, not by the
+// metadata cutoff. The created_at condition is the fallback guard: an
+// expires_at written by a node with a skewed clock must not keep the row
+// forever. The expires_at index also serves the ORDER BY, so the batch stays
+// a range scan.
+func (p *PurgeLog) purgeExpiredBodies(ctx context.Context, now, fallbackCutoff time.Time) (int, bool, int, error) {
+	return p.purge(ctx,
+		`DELETE FROM t_request_body WHERE expires_at < ? AND created_at < ? ORDER BY expires_at LIMIT ?`,
+		BodyPurgeBatchSize, now.UTC(), fallbackCutoff.UTC())
 }
 
 func (p *PurgeLog) purgeExpiredIdem(ctx context.Context, now time.Time) (int, bool, int, error) {
 	return p.purge(ctx,
-		`DELETE FROM t_idempotency_record WHERE expires_at < ? ORDER BY expires_at LIMIT ?`, now)
+		`DELETE FROM t_idempotency_record WHERE expires_at < ? ORDER BY expires_at LIMIT ?`,
+		p.BatchSize, now.UTC())
 }
 
-func (p *PurgeLog) purge(ctx context.Context, q string, cutoff time.Time) (int, bool, int, error) {
+func (p *PurgeLog) purge(ctx context.Context, q string, batch int, args ...any) (int, bool, int, error) {
+	if batch <= 0 {
+		batch = PurgeBatchSize
+	}
 	total, batches := 0, 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return total, false, batches, err
 		}
-		res, err := p.DB.ExecContext(ctx, q, cutoff.UTC(), p.BatchSize)
+		execArgs := make([]any, 0, len(args)+1)
+		execArgs = append(execArgs, args...)
+		execArgs = append(execArgs, batch)
+		res, err := p.DB.ExecContext(ctx, q, execArgs...)
 		if err != nil {
 			return total, false, batches, fmt.Errorf("jobs: purge batch: %w", err)
 		}
@@ -166,7 +188,7 @@ func (p *PurgeLog) purge(ctx context.Context, q string, cutoff time.Time) (int, 
 		}
 		total += int(n)
 		batches++
-		if n < int64(p.BatchSize) {
+		if n < int64(batch) {
 			return total, false, batches, nil
 		}
 		if batches >= p.MaxBatches {

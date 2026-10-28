@@ -151,6 +151,9 @@ func (d *Dispatcher) emitUsage(c *gw.Ctx, out outcome, started time.Time) {
 		UserAgent:        userAgent,
 		ClientAborted:    out.clientAborted,
 		CreatedAt:        createdAt,
+		// The body is handed over by reference; WriteUsage moves it to its own
+		// queue and the async flush seals it. No cryptobox call happens here.
+		RawBody: c.RawBody,
 	})
 
 	if d.opts.MetricSink != nil {

@@ -10,9 +10,11 @@
 | T02 实际建表（0001–0006） | 47 | 0002 组按任务卡另含 `t_config_publish`（TDS §1.8 `2866` 行定义） |
 | T03 实际建表（0012 / 0014 / 0015 / 0016 / 0017） | 7 | `t_content_policy_hit`、`t_arrears`、`t_ticket`、`t_ticket_reply`、`t_review_task`、`t_upstream_bill`、`t_channel_dedicated_user` |
 | T09 实际建表（0021） | 2 | `t_job_lock`、`t_reconcile_diff` |
-| 当前业务表总量 | 56 | 47 + 7 + 2；0010 / 0011 / 0013 / 0020 / 0023 只改列，0017 另建 1 表（已计入 7） |
-| 当前 `information_schema.tables` | 57 | 56 张业务表 + `schema_migrations` |
-| 当前迁移条数 | 21 | 0001–0006（6）、0009（1）、0010–0020（11）、0021（1）、0023（1）、0024（1）；0007 / 0008 空缺、0022 为 D-20 预留，均不计 |
+| T24 段 2 实际建表（0025） | 2 | `t_balance_adjust`、`t_announcement_model` |
+| T25 实际建表（0022） | 1 | `t_request_body` |
+| 当前业务表总量 | 59 | 47 + 7 + 2 + 2 + 1；0010 / 0011 / 0013 / 0020 / 0023 / 0024 只改列或加索引，0017 另建 1 表（已计入 7） |
+| 当前 `information_schema.tables` | 60 | 59 张业务表 + `schema_migrations` |
+| 当前迁移条数 | 23 | 0001–0006（6）、0009（1）、0010–0020（11）、0021（1）、0022（1）、0023（1）、0024（1）、0025（1）；0007 / 0008 永久空缺，不计 |
 
 任务卡 §1 / §7 A2 写「46 张」，与卡内 §4 逐表清单（8 + 11 + 26 + 2 = 47）相差 1；差的是 `t_config_publish`。本表按逐表清单登记，未删表凑数。`information_schema` 计数含迁移记录表，因此比业务表多 1。
 
@@ -23,6 +25,8 @@
 | T02 | `t_user`、`t_verify_record`、`t_device_fingerprint`、`t_verification_code`、`t_api_key`、`t_api_key_model`、`t_api_key_ip_rule`、`t_api_key_audit`、`t_protocol`、`t_channel`、`t_model`、`t_model_alias`、`t_model_capability`、`t_route`、`t_price_rule`、`t_plan`、`t_config_item`、`t_config_runtime`、`t_config_publish`、`t_price_group`、`t_price_group_scope`、`t_credit_account`、`t_credit_batch`、`t_ledger_entry`、`t_prehold_hold`、`t_settle_task`、`t_recharge_order`、`t_refund_order`、`t_redeem_batch`、`t_redeem_code`、`t_invoice_apply`、`t_quota_apply`、`t_usage_record`、`t_upstream_attempt`、`t_idempotency_record`、`t_rate_limit_policy`、`t_user_daily_quota`、`t_metric_minute`、`t_metric_daily`、`t_metric_model_daily`、`t_metric_channel_health`、`t_admin_audit_log`、`t_risk_rule`、`t_risk_hit_log`、`t_announcement`、`t_announcement_read`、`t_notification` | 47 |
 | T03 | `t_content_policy_hit`、`t_arrears`、`t_ticket`、`t_ticket_reply`、`t_review_task`、`t_upstream_bill`、`t_channel_dedicated_user` | 7 |
 | T09 | `t_job_lock`、`t_reconcile_diff` | 2 |
+| T24 段 2 | `t_balance_adjust`、`t_announcement_model` | 2 |
+| T25 | `t_request_body` | 1 |
 
 ## 编号占用
 
@@ -49,8 +53,10 @@
 | 0019 | 本地联调种子（仅 `ENV=local`） | 已落盘（T03），其他环境跳过并打 WARN |
 | 0020 | 幂等租约 Expand：`t_idempotency_record` 加 `fence_token` / `lease_expires_at`（只加不删） | 已落盘（T06 遗留 #2，方案 A） |
 | 0021 | `t_job_lock` / `t_reconcile_diff` 建表 | 已落盘（T09） |
+| 0022 | `t_request_body` 建表 | 已落盘（T25） |
 | 0023 | `t_admin_audit_log.result` 放宽到 `varchar(24)` | 已落盘（E-28） |
 | 0024 | `t_admin_audit_log` 补 `idx_aal_created (created_at, id)` 与 `idx_aal_action_created (action, created_at, id)` | 已落盘（T11 第二段） |
+| 0025 | `t_balance_adjust` / `t_announcement_model` 建表 | 已落盘（T24 段 2） |
 
 > **需回写 TDS §8.6**：0018 / 0019 / 0020 / 0021 是 TDS §8.6 裁定表之外的新增占用，由交付总监统一改源文档；实现方未改 TDS。
 
@@ -116,6 +122,9 @@
 | `t_channel_dedicated_user` | 0017 | 配置 | `uk_cdu_channel_user (channel_id, user_id)` |
 | `t_job_lock` | 0021 | 运维 | `uk_jl_job (job_name)` |
 | `t_reconcile_diff` | 0021 | 对账 | `uk_rd_key (diff_key)`；`diff_key = sha256(biz_date|diff_type|subject)`；`idx_rd_date_type (biz_date, diff_type, status)` |
+| `t_request_body` | 0022 | 计量 | `uk_rb_request_user (request_id, user_id)`；`ciphertext mediumblob` 存 `v1:` 信封密文，`body_key_id` 由 `LOG_BODY_KEK` 独立派生；`idx_rb_expire (expires_at)` 服务 10,000 行/批的保留期清理，`idx_rb_user_created (user_id, created_at)` 服务按用户审计 |
+| `t_balance_adjust` | 0025 | 资金 | `uk_ba_user_pending (pending_user_id)`，生成列在 `state='PENDING'` 时等于 `user_id`，其余为 NULL；`chk_ba_amount`、`chk_ba_direction` |
+| `t_announcement_model` | 0025 | 运营 | `PRIMARY KEY (announcement_id, model_id)`、`idx_am_model (model_id)` |
 
 ## 持有字段的迁移
 
