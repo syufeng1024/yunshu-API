@@ -127,6 +127,14 @@ func (e *OutstandingTicketsError) Error() string {
 	return "存在未结工单，无法注销：" + strings.Join(e.TicketNos, "、")
 }
 
+// OutstandingTicketNos exposes the blocking numbers to callers that must not
+// import this package (the auth cancel handler accepts a function seam). It
+// returns the same slice the error string lists, so the HTTP message and the
+// machine-readable accessor cannot drift.
+func (e *OutstandingTicketsError) OutstandingTicketNos() []string {
+	return e.TicketNos
+}
+
 // OutstandingTickets lists the account's OPEN/RESPONDED ticket numbers in
 // creation order. CLOSED tickets do not block cancellation (§10.3: "进行中的
 // 工单" = no OPEN or RESPONDED row).

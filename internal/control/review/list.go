@@ -142,11 +142,12 @@ func displayName(nickname string, email sql.NullString, uid int64) string {
 
 // bizRow is the common shape extracted from each source table.
 type bizRow struct {
-	No    string
-	Micro *int64
-	Fen   *int64
-	Text  string
-	State string
+	No        string
+	Micro     *int64
+	Fen       *int64
+	Text      string
+	State     string
+	Direction string
 }
 
 // enrichOne loads the business row for a single queue row.
@@ -220,6 +221,10 @@ func (s *Service) enrich(ctx context.Context, tasks []reviewTask, names map[int6
 		item.BizNo = row.No
 		item.AmountMicro = row.Micro
 		item.AmountFen = row.Fen
+		if row.Direction != "" {
+			direction := row.Direction
+			item.Direction = &direction
+		}
 		item.Summary = truncateRunes(row.Text, summaryMax)
 		item.BusinessState = row.State
 		items = append(items, item)
@@ -238,7 +243,7 @@ func tableFor(bizType string) string {
 	case BizRedeemBatch:
 		return "t_redeem_batch"
 	case BizBalanceAdjust:
-		return "t_admin_audit_log"
+		return "t_balance_adjust"
 	default:
 		return bizType
 	}
@@ -270,8 +275,8 @@ func (s *Service) loadBizRows(ctx context.Context, bizType string, ids []int64) 
 		query = `SELECT id, batch_name, face_value_fen, quantity
 		           FROM t_redeem_batch WHERE id IN (` + in + `)`
 	case BizBalanceAdjust:
-		query = `SELECT id, action, reason, result
-		           FROM t_admin_audit_log WHERE id IN (` + in + `)`
+		query = `SELECT id, direction, amount_micro, reason, state
+		           FROM t_balance_adjust WHERE id IN (` + in + `)`
 	default:
 		return out, nil
 	}
@@ -318,16 +323,17 @@ func (s *Service) loadBizRows(ctx context.Context, bizType string, ids []int64) 
 				No: fmt.Sprintf("BATCH#%d", id), Fen: &total, Text: name,
 			}
 		case BizBalanceAdjust:
-			var action, result string
-			var reason sql.NullString
-			if err := rows.Scan(&id, &action, &reason, &result); err != nil {
+			var direction, state, reason string
+			var amount int64
+			if err := rows.Scan(&id, &direction, &amount, &reason, &state); err != nil {
 				return nil, err
 			}
-			text := action
-			if reason.Valid && reason.String != "" {
-				text = action + "：" + reason.String
+			// Summary is the applicant's reason; direction is a separate field so
+			// the console never has to split a localized string.
+			out[id] = bizRow{
+				No: fmt.Sprintf("ADJ#%d", id), Micro: &amount,
+				Text: reason, State: state, Direction: direction,
 			}
-			out[id] = bizRow{No: fmt.Sprintf("AUDIT#%d", id), Text: text, State: result}
 		}
 	}
 	return out, rows.Err()

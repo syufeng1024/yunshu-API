@@ -58,9 +58,28 @@ type creditBalanceView struct {
 	LastSettledAt        *time.Time `json:"last_settled_at,omitempty"`
 }
 
+// balanceAdjustSummary is the operator's view of the most recent
+// t_balance_adjust row for a user. It is a read-only projection: writes go
+// through POST /api/admin/users/{id}/balance-adjust in the review package.
+type balanceAdjustSummary struct {
+	ID          int64      `json:"id"`
+	Direction   string     `json:"direction"`
+	AmountMicro int64      `json:"amount_micro"`
+	Reason      string     `json:"reason"`
+	State       string     `json:"state"`
+	ApplicantID int64      `json:"applicant_id"`
+	DecidedBy   *int64     `json:"decided_by,omitempty"`
+	DecidedAt   *time.Time `json:"decided_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
 type userDetailView struct {
 	User    userView          `json:"user"`
 	Balance creditBalanceView `json:"balance"`
+	// LatestBalanceAdjust is null when the user has never had one. The console
+	// renders the state so an operator does not submit a second document while
+	// one is still PENDING.
+	LatestBalanceAdjust *balanceAdjustSummary `json:"latest_balance_adjust"`
 }
 
 type userListResponse struct {
@@ -206,7 +225,15 @@ func (s *Service) GetUser(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
 		return
 	}
-	_ = mw.WriteJSON(w, http.StatusOK, userDetailView{User: user, Balance: balance})
+	latest, err := loadLatestBalanceAdjust(r.Context(), s.DB, id)
+	if err != nil {
+		s.logError(r.Context(), "ops_user_latest_adjust_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
+	_ = mw.WriteJSON(w, http.StatusOK, userDetailView{
+		User: user, Balance: balance, LatestBalanceAdjust: latest,
+	})
 }
 
 // DisableUser implements POST /api/admin/users/{id}/disable.
@@ -439,6 +466,38 @@ func (s *Service) loadUserTx(ctx context.Context, tx *sql.Tx, id int64, forUpdat
 		return userView{}, apierr.New(apierr.CodeInternalError).WithCause(err)
 	}
 	return v, nil
+}
+
+// loadLatestBalanceAdjust reads the newest document through idx_ba_user_created
+// (user_id, created_at). It returns nil, not a zero row, when none exists.
+func loadLatestBalanceAdjust(ctx context.Context, q priceDB, userID int64) (*balanceAdjustSummary, error) {
+	var (
+		v         balanceAdjustSummary
+		decidedBy sql.NullInt64
+		decidedAt sql.NullTime
+	)
+	err := q.QueryRowContext(ctx, `
+		SELECT id, direction, amount_micro, reason, state, applicant_id,
+		       decided_by, decided_at, created_at
+		  FROM t_balance_adjust
+		 WHERE user_id = ?
+		 ORDER BY created_at DESC, id DESC
+		 LIMIT 1`, userID).
+		Scan(&v.ID, &v.Direction, &v.AmountMicro, &v.Reason, &v.State,
+			&v.ApplicantID, &decidedBy, &decidedAt, &v.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if decidedBy.Valid {
+		id := decidedBy.Int64
+		v.DecidedBy = &id
+	}
+	v.DecidedAt = nullableTime(decidedAt)
+	v.CreatedAt = v.CreatedAt.UTC()
+	return &v, nil
 }
 
 func loadBalance(ctx context.Context, q priceDB, userID int64) (creditBalanceView, error) {

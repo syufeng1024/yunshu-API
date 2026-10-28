@@ -212,6 +212,23 @@ describe('PricingPage', () => {
     expect(within(banner).getAllByRole('button', { name: '跳到该行' })).toHaveLength(2)
   })
 
+  it('PricingPage：勾选清除后 body 不含该字段且 clear_fields 含该键', async () => {
+    installMock([
+      priceRule({
+        cache_hit_ratio_bp: 8500,
+        effective_to: '2026-11-05T00:00:00Z',
+      }),
+    ])
+    const user = await openPriceEditor()
+    await user.click(screen.getByLabelText('清除缓存命中倍率'))
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalled())
+    const body = (mockedPatch.mock.calls.at(-1)?.[1] ?? {}) as Record<string, unknown>
+    expect(body).not.toHaveProperty('cache_hit_ratio_bp')
+    expect(body.clear_fields).toContain('cache_hit_ratio_bp')
+  })
+
   it('PricingPage：internal 分组显示不计费', async () => {
     installMock()
     const user = userEvent.setup()

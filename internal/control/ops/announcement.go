@@ -42,9 +42,13 @@ type announcementView struct {
 	EffectiveFrom time.Time  `json:"effective_from"`
 	EffectiveTo   *time.Time `json:"effective_to,omitempty"`
 	State         string     `json:"state"`
-	CreatedBy     int64      `json:"created_by"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	// ModelIDs comes from t_announcement_model. It is always an array: an
+	// announcement without model associations returns [] rather than null so
+	// the console can distinguish "no association" from "field missing".
+	ModelIDs  []int64   `json:"model_ids"`
+	CreatedBy int64     `json:"created_by"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type announcementListResponse struct {
@@ -59,16 +63,17 @@ type announcementDetailResponse struct {
 }
 
 type announcementWriteRequest struct {
-	Title        *string    `json:"title"`
-	Content      *string    `json:"content"`
-	AnnType      *string    `json:"ann_type"`
-	PositionMask *int64     `json:"position_mask"`
-	Pinned       *bool      `json:"pinned"`
-	PublishAt    *time.Time `json:"publish_at"`
-	EffectiveTo  *time.Time `json:"effective_to"`
-	// ModelIDs only narrows the F16-4 promotion conflict check. t_announcement
-	// has no model column, so it is not persisted; an empty list means "check
-	// every model".
+	Title         *string    `json:"title"`
+	Content       *string    `json:"content"`
+	AnnType       *string    `json:"ann_type"`
+	PositionMask  *int64     `json:"position_mask"`
+	Pinned        *bool      `json:"pinned"`
+	PublishAt     *time.Time `json:"publish_at"`
+	EffectiveFrom *time.Time `json:"effective_from"`
+	EffectiveTo   *time.Time `json:"effective_to"`
+	// ModelIDs is persisted in t_announcement_model. It also narrows the F16-4
+	// promotion conflict check; an empty array means "no association" (the
+	// conflict check then covers every model).
 	ModelIDs []int64 `json:"model_ids"`
 }
 
@@ -161,6 +166,11 @@ func (s *Service) ListAnnouncements(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
 		return
 	}
+	if err := attachAnnouncementModels(r.Context(), s.DB, items); err != nil {
+		s.logError(r.Context(), "ops_announcement_models_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
 	_ = mw.WriteJSON(w, http.StatusOK, announcementListResponse{
 		Items: items, Page: page.Number, PageSize: page.Size, Total: total,
 	})
@@ -173,6 +183,12 @@ func (s *Service) CreateAnnouncement(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apiErr)
 		return
 	}
+	modelIDs, apiErr := s.normalizeAnnouncementModelIDs(r.Context(), s.DB, req.ModelIDs)
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	req.ModelIDs = modelIDs
 	in, state, apiErr := s.validateAnnouncement(r.Context(), &req, nil)
 	if apiErr != nil {
 		mw.WriteError(w, r, apiErr)
@@ -210,6 +226,10 @@ func (s *Service) CreateAnnouncement(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.logError(ctx, "ops_announcement_id_failed: "+err.Error())
 		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
+	if apiErr := replaceAnnouncementModels(ctx, tx, id, modelIDs); apiErr != nil {
+		mw.WriteError(w, r, apiErr)
 		return
 	}
 	after, apiErr := loadAnnouncementTx(ctx, tx, id, false)
@@ -278,6 +298,26 @@ func (s *Service) UpdateAnnouncement(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("公告当前状态为 %s，已发布/已下线内容不可编辑", before.State)))
 		return
 	}
+	replaceModels := req.ModelIDs != nil
+	if replaceModels {
+		modelIDs, apiErr := s.normalizeAnnouncementModelIDs(ctx, tx, req.ModelIDs)
+		if apiErr != nil {
+			mw.WriteError(w, r, apiErr)
+			return
+		}
+		req.ModelIDs = modelIDs
+	} else {
+		// An update that does not mention model_ids keeps the existing
+		// associations. The promotion conflict check still needs them, so load
+		// them without replacing the rows.
+		existing, err := loadAnnouncementModelIDs(ctx, tx, id)
+		if err != nil {
+			s.logError(ctx, "ops_announcement_models_load_failed: "+err.Error())
+			mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+			return
+		}
+		req.ModelIDs = existing
+	}
 	in, state, apiErr := s.validateAnnouncement(ctx, &req, &before)
 	if apiErr != nil {
 		mw.WriteError(w, r, apiErr)
@@ -293,6 +333,12 @@ func (s *Service) UpdateAnnouncement(w http.ResponseWriter, r *http.Request) {
 		s.logError(ctx, "ops_announcement_update_failed: "+err.Error())
 		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
 		return
+	}
+	if replaceModels {
+		if apiErr := replaceAnnouncementModels(ctx, tx, id, req.ModelIDs); apiErr != nil {
+			mw.WriteError(w, r, apiErr)
+			return
+		}
 	}
 	after, apiErr := loadAnnouncementTx(ctx, tx, id, false)
 	if apiErr != nil {
@@ -358,7 +404,13 @@ func (s *Service) PublishAnnouncement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if before.AnnType == annTypePromotion {
-		if apiErr := s.checkPromotionConflict(ctx, tx, nil, now); apiErr != nil {
+		modelIDs, err := loadAnnouncementModelIDs(ctx, tx, id)
+		if err != nil {
+			s.logError(ctx, "ops_announcement_models_load_failed: "+err.Error())
+			mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+			return
+		}
+		if apiErr := s.checkPromotionConflict(ctx, tx, modelIDs, now); apiErr != nil {
 			mw.WriteError(w, r, apiErr)
 			return
 		}
@@ -384,6 +436,72 @@ func (s *Service) PublishAnnouncement(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.insertAudit(ctx, tx, r, "ANNOUNCEMENT", "PUBLISH", "t_announcement", id,
+		announcementAuditView(before), announcementAuditView(after), ""); err != nil {
+		s.logError(ctx, "ops_announcement_audit_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		s.logError(ctx, "ops_announcement_commit_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
+	committed = true
+	_ = mw.WriteJSON(w, http.StatusOK, announcementDetailResponse{Announcement: after})
+}
+
+// OfflineAnnouncement implements POST /api/admin/announcements/{id}/offline.
+//
+// OFFLINE is a terminal display state, not a delete: the row and its audit trail
+// stay readable. DRAFT / SCHEDULED / PUBLISHED may all be taken offline; a
+// second call answers 409 instead of silently succeeding, because "already
+// offline" is not the same operator intent as "take it offline now".
+func (s *Service) OfflineAnnouncement(w http.ResponseWriter, r *http.Request) {
+	id, apiErr := pathID(r, "id")
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	ctx := r.Context()
+	now := s.now()
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		s.logError(ctx, "ops_announcement_offline_begin_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback()
+		}
+	}()
+
+	before, apiErr := loadAnnouncementTx(ctx, tx, id, true)
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	if before.State == annOffline {
+		mw.WriteError(w, r, apierr.Newf(apierr.CodeResourceStateConflict,
+			"公告当前状态为 OFFLINE，无需重复下线"))
+		return
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE t_announcement
+		   SET state = ?, updated_at = ?
+		 WHERE id = ? AND deleted_at IS NULL`,
+		annOffline, now, id); err != nil {
+		s.logError(ctx, "ops_announcement_offline_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
+	after, apiErr := loadAnnouncementTx(ctx, tx, id, false)
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	if err := s.insertAudit(ctx, tx, r, "ANNOUNCEMENT", "OFFLINE", "t_announcement", id,
 		announcementAuditView(before), announcementAuditView(after), ""); err != nil {
 		s.logError(ctx, "ops_announcement_audit_failed: "+err.Error())
 		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
@@ -550,6 +668,19 @@ func (s *Service) validateAnnouncement(ctx context.Context, req *announcementWri
 	} else if cur == nil {
 		in.effectiveFrom = now
 	}
+	// effective_from is the visibility start. When publish_at is also supplied,
+	// a notice cannot become visible before it is published: publish_at is the
+	// lower bound and a smaller effective_from is a body error naming the field.
+	if req.EffectiveFrom != nil {
+		from := req.EffectiveFrom.UTC()
+		if from.IsZero() {
+			return in, "", mw.InvalidField("effective_from")
+		}
+		if req.PublishAt != nil && from.Before(in.effectiveFrom) {
+			return in, "", mw.InvalidField("effective_from")
+		}
+		in.effectiveFrom = from
+	}
 	if in.effectiveTo != nil {
 		to := in.effectiveTo.UTC()
 		in.effectiveTo = &to
@@ -637,7 +768,7 @@ func (s *Service) checkPromotionConflict(ctx context.Context, q priceDB, modelID
 func hasAnnouncementPatch(req *announcementWriteRequest) bool {
 	return req.Title != nil || req.Content != nil || req.AnnType != nil ||
 		req.PositionMask != nil || req.Pinned != nil || req.PublishAt != nil ||
-		req.EffectiveTo != nil
+		req.EffectiveFrom != nil || req.EffectiveTo != nil || req.ModelIDs != nil
 }
 
 // ---------------------------------------------------------------------------
@@ -659,6 +790,7 @@ func scanAnnouncement(row rowScanner) (announcementView, error) {
 	}
 	v.EffectiveFrom = effectiveFrom.UTC()
 	v.EffectiveTo = nullableTime(effectiveTo)
+	v.ModelIDs = []int64{}
 	v.CreatedAt = createdAt.UTC()
 	v.UpdatedAt = updatedAt.UTC()
 	return v, nil
@@ -679,7 +811,130 @@ func loadAnnouncementTx(ctx context.Context, q priceDB, id int64, forUpdate bool
 	if err != nil {
 		return announcementView{}, apierr.New(apierr.CodeInternalError).WithCause(err)
 	}
-	return v, nil
+	items := []announcementView{v}
+	if err := attachAnnouncementModels(ctx, q, items); err != nil {
+		return announcementView{}, apierr.New(apierr.CodeInternalError).WithCause(err)
+	}
+	return items[0], nil
+}
+
+// attachAnnouncementModels fills model_ids for a whole page with one query.
+// The alternative (one SELECT per announcement) is the N+1 the T24 card names.
+func attachAnnouncementModels(ctx context.Context, q priceDB, items []announcementView) error {
+	for i := range items {
+		items[i].ModelIDs = []int64{}
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(items))
+	args := make([]any, 0, len(items))
+	for _, item := range items {
+		ids = append(ids, item.ID)
+		args = append(args, item.ID)
+	}
+	rows, err := q.QueryContext(ctx, `
+		SELECT announcement_id, model_id
+		  FROM t_announcement_model
+		 WHERE announcement_id IN (`+placeholders(len(ids))+`)
+		 ORDER BY announcement_id, model_id`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	byAnnouncement := make(map[int64][]int64, len(ids))
+	for rows.Next() {
+		var announcementID, modelID int64
+		if err := rows.Scan(&announcementID, &modelID); err != nil {
+			return err
+		}
+		byAnnouncement[announcementID] = append(byAnnouncement[announcementID], modelID)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range items {
+		if models, ok := byAnnouncement[items[i].ID]; ok {
+			items[i].ModelIDs = models
+		}
+	}
+	return nil
+}
+
+func loadAnnouncementModelIDs(ctx context.Context, q priceDB, id int64) ([]int64, error) {
+	rows, err := q.QueryContext(ctx, `
+		SELECT model_id FROM t_announcement_model
+		 WHERE announcement_id = ? ORDER BY model_id`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]int64, 0, 4)
+	for rows.Next() {
+		var modelID int64
+		if err := rows.Scan(&modelID); err != nil {
+			return nil, err
+		}
+		out = append(out, modelID)
+	}
+	return out, rows.Err()
+}
+
+// normalizeAnnouncementModelIDs deduplicates and verifies every id against
+// t_model. A dangling association would make the read endpoint return a model
+// id no console can resolve, so it is a body error rather than a silent skip.
+func (s *Service) normalizeAnnouncementModelIDs(ctx context.Context, q priceDB, raw []int64) ([]int64, *apierr.APIError) {
+	if raw == nil {
+		return nil, nil
+	}
+	if len(raw) > 100 {
+		return nil, mw.InvalidField("model_ids")
+	}
+	out := make([]int64, 0, len(raw))
+	seen := make(map[int64]bool, len(raw))
+	for _, id := range raw {
+		if id <= 0 {
+			return nil, mw.InvalidField("model_ids")
+		}
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	args := make([]any, len(out))
+	for i, id := range out {
+		args[i] = id
+	}
+	var found int
+	if err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM t_model
+		  WHERE id IN (`+placeholders(len(out))+`) AND deleted_at IS NULL`,
+		args...).Scan(&found); err != nil {
+		return nil, apierr.New(apierr.CodeInternalError).WithCause(err)
+	}
+	if found != len(out) {
+		return nil, mw.InvalidField("model_ids")
+	}
+	return out, nil
+}
+
+func replaceAnnouncementModels(ctx context.Context, tx *sql.Tx, id int64, modelIDs []int64) *apierr.APIError {
+	if _, err := tx.ExecContext(ctx,
+		`DELETE FROM t_announcement_model WHERE announcement_id = ?`, id); err != nil {
+		return apierr.New(apierr.CodeInternalError).WithCause(err)
+	}
+	for _, modelID := range modelIDs {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO t_announcement_model (announcement_id, model_id)
+			VALUES (?,?)`, id, modelID); err != nil {
+			return apierr.New(apierr.CodeInternalError).WithCause(err)
+		}
+	}
+	return nil
 }
 
 func announcementAuditView(v announcementView) map[string]any {
@@ -691,5 +946,6 @@ func announcementAuditView(v announcementView) map[string]any {
 		"effective_from": v.EffectiveFrom,
 		"effective_to":   v.EffectiveTo,
 		"state":          v.State,
+		"model_ids":      v.ModelIDs,
 	}
 }

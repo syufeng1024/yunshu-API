@@ -31,6 +31,12 @@ type Service struct {
 	Audit    *audit.Writer
 	Logger   *obslog.Logger
 	Now      clock.Clock
+
+	// CancellableCheck is ticket.CheckAccountCancellable. It is a function seam
+	// rather than a *ticket.Service field so the auth package does not import
+	// the ticket console; the error's OutstandingTicketNos method is the only
+	// shape this package relies on.
+	CancellableCheck func(ctx context.Context, uid int64) error
 }
 
 func (s *Service) now() clock.Clock {

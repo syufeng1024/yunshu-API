@@ -12,6 +12,7 @@ import type {
   AdminPriceRule,
   GroupKeySync,
   ModelType,
+  PriceClearField,
   PriceGroup,
   PriceWriteInput,
 } from '@/api/admin'
@@ -77,6 +78,23 @@ interface PriceFormState {
   effectiveTo: string
   enabled: boolean
   confirmNoCost: boolean
+  /** Optional columns the operator explicitly wants set to NULL. */
+  clearFields: PriceClearField[]
+}
+
+const LONG_CTX_CLEAR_FIELDS: PriceClearField[] = [
+  'long_ctx_threshold_tokens',
+  'long_ctx_in_price_micro_per_k',
+  'long_ctx_out_price_micro_per_k',
+]
+
+const CLEAR_FIELD_BY_FORM_KEY: Partial<Record<keyof PriceFormState, PriceClearField>> = {
+  cacheHit: 'cache_hit_ratio_bp',
+  cacheWrite: 'cache_write_ratio_bp',
+  costIn: 'cost_in_micro_per_k',
+  costOut: 'cost_out_micro_per_k',
+  costCall: 'cost_per_call_micro',
+  effectiveTo: 'effective_to',
 }
 
 interface ParsedNumber {
@@ -141,6 +159,7 @@ function emptyForm(): PriceFormState {
     effectiveTo: '',
     enabled: true,
     confirmNoCost: false,
+    clearFields: [],
   }
 }
 
@@ -164,6 +183,7 @@ function formFromRule(rule: AdminPriceRule): PriceFormState {
     effectiveTo: rule.effective_to ?? '',
     enabled: rule.enabled,
     confirmNoCost: false,
+    clearFields: [],
   }
 }
 
@@ -330,18 +350,34 @@ function validatePriceForm(
     effective_from: effectiveFrom.toISOString(),
     enabled: form.enabled,
   }
+  const cleared = new Set(form.clearFields)
   if (creating && modelId !== null) payload.model_id = modelId
-  if (cacheHit.value !== null) payload.cache_hit_ratio_bp = cacheHit.value
-  if (cacheWrite.value !== null) payload.cache_write_ratio_bp = cacheWrite.value
-  if (costIn.value !== null) payload.cost_in_micro_per_k = costIn.value
-  if (costOut.value !== null) payload.cost_out_micro_per_k = costOut.value
-  if (costCall.value !== null) payload.cost_per_call_micro = costCall.value
-  if (longFilled === 3) {
+  // A cleared field must be absent from the body; it travels in clear_fields
+  // instead. Sending both is a backend 400.
+  if (!cleared.has('cache_hit_ratio_bp') && cacheHit.value !== null) {
+    payload.cache_hit_ratio_bp = cacheHit.value
+  }
+  if (!cleared.has('cache_write_ratio_bp') && cacheWrite.value !== null) {
+    payload.cache_write_ratio_bp = cacheWrite.value
+  }
+  if (!cleared.has('cost_in_micro_per_k') && costIn.value !== null) {
+    payload.cost_in_micro_per_k = costIn.value
+  }
+  if (!cleared.has('cost_out_micro_per_k') && costOut.value !== null) {
+    payload.cost_out_micro_per_k = costOut.value
+  }
+  if (!cleared.has('cost_per_call_micro') && costCall.value !== null) {
+    payload.cost_per_call_micro = costCall.value
+  }
+  if (longFilled === 3 && !cleared.has('long_ctx_threshold_tokens')) {
     payload.long_ctx_threshold_tokens = longThreshold.value
     payload.long_ctx_in_price_micro_per_k = longIn.value
     payload.long_ctx_out_price_micro_per_k = longOut.value
   }
-  if (effectiveTo) payload.effective_to = effectiveTo.toISOString()
+  if (!cleared.has('effective_to') && effectiveTo) {
+    payload.effective_to = effectiveTo.toISOString()
+  }
+  if (cleared.size > 0) payload.clear_fields = [...cleared]
   if (missingCost && form.confirmNoCost) payload.confirm_no_cost = true
 
   return { errors, payload }
@@ -377,6 +413,28 @@ function CheckboxField({
         {label}
         {description ? <span className="block text-xs text-ink-muted">{description}</span> : null}
       </span>
+    </label>
+  )
+}
+
+function ClearToggle({
+  checked,
+  onChange,
+  label = '清除该字段',
+}: {
+  checked: boolean
+  onChange: (checked: boolean) => void
+  label?: string
+}) {
+  return (
+    <label className="flex items-center gap-1.5 text-xs text-ink-secondary">
+      <input
+        type="checkbox"
+        className="h-3.5 w-3.5 rounded border-border-strong text-danger focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      {label}
     </label>
   )
 }
@@ -489,11 +547,83 @@ export default function AdminPricingPage() {
   }
 
   const updateField = <K extends keyof PriceFormState>(key: K, value: PriceFormState[K]) => {
-    setForm((current) => ({ ...current, [key]: value }))
+    setForm((current) => {
+      const next: PriceFormState = { ...current, [key]: value }
+      // Typing into a field un-clears it: the body must never carry a value and
+      // the same field in clear_fields (the backend answers 400).
+      const clearField = CLEAR_FIELD_BY_FORM_KEY[key]
+      if (clearField) {
+        next.clearFields = next.clearFields.filter((item) => item !== clearField)
+      }
+      if (key === 'longThreshold' || key === 'longIn' || key === 'longOut') {
+        next.clearFields = next.clearFields.filter(
+          (item) => !LONG_CTX_CLEAR_FIELDS.includes(item),
+        )
+      }
+      return next
+    })
     setErrors((current) => {
       if (!current[key]) return current
       const next = { ...current }
       delete next[key]
+      return next
+    })
+  }
+
+  const isCleared = (field: PriceClearField) => form.clearFields.includes(field)
+
+  /**
+   * Toggles an explicit NULL. The long-context tier is all-or-nothing on the
+   * backend, so its three columns share one checkbox and move together.
+   */
+  const toggleClear = (field: PriceClearField, checked: boolean) => {
+    const longField = LONG_CTX_CLEAR_FIELDS.includes(field)
+    setForm((current) => {
+      const next = new Set(current.clearFields)
+      if (longField) {
+        for (const item of LONG_CTX_CLEAR_FIELDS) {
+          if (checked) next.add(item)
+          else next.delete(item)
+        }
+      } else if (checked) {
+        next.add(field)
+      } else {
+        next.delete(field)
+      }
+      const updated: PriceFormState = { ...current, clearFields: [...next] }
+      if (checked) {
+        switch (field) {
+          case 'cache_hit_ratio_bp':
+            updated.cacheHit = ''
+            break
+          case 'cache_write_ratio_bp':
+            updated.cacheWrite = ''
+            break
+          case 'cost_in_micro_per_k':
+            updated.costIn = ''
+            break
+          case 'cost_out_micro_per_k':
+            updated.costOut = ''
+            break
+          case 'cost_per_call_micro':
+            updated.costCall = ''
+            break
+          case 'effective_to':
+            updated.effectiveTo = ''
+            break
+          default:
+            if (longField) {
+              updated.longThreshold = ''
+              updated.longIn = ''
+              updated.longOut = ''
+            }
+        }
+      }
+      return updated
+    })
+    setErrors((current) => {
+      const next = { ...current }
+      delete next.effectiveTo
       return next
     })
   }
@@ -1053,26 +1183,53 @@ export default function AdminPricingPage() {
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <Input
-              label="缓存命中倍率（万分比）"
-              inputMode="numeric"
-              value={form.cacheHit}
-              error={errors.cacheHit}
-              hint="0 表示不打折；留空表示未配置/不修改。"
-              onChange={(event) => updateField('cacheHit', event.target.value)}
-            />
-            <Input
-              label="缓存写入倍率（万分比）"
-              inputMode="numeric"
-              value={form.cacheWrite}
-              error={errors.cacheWrite}
-              hint="0 表示不适用；留空表示未配置/不修改。"
-              onChange={(event) => updateField('cacheWrite', event.target.value)}
-            />
+            <div className="space-y-1">
+              <Input
+                label="缓存命中倍率（万分比）"
+                inputMode="numeric"
+                value={form.cacheHit}
+                error={errors.cacheHit}
+                hint="0 表示不打折；留空 = 不修改，勾选「清除」才会置空。"
+                onChange={(event) => updateField('cacheHit', event.target.value)}
+              />
+              {!creating ? (
+                <ClearToggle
+                  label="清除缓存命中倍率"
+                  checked={isCleared('cache_hit_ratio_bp')}
+                  onChange={(checked) => toggleClear('cache_hit_ratio_bp', checked)}
+                />
+              ) : null}
+            </div>
+            <div className="space-y-1">
+              <Input
+                label="缓存写入倍率（万分比）"
+                inputMode="numeric"
+                value={form.cacheWrite}
+                error={errors.cacheWrite}
+                hint="0 表示不适用；留空 = 不修改，勾选「清除」才会置空。"
+                onChange={(event) => updateField('cacheWrite', event.target.value)}
+              />
+              {!creating ? (
+                <ClearToggle
+                  label="清除缓存写入倍率"
+                  checked={isCleared('cache_write_ratio_bp')}
+                  onChange={(checked) => toggleClear('cache_write_ratio_bp', checked)}
+                />
+              ) : null}
+            </div>
           </div>
 
           <fieldset className="space-y-3">
             <legend className="text-sm font-medium text-ink">长上下文阶梯（三项同时填写或全部留空）</legend>
+            {!creating ? (
+              <ClearToggle
+                label="清除长上下文阶梯（三项一起置空）"
+                checked={isCleared('long_ctx_threshold_tokens')}
+                onChange={(checked) =>
+                  toggleClear('long_ctx_threshold_tokens', checked)
+                }
+              />
+            ) : null}
             <div className="grid gap-4 sm:grid-cols-3">
               <Input
                 label="阈值（tokens）"
@@ -1101,30 +1258,57 @@ export default function AdminPricingPage() {
           <fieldset className="space-y-3">
             <legend className="text-sm font-medium text-ink">上游成本价（仅运营可见）</legend>
             <div className="grid gap-4 sm:grid-cols-3">
-              <Input
-                label="输入成本价"
-                inputMode="numeric"
-                value={form.costIn}
-                error={errors.costIn}
-                onChange={(event) => updateField('costIn', event.target.value)}
-              />
-              <Input
-                label="输出成本价"
-                inputMode="numeric"
-                value={form.costOut}
-                error={errors.costOut}
-                onChange={(event) => updateField('costOut', event.target.value)}
-              />
-              <Input
-                label="按次成本价"
-                inputMode="numeric"
-                value={form.costCall}
-                error={errors.costCall}
-                onChange={(event) => updateField('costCall', event.target.value)}
-              />
+              <div className="space-y-1">
+                <Input
+                  label="输入成本价"
+                  inputMode="numeric"
+                  value={form.costIn}
+                  error={errors.costIn}
+                  onChange={(event) => updateField('costIn', event.target.value)}
+                />
+                {!creating ? (
+                  <ClearToggle
+                    label="清除输入成本价"
+                    checked={isCleared('cost_in_micro_per_k')}
+                    onChange={(checked) => toggleClear('cost_in_micro_per_k', checked)}
+                  />
+                ) : null}
+              </div>
+              <div className="space-y-1">
+                <Input
+                  label="输出成本价"
+                  inputMode="numeric"
+                  value={form.costOut}
+                  error={errors.costOut}
+                  onChange={(event) => updateField('costOut', event.target.value)}
+                />
+                {!creating ? (
+                  <ClearToggle
+                    label="清除输出成本价"
+                    checked={isCleared('cost_out_micro_per_k')}
+                    onChange={(checked) => toggleClear('cost_out_micro_per_k', checked)}
+                  />
+                ) : null}
+              </div>
+              <div className="space-y-1">
+                <Input
+                  label="按次成本价"
+                  inputMode="numeric"
+                  value={form.costCall}
+                  error={errors.costCall}
+                  onChange={(event) => updateField('costCall', event.target.value)}
+                />
+                {!creating ? (
+                  <ClearToggle
+                    label="清除按次成本价"
+                    checked={isCleared('cost_per_call_micro')}
+                    onChange={(checked) => toggleClear('cost_per_call_micro', checked)}
+                  />
+                ) : null}
+              </div>
             </div>
             <p className="text-xs text-ink-muted">
-              留空表示未配置：编辑态下不会清除后端已有值（PATCH 无清除语义）。
+              留空 = 不修改；勾选「清除」会把后端已有值置空。清除成本价仍需确认按无成本价保存。
             </p>
             {missingCostPreview ? (
               <>
@@ -1149,19 +1333,28 @@ export default function AdminPricingPage() {
               hint="当前后端仅接受 CNY。"
               onChange={(event) => updateField('currency', event.target.value)}
             />
-            <Input
-              label="生效止（可选）"
-              type="datetime-local"
-              value={
-                form.effectiveTo ? toLocalDateTimeValue(new Date(form.effectiveTo)) : ''
-              }
-              error={errors.effectiveTo}
-              hint="留空表示长期有效；编辑态留空不会清除后端已有值。"
-              onChange={(event) => {
-                const value = event.target.value
-                updateField('effectiveTo', value ? new Date(value).toISOString() : '')
-              }}
-            />
+            <div className="space-y-1">
+              <Input
+                label="生效止（可选）"
+                type="datetime-local"
+                value={
+                  form.effectiveTo ? toLocalDateTimeValue(new Date(form.effectiveTo)) : ''
+                }
+                error={errors.effectiveTo}
+                hint="留空 = 不修改；勾选「清除」表示长期有效。"
+                onChange={(event) => {
+                  const value = event.target.value
+                  updateField('effectiveTo', value ? new Date(value).toISOString() : '')
+                }}
+              />
+              {!creating ? (
+                <ClearToggle
+                  label="清除生效止"
+                  checked={isCleared('effective_to')}
+                  onChange={(checked) => toggleClear('effective_to', checked)}
+                />
+              ) : null}
+            </div>
           </div>
 
           <EffectiveTimePicker

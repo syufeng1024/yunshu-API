@@ -232,6 +232,46 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /api/v1/auth/cancel:
+    post:
+      operationId: cancelAccount
+      tags: [auth]
+      summary: 注销当前账号（禁用账号并删除全部会话）
+      description: |
+        先调用 ticket.CheckAccountCancellable：存在 OPEN / RESPONDED 工单时返回
+        409，并在 message 中列出全部未结工单号。成功后 status 置为 DISABLED、
+        disable_source=SELF_CANCEL、cancel_apply_at=now，并删除该 uid 的全部
+        K20 / K30 会话键；旧 sid 立即失效。不新增 t_user.status 枚举值。
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      responses:
+        '204':
+          description: 账号已禁用，全部会话已吊销，cookie 已清除
+        '401':
+          description: 未登录或会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: CSRF token 缺失或不匹配（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 存在未结工单（resource_state_conflict，message 含工单号）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '503':
+          description: 会话存储不可用，注销可能已提交（auth_unavailable）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/console/overview:
     get:
       operationId: getConsoleOverview
@@ -1374,6 +1414,108 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/announcements/{id}:
+    parameters:
+      - $ref: '#/components/parameters/AnnouncementID'
+    patch:
+      operationId: updateAdminAnnouncement
+      tags: [admin, announcement]
+      summary: 编辑公告（DRAFT / SCHEDULED；PUBLISHED 与 OFFLINE 拒绝）
+      description: |
+        effective_from 是可见起点。请求同时带 publish_at 时，effective_from 不得
+        早于它，否则返回 400 并点名 effective_from。已 PUBLISHED / OFFLINE 的
+        公告不可编辑，返回 409 resource_state_conflict。model_ids 传 null/缺省
+        表示保留现有 t_announcement_model 关联，传 [] 表示清空。
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnnouncementWriteRequest'
+      responses:
+        '200':
+          description: 更新后的公告
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnnouncementDetailResponse'
+        '400':
+          description: 字段不合法（invalid_request_body；effective_from / effective_to / model_ids）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 notice.write（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 公告不存在或已删除（resource_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 已发布/已下线公告不可编辑（resource_state_conflict）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/announcements/{id}/offline:
+    parameters:
+      - $ref: '#/components/parameters/AnnouncementID'
+    post:
+      operationId: offlineAdminAnnouncement
+      tags: [admin, announcement]
+      summary: 下线公告（DRAFT / SCHEDULED / PUBLISHED → OFFLINE）
+      description: |
+        OFFLINE 是展示终态，不是删除：行与审计保留。已 OFFLINE 的公告再次调用
+        返回 409 resource_state_conflict，不静默成功。
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      responses:
+        '200':
+          description: 已下线
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnnouncementDetailResponse'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 notice.write（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 公告不存在或已删除（resource_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 公告已下线（resource_state_conflict）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
   /api/admin/overview:
     get:
       operationId: getAdminOverview
@@ -1453,6 +1595,103 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '403':
           description: 角色缺少 admin.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/users/{id}:
+    parameters:
+      - $ref: '#/components/parameters/UserID'
+    get:
+      operationId: getAdminUser
+      tags: [admin]
+      summary: 运营用户详情（余额 + 最近一张余额调整单）
+      description: |
+        余额来自 t_credit_account；用户尚无积分账户时 exists=false 且各数值为 0。
+        latest_balance_adjust 取 t_balance_adjust 按 created_at DESC, id DESC 的
+        第一行，无记录时为 null。
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 用户详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserDetail'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 admin.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 用户不存在或已删除（resource_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/users/{id}/balance-adjust:
+    parameters:
+      - $ref: '#/components/parameters/UserID'
+    post:
+      operationId: submitBalanceAdjust
+      tags: [admin]
+      summary: 提交余额调整（进入审核队列，不直接改余额）
+      description: |
+        写 t_balance_adjust(PENDING) + t_review_task(BALANCE_ADJUST) + 审计，三者
+        同一事务。amount_micro 恒 > 0，方向由 direction 表达；同一用户同时只能
+        有一张 PENDING（生成列唯一索引 uk_ba_user_pending），第二次提交返回 409。
+        审批通过后由 review/balance.go 经 ledger.AdjustTx 落账；本接口不写
+        t_credit_account。
+      security:
+        - sessionCookie: []
+          csrfHeader: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BalanceAdjustSubmitRequest'
+      responses:
+        '201':
+          description: 调整单已创建并进入审核队列
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BalanceAdjustSubmitResponse'
+        '400':
+          description: 字段不合法（invalid_request_body；direction / amount_micro / reason）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 user.write（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 用户不存在或已删除（resource_not_found）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: 用户已有待审调整单，或尚无积分账户（resource_state_conflict）
           content:
             application/json:
               schema:
@@ -2229,6 +2468,18 @@ components:
       required: true
       schema: {type: integer, format: int64}
       description: t_ticket.id；他人工单与不存在同样返回 404 resource_not_found
+    UserID:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, format: int64}
+      description: t_user.id；不存在或已删除返回 404 resource_not_found
+    AnnouncementID:
+      name: id
+      in: path
+      required: true
+      schema: {type: integer, format: int64}
+      description: t_announcement.id；不存在或已删除返回 404 resource_not_found
   schemas:
     HealthStatus:
       type: object
@@ -3236,6 +3487,122 @@ components:
         page: {type: integer}
         page_size: {type: integer}
         total: {type: integer, format: int64}
+    AdminCreditBalance:
+      type: object
+      required: [exists, balance_recharge_micro, balance_bonus_micro, balance_micro, frozen_refund_micro, overdraft_limit_micro, total_recharge_micro, total_bonus_micro, total_consumed_micro]
+      properties:
+        exists:
+          type: boolean
+          description: t_credit_account 是否存在；false 时其余数值均为 0
+        balance_recharge_micro: {type: integer, format: int64}
+        balance_bonus_micro: {type: integer, format: int64}
+        balance_micro: {type: integer, format: int64}
+        frozen_refund_micro: {type: integer, format: int64}
+        overdraft_limit_micro: {type: integer, format: int64}
+        total_recharge_micro: {type: integer, format: int64}
+        total_bonus_micro: {type: integer, format: int64}
+        total_consumed_micro: {type: integer, format: int64}
+        last_settled_at: {type: string, format: date-time, nullable: true}
+    BalanceAdjustSummary:
+      type: object
+      required: [id, direction, amount_micro, reason, state, applicant_id, created_at]
+      properties:
+        id: {type: integer, format: int64}
+        direction: {type: string, enum: [INCREASE, DECREASE]}
+        amount_micro: {type: integer, format: int64, description: 恒 > 0；方向由 direction 表达}
+        reason: {type: string, maxLength: 255}
+        state: {type: string, enum: [PENDING, APPROVED, REJECTED]}
+        applicant_id: {type: integer, format: int64}
+        decided_by: {type: integer, format: int64, nullable: true}
+        decided_at: {type: string, format: date-time, nullable: true}
+        created_at: {type: string, format: date-time}
+    AdminUserDetail:
+      type: object
+      required: [user, balance, latest_balance_adjust]
+      properties:
+        user: {$ref: '#/components/schemas/AdminUser'}
+        balance: {$ref: '#/components/schemas/AdminCreditBalance'}
+        latest_balance_adjust:
+          description: 最近一张调整单；从未提交过时为 null
+          oneOf:
+            - $ref: '#/components/schemas/BalanceAdjustSummary'
+            - type: "null"
+    BalanceAdjustSubmitRequest:
+      type: object
+      required: [direction, amount_micro, reason]
+      properties:
+        direction: {type: string, enum: [INCREASE, DECREASE]}
+        amount_micro:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 10000000000
+          description: 微积分；1 积分 = 10000 微积分，单张上限 1,000,000 积分
+        reason:
+          type: string
+          minLength: 5
+          maxLength: 255
+          description: 至少 5 个字符；写入审核队列与审计
+    BalanceAdjustSubmitResponse:
+      type: object
+      required: [balance_adjust, review_task_id]
+      properties:
+        balance_adjust:
+          allOf:
+            - $ref: '#/components/schemas/BalanceAdjustSummary'
+            - type: object
+              required: [user_id, updated_at]
+              properties:
+                user_id: {type: integer, format: int64}
+                updated_at: {type: string, format: date-time}
+        review_task_id: {type: integer, format: int64}
+    Announcement:
+      type: object
+      required: [id, title, content, ann_type, position_mask, pinned, effective_from, state, model_ids, created_by, created_at, updated_at]
+      properties:
+        id: {type: integer, format: int64}
+        title: {type: string, maxLength: 128}
+        content: {type: string}
+        ann_type: {type: string, enum: [NOTICE, MAINTENANCE, PROMOTION, PRICE_CHANGE]}
+        position_mask: {type: integer, format: int64, minimum: 1, maximum: 15}
+        pinned: {type: boolean}
+        effective_from: {type: string, format: date-time, description: 可见起点；不得早于 publish_at}
+        effective_to: {type: string, format: date-time, nullable: true}
+        state: {type: string, enum: [DRAFT, SCHEDULED, PUBLISHED, OFFLINE]}
+        model_ids:
+          type: array
+          items: {type: integer, format: int64}
+          description: t_announcement_model 关联；无关联时返回 [] 而非 null
+        created_by: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    AnnouncementWriteRequest:
+      type: object
+      properties:
+        title: {type: string, maxLength: 128}
+        content: {type: string, maxLength: 20000}
+        ann_type: {type: string, enum: [NOTICE, MAINTENANCE, PROMOTION, PRICE_CHANGE]}
+        position_mask: {type: integer, format: int64, minimum: 1, maximum: 15}
+        pinned: {type: boolean}
+        publish_at:
+          type: string
+          format: date-time
+          description: 未来时间进入 SCHEDULED；过去/缺省不改变发布状态
+        effective_from:
+          type: string
+          format: date-time
+          description: 可见起点；与 publish_at 同时出现时不得早于它
+        effective_to: {type: string, format: date-time, nullable: true}
+        model_ids:
+          type: array
+          maxItems: 100
+          items: {type: integer, format: int64}
+          description: 缺省保留现有关系；[] 清空；白名单外/不存在的模型返回 400
+    AnnouncementDetailResponse:
+      type: object
+      required: [announcement]
+      properties:
+        announcement: {$ref: '#/components/schemas/Announcement'}
     AdminChannel:
       type: object
       required: [id, name, protocol_id, protocol, region, base_url, upstream_key_mask, group_scope_mode, dedicated_scope_mode, fallback_allowed, weight, priority, timeout_connect_ms, timeout_first_byte_ms, timeout_total_ms, retry_max, stream_supported, stream_usage_mode, health_state, success_rate_bp, enabled, created_at, updated_at]

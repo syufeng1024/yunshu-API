@@ -218,11 +218,14 @@ func TestReviewUnsupportedDocumentTypesAreReported(t *testing.T) {
 		t.Fatalf("redeem review state=%s, want PENDING", rState)
 	}
 
+	// BALANCE_ADJUST now has an owner (review/balance.go). A queue row whose
+	// business document is missing is a 404, not the old "not implemented" 409;
+	// the supported path is covered by balance_test.go.
 	adjustReview := seedReviewTask(t, BizBalanceAdjust, 8, applicant, StatePending,
 		testBase.Add(-3*time.Hour))
 	rec = callReview(t, svc.Approve, http.MethodPost,
 		"/api/admin/reviews/1/approve", itoa(adjustReview), nil, reviewer)
-	if rec.Code != http.StatusConflict {
-		t.Fatalf("balance adjust approve status=%d body=%s, want 409", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("balance adjust approve status=%d body=%s, want 404", rec.Code, rec.Body.String())
 	}
 }

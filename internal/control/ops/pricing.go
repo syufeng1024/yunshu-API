@@ -98,10 +98,62 @@ type priceWriteRequest struct {
 	EffectiveTo   *time.Time `json:"effective_to"`
 	Enabled       *bool      `json:"enabled"`
 
+	// ClearFields names optional columns to set back to NULL. A nil pointer
+	// already means "leave alone", so explicit clearing needs its own list;
+	// without it an operator can never remove a cost or an effective_to.
+	ClearFields []string `json:"clear_fields"`
+
 	// ConfirmNoCost is the second confirmation required when a sell price has
 	// no matching upstream cost. A missing cost must never silently list a
 	// model below the floor (T15 hard constraint from F16-5).
 	ConfirmNoCost bool `json:"confirm_no_cost"`
+}
+
+// priceClearableFields is the complete clear_fields whitelist. Every entry is
+// nullable in t_price_rule; the three required columns (in/out/per-call prices)
+// are deliberately absent because clearing them would leave the model
+// unpriceable rather than "not configured".
+var priceClearableFields = map[string]bool{
+	"cache_hit_ratio_bp":             true,
+	"cache_write_ratio_bp":           true,
+	"long_ctx_threshold_tokens":      true,
+	"long_ctx_in_price_micro_per_k":  true,
+	"long_ctx_out_price_micro_per_k": true,
+	"cost_in_micro_per_k":            true,
+	"cost_out_micro_per_k":           true,
+	"cost_per_call_micro":            true,
+	"effective_to":                   true,
+}
+
+// normalizeClearFields validates the whitelist and refuses a field that is both
+// assigned and cleared in the same request. The latter is ambiguous — "set 800
+// and delete it" — and the caller can only mean one of the two.
+func normalizeClearFields(raw []string, req *priceWriteRequest) (map[string]bool, *apierr.APIError) {
+	cleared := make(map[string]bool, len(raw))
+	for _, name := range raw {
+		name = strings.TrimSpace(name)
+		if !priceClearableFields[name] {
+			return nil, mw.InvalidField("clear_fields")
+		}
+		cleared[name] = true
+	}
+	assigned := map[string]bool{
+		"cache_hit_ratio_bp":             req.CacheHitRatioBP != nil,
+		"cache_write_ratio_bp":           req.CacheWriteRatioBP != nil,
+		"long_ctx_threshold_tokens":      req.LongCtxThresholdTokens != nil,
+		"long_ctx_in_price_micro_per_k":  req.LongCtxInPriceMicroPerK != nil,
+		"long_ctx_out_price_micro_per_k": req.LongCtxOutPriceMicroPerK != nil,
+		"cost_in_micro_per_k":            req.CostInMicroPerK != nil,
+		"cost_out_micro_per_k":           req.CostOutMicroPerK != nil,
+		"cost_per_call_micro":            req.CostPerCallMicro != nil,
+		"effective_to":                   req.EffectiveTo != nil,
+	}
+	for name := range cleared {
+		if assigned[name] {
+			return nil, mw.InvalidField(name)
+		}
+	}
+	return cleared, nil
 }
 
 // priceInput is the fully merged, validated row.
@@ -265,6 +317,11 @@ func (s *Service) CreatePrice(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, mw.InvalidField("model_id"))
 		return
 	}
+	cleared, apiErr := normalizeClearFields(req.ClearFields, &req)
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
 
 	ctx := r.Context()
 	now := s.now()
@@ -286,7 +343,7 @@ func (s *Service) CreatePrice(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apiErr)
 		return
 	}
-	in, apiErr := buildPriceInput(req, modelType, nil, now)
+	in, apiErr := buildPriceInput(req, modelType, nil, now, cleared)
 	in.confirmNoCost = req.ConfirmNoCost
 	if apiErr != nil {
 		mw.WriteError(w, r, apiErr)
@@ -352,6 +409,9 @@ func (s *Service) CreatePrice(w http.ResponseWriter, r *http.Request) {
 	if in.confirmNoCost {
 		auditAfter["confirm_no_cost"] = true
 	}
+	if len(req.ClearFields) > 0 {
+		auditAfter["clear_fields"] = req.ClearFields
+	}
 	if err := s.insertAudit(ctx, tx, r, "PRICE", "CREATE", "t_price_rule", id, nil,
 		auditAfter, ""); err != nil {
 		s.logError(ctx, "ops_price_audit_failed: "+err.Error())
@@ -394,6 +454,11 @@ func (s *Service) UpdatePrice(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, mw.InvalidField("body"))
 		return
 	}
+	cleared, apiErr := normalizeClearFields(req.ClearFields, &req)
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
 
 	ctx := r.Context()
 	now := s.now()
@@ -415,7 +480,7 @@ func (s *Service) UpdatePrice(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apiErr)
 		return
 	}
-	in, apiErr := buildPriceInput(req, before.ModelType, &before, now)
+	in, apiErr := buildPriceInput(req, before.ModelType, &before, now, cleared)
 	in.confirmNoCost = req.ConfirmNoCost
 	if apiErr != nil {
 		mw.WriteError(w, r, apiErr)
@@ -457,6 +522,9 @@ func (s *Service) UpdatePrice(w http.ResponseWriter, r *http.Request) {
 	if in.confirmNoCost {
 		auditAfter["confirm_no_cost"] = true
 	}
+	if len(req.ClearFields) > 0 {
+		auditAfter["clear_fields"] = req.ClearFields
+	}
 	if err := s.insertAudit(ctx, tx, r, "PRICE", "UPDATE", "t_price_rule", id,
 		priceAuditView(before), auditAfter, ""); err != nil {
 		s.logError(ctx, "ops_price_audit_failed: "+err.Error())
@@ -495,7 +563,8 @@ func (s *Service) refreshPrices(ctx context.Context) *apierr.APIError {
 // validation
 // ---------------------------------------------------------------------------
 
-func buildPriceInput(req priceWriteRequest, modelType string, cur *priceRow, now time.Time) (priceInput, *apierr.APIError) {
+func buildPriceInput(req priceWriteRequest, modelType string, cur *priceRow, now time.Time,
+	cleared map[string]bool) (priceInput, *apierr.APIError) {
 	var in priceInput
 	in.modelType = modelType
 	if cur != nil {
@@ -566,6 +635,35 @@ func buildPriceInput(req priceWriteRequest, modelType string, cur *priceRow, now
 	}
 	if req.Enabled != nil {
 		in.enabled = *req.Enabled
+	}
+	// Clears run after assignments. normalizeClearFields has already rejected a
+	// field that appears in both places, so this only ever removes a value.
+	if cleared["cache_hit_ratio_bp"] {
+		in.cacheHit = nil
+	}
+	if cleared["cache_write_ratio_bp"] {
+		in.cacheWrite = nil
+	}
+	if cleared["long_ctx_threshold_tokens"] {
+		in.longThreshold = nil
+	}
+	if cleared["long_ctx_in_price_micro_per_k"] {
+		in.longIn = nil
+	}
+	if cleared["long_ctx_out_price_micro_per_k"] {
+		in.longOut = nil
+	}
+	if cleared["cost_in_micro_per_k"] {
+		in.costIn = nil
+	}
+	if cleared["cost_out_micro_per_k"] {
+		in.costOut = nil
+	}
+	if cleared["cost_per_call_micro"] {
+		in.costCall = nil
+	}
+	if cleared["effective_to"] {
+		in.effectiveTo = nil
 	}
 
 	// The notice window is judged against the server clock only. A client
@@ -1048,7 +1146,8 @@ func hasPricePatch(req *priceWriteRequest) bool {
 		req.LongCtxInPriceMicroPerK != nil || req.LongCtxOutPriceMicroPerK != nil ||
 		req.CostInMicroPerK != nil || req.CostOutMicroPerK != nil ||
 		req.CostPerCallMicro != nil || req.CurrencyCost != nil ||
-		req.EffectiveFrom != nil || req.EffectiveTo != nil || req.Enabled != nil
+		req.EffectiveFrom != nil || req.EffectiveTo != nil || req.Enabled != nil ||
+		len(req.ClearFields) > 0
 }
 
 func nullInt64(v *int64) any {

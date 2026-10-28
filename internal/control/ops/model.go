@@ -20,6 +20,20 @@ const (
 	listingDelisted    = "DELISTED"
 )
 
+// recommendWeightMax bounds t_model.recommend_weight. The column is an
+// unsigned int, so without a business cap an operator can send 2^31-1 and make
+// one model dominate every recommendation slot. 1000 keeps the value on the
+// same scale as the console's percentage/basis-point fields and leaves room for
+// relative weighting without turning the sort key into an arbitrary number.
+const recommendWeightMax int64 = 1000
+
+func validateRecommendWeight(v int64) *apierr.APIError {
+	if v < 0 || v > recommendWeightMax {
+		return mw.InvalidField("recommend_weight")
+	}
+	return nil
+}
+
 type modelCapabilities struct {
 	Stream   *bool `json:"stream"`
 	ToolCall *bool `json:"tool_call"`
@@ -424,8 +438,12 @@ func (s *Service) SetRecommendWeight(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apiErr)
 		return
 	}
-	if req.RecommendWeight == nil || *req.RecommendWeight < 0 {
+	if req.RecommendWeight == nil {
 		mw.WriteError(w, r, mw.InvalidField("recommend_weight"))
+		return
+	}
+	if apiErr := validateRecommendWeight(*req.RecommendWeight); apiErr != nil {
+		mw.WriteError(w, r, apiErr)
 		return
 	}
 	ctx := r.Context()
@@ -615,9 +633,11 @@ func (s *Service) updateModel(w http.ResponseWriter, r *http.Request, id int64, 
 	// Recommendation weight: non-zero is meaningful only for LISTED. A move
 	// away from LISTED zeroes it automatically, even when the caller did not
 	// mention the field; that is the documented behaviour, not a silent cap.
-	if req.RecommendWeight != nil && *req.RecommendWeight < 0 {
-		mw.WriteError(w, r, mw.InvalidField("recommend_weight"))
-		return
+	if req.RecommendWeight != nil {
+		if apiErr := validateRecommendWeight(*req.RecommendWeight); apiErr != nil {
+			mw.WriteError(w, r, apiErr)
+			return
+		}
 	}
 	weight := before.RecommendWeight
 	if req.RecommendWeight != nil {
@@ -804,8 +824,8 @@ func (s *Service) validateCreateModel(r *http.Request, req *modelCreateRequest) 
 	}
 	weight := int64(0)
 	if req.RecommendWeight != nil {
-		if *req.RecommendWeight < 0 {
-			return in, mw.InvalidField("recommend_weight")
+		if apiErr := validateRecommendWeight(*req.RecommendWeight); apiErr != nil {
+			return in, apiErr
 		}
 		weight = *req.RecommendWeight
 	}

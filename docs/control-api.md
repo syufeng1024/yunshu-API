@@ -7,7 +7,7 @@
 | 权限点 | 含义 | 持有角色 |
 | :--- | :--- | :--- |
 | `user.read` | 读取自己的账号资料（控制台侧） | PERSONAL / OPS / SUPER_ADMIN |
-| `user.write` | 启用、禁用用户（运营侧） | OPS / SUPER_ADMIN |
+| `user.write` | 启用、禁用用户、提交余额调整（运营侧） | OPS / SUPER_ADMIN |
 | `key.read` | 查看自己的 API Key 列表、详情与变更记录 | PERSONAL / SUPER_ADMIN |
 | `key.write` | 创建、修改、轮换、删除自己的 API Key | PERSONAL / SUPER_ADMIN |
 | `model.read` | 读取模型目录（控制台可用模型） | PERSONAL / OPS / FINANCE / SUPER_ADMIN |
@@ -15,7 +15,7 @@
 | `price.write` | 创建、修改模型价格与价格分组 | OPS / SUPER_ADMIN |
 | `group.write` | 修改价格分组倍率与可见范围 | OPS / SUPER_ADMIN |
 | `channel.write` | 创建、修改、停用、删除上游渠道 | OPS / SUPER_ADMIN |
-| `notice.write` | 创建、修改、发布公告 | OPS / SUPER_ADMIN |
+| `notice.write` | 创建、修改、发布、下线公告 | OPS / SUPER_ADMIN |
 | `risk.write` | 维护风控规则、查看命中、调整用户风险分 | OPS / SUPER_ADMIN |
 | `config.write` | 读取与写入 `t_config_item` 运行时配置 | OPS / SUPER_ADMIN |
 | `fund.read` | 查看自己的套餐、订单、退款、发票与提额单 | PERSONAL / FINANCE / SUPER_ADMIN |
@@ -112,6 +112,83 @@
 `target_type` / `target_id` 进入 SQL `WHERE`：`target_type` 按原样比较（如 `t_channel`，不转大写），`target_id` 按字符串比较；两者 trim 后最大 32 rune，超长返回 `invalid_query_parameter`。两者同传时走 `idx_aal_target (target_type,target_id,created_at)`；不传时查询与改造前一致。建议总是同时传 `target_type`，否则仅 `target_id` 无法使用该索引。
 
 OpenAPI 已同步：`/api/admin/overview`、`/api/admin/tickets/{id}`、`/api/admin/users`（含 `key_count`）、`/api/admin/channels`（含 `success_rate_bp`）与相关 schema。
+
+## T24 段 2：写接口
+
+| 方法 + 路径 | 权限 | 落点 | 语义 |
+| :--- | :--- | :--- | :--- |
+| `POST /api/admin/users/{id}/balance-adjust` | `user.write` | `review/balance.go:SubmitBalanceAdjust` | 写 `t_balance_adjust(PENDING)` + `t_review_task(BALANCE_ADJUST)` + 审计，三者同一事务 |
+| `POST /api/admin/reviews/{id}/approve` | `fund.approve` | `review/balance.go:approveBalanceAdjust` | `PENDING→APPROVED`，同一事务内经 `ledger.AdjustTx` 落账 |
+| `POST /api/admin/reviews/{id}/reject` | `fund.approve` | `review/balance.go:rejectBalanceAdjust` | `PENDING→REJECTED`，不产生资金分录 |
+| `POST /api/admin/announcements/{id}/offline` | `notice.write` | `ops/announcement.go:OfflineAnnouncement` | `DRAFT/SCHEDULED/PUBLISHED → OFFLINE` |
+| `PATCH /api/admin/announcements/{id}` | `notice.write` | `ops/announcement.go:UpdateAnnouncement` | 新增 `effective_from` 写入与 `model_ids` 持久化 |
+| `PATCH /api/admin/prices/{id}` | `price.write` | `ops/pricing.go:UpdatePrice` | 新增 `clear_fields` 显式置空 |
+| `POST /api/v1/auth/cancel` | 登录即可 | `auth/cancel.go:Cancel` | 工单预检 → 禁用账号 → 删除全部会话 |
+
+### 余额调整
+
+`t_balance_adjust`（迁移 0025）：
+
+| 列 | 类型 | 约束 |
+| :--- | :--- | :--- |
+| `direction` | `varchar(8)` | `CHECK direction IN ('INCREASE','DECREASE')` |
+| `amount_micro` | `bigint` | `CHECK amount_micro > 0`，恒为正；方向单独存储 |
+| `reason` | `varchar(255)` | 提交时 trim 后 5–255 个字符 |
+| `state` | `varchar(16)` | `PENDING / APPROVED / REJECTED`，单向流转 |
+| `pending_user_id` | `bigint unsigned` STORED 生成列 | `state='PENDING'` 时等于 `user_id`，否则 NULL；`uk_ba_user_pending` 保证同一用户同时最多一张待审单 |
+
+- 提交上限：单张 `amount_micro ≤ 10,000,000,000`（1,000,000 积分）。这是输入防呆，不是产品额度；需要更多时拆成多张单据，各自留理由与审批记录。
+- 提交时校验 `t_user` 存在且未删除、`t_credit_account` 存在；无账户返回 409 并提示排查数据完整性。
+- 自审：`applicant_id == operator` 时审批返回 403 `permission_denied`，hint「审批人不得为申请人：请转交其他审核人处理」；余额、账本、单据状态都不变。
+- 幂等：`UPDATE ... WHERE state='PENDING'` 的 `RowsAffected()` 是唯一闸门；重复审批返回 409 `resource_state_conflict`。账本侧 `uk_le_idem` 是第二道防线。
+- 审计：提交、通过、驳回各一行，`target_type='t_balance_adjust'`、`target_id` 为单据 id，`before_json`/`after_json` 含状态、方向、金额、理由、审批人；`GET /api/admin/audit-logs?target_type=t_balance_adjust&target_id=<id>` 可直接命中。
+- 用户详情 `GET /api/admin/users/{id}` 追加 `latest_balance_adjust`：最近一张单据（按 `created_at DESC, id DESC`），无记录为 `null`。
+
+### 余额调整落账
+
+审批通过时 `review/balance.go` 调用 `ledger.AdjustTx`，全程在调用方事务内，禁止 `UPDATE t_credit_account`：
+
+| 方向 | 实现 | 批次 / 分录 |
+| :--- | :--- | :--- |
+| `INCREASE` | 复用 `ledger.GrantTx` | 一张 `COMPENSATION` 批次（`refundable=0`，`expire_at=now+90d`，`source_id=t_balance_adjust.id`）+ 一条 `CREDIT` 分录，`biz_type=ADJUST` |
+| `DECREASE` | 新增 `ledger.AdjustTx` 减量分支 | 按结算同一 FIFO 顺序扣减批次（赠送先于充值），每个批次一条 `DEBIT` 分录，`biz_type=ADJUST`；可用余额不足或批次无法全覆盖时返回 409 |
+
+减量不增加 `t_credit_account.total_consumed_micro`：人工调账不是计量消费。批次级 `consumed_micro` 仍会随扣减增加，这是 schema 表达「面额已被收回」的唯一方式；批量不变量 `remaining = face - consumed` 保持不变。`ledger.AdjustTx` 同时保留 `operator_id` 与 `reason`，日对账可按 `biz_type=ADJUST` 单独汇总。
+
+### 公告：`effective_from`、下线与 `model_ids`
+
+- `PATCH` 接受 `effective_from`（`datetime(3)`）。请求同时带 `publish_at` 时，`effective_from` 不得早于它，否则 400 并点名 `effective_from`；已 `PUBLISHED` / `OFFLINE` 的公告整条不可编辑（409）。
+- `POST /api/admin/announcements/{id}/offline`：`DRAFT / SCHEDULED / PUBLISHED → OFFLINE`。已 `OFFLINE` 再调用返回 409。OFFLINE 只是停止展示，行与审计保留。
+- `model_ids` 持久化在 `t_announcement_model(announcement_id, model_id)`（迁移 0025）。写入时去重、上限 100、每个 id 必须指向未删除的 `t_model`；`PATCH` 缺省保留现有关系，`[]` 清空。读接口（列表与详情）用一次 `WHERE announcement_id IN (...)` 聚合，无关联返回 `[]` 而非 `null`。
+
+### 价格 `clear_fields`
+
+`PATCH /api/admin/prices/{id}` 新增 `clear_fields`。白名单：
+
+| 字段 | 清空后的语义 |
+| :--- | :--- |
+| `cache_hit_ratio_bp` / `cache_write_ratio_bp` | 恢复为 NULL（未配置） |
+| `long_ctx_threshold_tokens` / `long_ctx_in_price_micro_per_k` / `long_ctx_out_price_micro_per_k` | 三项必须一起清空，否则 400 点名 `long_ctx_threshold_tokens` |
+| `cost_in_micro_per_k` / `cost_out_micro_per_k` / `cost_per_call_micro` | 清空后缺成本校验仍生效：未传 `confirm_no_cost=true` 时 400 |
+| `effective_to` | 恢复为长期有效 |
+
+- 白名单外的键返回 400（message 为 `clear_fields`）。
+- 同一字段既赋值又出现在 `clear_fields` → 400，message 点名该字段（如 `cache_write_ratio_bp`）。
+- 必填列 `in_price_micro_per_k` / `out_price_micro_per_k` / `per_call_price_micro` 不在白名单内：清空它们会让模型无法定价，应改用新版本价格规则。
+
+### `recommend_weight` 上限
+
+`POST /api/admin/models/{id}/recommend-weight`、`PATCH /api/admin/models/{id}` 与创建模型统一校验 `0 ≤ recommend_weight ≤ 1000`；超限返回 400 且 message 点名 `recommend_weight`。
+
+定档 1000 的理由：该列是 `int unsigned`，没有业务上限时一次写入 2^31-1 就能让单个模型霸占全部推荐位；1000 与运营台其余百分比/万分比字段同一量级，既能表达相对权重，又不会把排序键变成任意大数。默认值与推荐位排序（`recommend_weight DESC, published_at DESC`）不变。
+
+### 注销
+
+`POST /api/v1/auth/cancel`（登录即可，无额外权限点）：
+
+1. 先调 `ticket.CheckAccountCancellable`。存在 `OPEN` / `RESPONDED` 工单时返回 409 `resource_state_conflict`，message 为「存在未结工单，无法注销：<工单号…>」，`CLOSED` 不阻塞。
+2. 事务内 `t_user.status='DISABLED'`、`disable_source='SELF_CANCEL'`、`disable_reason='用户主动注销'`、`disabled_at=now`、`cancel_apply_at=now`，并写一条 `USER/CANCEL` 审计（before/after 含 status 与 disable_source）。不新增 `t_user.status` 枚举值。
+3. 提交后调用 `SessionManager.RevokeAll`：删除 K30 `sess:admin:uid:{uid}` 中的全部 K20 `sess:admin:{sid}` 与集合本身。旧 sid 再访问返回 401 `session_expired`。吊销失败返回 503 `auth_unavailable`，不谎报成功。
 
 ## 错误码映射
 

@@ -137,6 +137,25 @@ describe('ReviewsPage', () => {
     ).toBeInTheDocument()
   })
 
+  it('ReviewsPage：余额调整展示金额、方向与理由', async () => {
+    installMock([
+      review({
+        biz_type: 'BALANCE_ADJUST',
+        biz_no: 'ADJ#9001',
+        amount_micro: 50_000_000,
+        direction: 'INCREASE',
+        summary: '上游故障补偿',
+      }),
+    ])
+
+    renderWithProviders(<AdminReviewsPage />)
+    await screen.findByText('申请人甲')
+
+    expect(screen.getByText('方向：增加')).toBeInTheDocument()
+    expect(screen.getByText('上游故障补偿')).toBeInTheDocument()
+    expect(screen.getByText('5,000 积分')).toBeInTheDocument()
+  })
+
   it('ReviewsPage：发票审批要求 invoice_url', async () => {
     installMock([
       review({

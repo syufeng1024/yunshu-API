@@ -34,6 +34,7 @@ import (
 	"yunshu.dev/core/internal/control/fund"
 	"yunshu.dev/core/internal/control/mw"
 	"yunshu.dev/core/internal/jsonx"
+	"yunshu.dev/core/internal/ledger"
 	obslog "yunshu.dev/core/internal/obs/log"
 	"yunshu.dev/core/internal/platform/clock"
 )
@@ -83,6 +84,12 @@ type Service struct {
 	// Fund is the T13/T04 seam. Approval transitions are called on it; this
 	// package has no balance write of its own.
 	Fund *fund.Service
+
+	// Ledger is the only way a BALANCE_ADJUST document can move money. The
+	// ledger store is shared with Fund in production so entry_no comes from one
+	// generator; the fallback keeps package tests and a hand-wired Service
+	// honest.
+	Ledger *ledger.Store
 }
 
 // New wires the service.
@@ -93,7 +100,17 @@ func New(db *sql.DB, auditWriter *audit.Writer, now clock.Clock, logger *obslog.
 	if auditWriter == nil {
 		auditWriter = &audit.Writer{DB: db, Now: now}
 	}
-	return &Service{DB: db, Audit: auditWriter, Now: now, Logger: logger, Fund: funds}
+	var ldg *ledger.Store
+	if funds != nil {
+		ldg = funds.Ledger
+	}
+	if ldg == nil {
+		ldg = ledger.NewStore(db, now)
+	}
+	return &Service{
+		DB: db, Audit: auditWriter, Now: now, Logger: logger,
+		Fund: funds, Ledger: ldg,
+	}
 }
 
 func (s *Service) now() time.Time { return s.Now.Now().UTC() }
@@ -126,14 +143,18 @@ type reviewTask struct {
 // reviewItem is the API shape: the queue row plus the business facts an
 // operator needs to decide without opening another page.
 type reviewItem struct {
-	ID            int64      `json:"id"`
-	BizType       string     `json:"biz_type"`
-	BizID         int64      `json:"biz_id"`
-	BizNo         string     `json:"biz_no,omitempty"`
-	ApplicantID   int64      `json:"applicant_id"`
-	ApplicantName string     `json:"applicant_name"`
-	AmountMicro   *int64     `json:"amount_micro,omitempty"`
-	AmountFen     *int64     `json:"amount_fen,omitempty"`
+	ID            int64  `json:"id"`
+	BizType       string `json:"biz_type"`
+	BizID         int64  `json:"biz_id"`
+	BizNo         string `json:"biz_no,omitempty"`
+	ApplicantID   int64  `json:"applicant_id"`
+	ApplicantName string `json:"applicant_name"`
+	AmountMicro   *int64 `json:"amount_micro,omitempty"`
+	AmountFen     *int64 `json:"amount_fen,omitempty"`
+	// Direction is set only for BALANCE_ADJUST (INCREASE / DECREASE). It is
+	// separate from summary so the console can render the sign next to the
+	// amount without parsing Chinese text.
+	Direction     *string    `json:"direction,omitempty"`
 	Summary       string     `json:"summary"`
 	BusinessState string     `json:"business_state,omitempty"`
 	State         string     `json:"state"`

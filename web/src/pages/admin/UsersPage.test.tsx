@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api/client'
 import type { AdminUser, AdminUserDetailResponse } from '@/api/admin'
+import { ToastViewport } from '@/components'
+import { useToastStore } from '@/stores/toast'
 import { renderWithProviders } from '@/test/renderConsole'
 import AdminUsersPage from './UsersPage'
 
@@ -15,6 +17,7 @@ vi.mock('@/api/client', async (importOriginal) => {
 })
 
 const mockedGet = vi.mocked(api.get)
+const mockedPost = vi.mocked(api.post)
 
 const demoUser: AdminUser = {
   id: 501,
@@ -47,6 +50,17 @@ const detail: AdminUserDetailResponse = {
     total_consumed_micro: 0,
     last_settled_at: null,
   },
+  latest_balance_adjust: {
+    id: 9001,
+    direction: 'INCREASE',
+    amount_micro: 50_000_000,
+    reason: '上游故障补偿',
+    state: 'PENDING',
+    applicant_id: 9001,
+    decided_by: null,
+    decided_at: null,
+    created_at: '2026-10-27T02:00:00Z',
+  },
 }
 
 const emptyAudit = {
@@ -71,6 +85,8 @@ function installMock() {
 
 beforeEach(() => {
   mockedGet.mockReset()
+  mockedPost.mockReset()
+  useToastStore.setState({ toasts: [] })
 })
 
 afterEach(cleanup)
@@ -104,7 +120,7 @@ describe('UsersPage', () => {
     expect(params.has('q')).toBe(false)
   })
 
-  it('UsersPage：余额调整显式不可用', async () => {
+  it('UsersPage：余额调整可提交并展示最近一张调整单', async () => {
     installMock()
     const user = userEvent.setup()
     renderWithProviders(<AdminUsersPage />)
@@ -113,10 +129,52 @@ describe('UsersPage', () => {
     await user.click(screen.getByRole('button', { name: '详情' }))
     await screen.findByText('总余额')
 
-    expect(screen.getByRole('button', { name: '调整余额' })).toBeDisabled()
-    expect(
-      screen.getByText('后端暂未提供余额调整接口（需 T24）'),
-    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '调整余额' })).toBeEnabled()
+    expect(screen.queryByText(/后端暂未提供/)).not.toBeInTheDocument()
     expect(screen.getByText('2 个活跃 Key')).toBeInTheDocument()
+    expect(screen.getByText('待审核')).toBeInTheDocument()
+    expect(screen.getByText('上游故障补偿')).toBeInTheDocument()
+  })
+
+  it('UsersPage：余额调整提交后提示已提交审核', async () => {
+    installMock()
+    mockedPost.mockResolvedValue({
+      balance_adjust: {
+        id: 9002,
+        user_id: 501,
+        direction: 'INCREASE',
+        amount_micro: 5_000_000,
+        reason: '客服补偿积分',
+        state: 'PENDING',
+        applicant_id: 9001,
+        created_at: '2026-10-28T02:00:00Z',
+        updated_at: '2026-10-28T02:00:00Z',
+      },
+      review_task_id: 61,
+    })
+    const user = userEvent.setup()
+    renderWithProviders(
+      <>
+        <AdminUsersPage />
+        <ToastViewport />
+      </>,
+    )
+    await screen.findByText('演示账号')
+
+    await user.click(screen.getByRole('button', { name: '详情' }))
+    await screen.findByText('总余额')
+    await user.click(screen.getByRole('button', { name: '调整余额' }))
+    await user.type(screen.getByLabelText(/金额（微积分/), '5000000')
+    await user.type(screen.getByLabelText(/调整理由/), '客服补偿积分')
+    await user.click(screen.getByRole('button', { name: '提交审核' }))
+
+    expect(await screen.findByText('已提交审核')).toBeInTheDocument()
+    const [path, body] = mockedPost.mock.calls.at(-1) ?? []
+    expect(path).toBe('/api/admin/users/501/balance-adjust')
+    expect(body).toMatchObject({
+      direction: 'INCREASE',
+      amount_micro: 5_000_000,
+      reason: '客服补偿积分',
+    })
   })
 })

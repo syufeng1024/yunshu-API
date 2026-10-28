@@ -55,6 +55,16 @@ func (s *Service) Approve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A balance adjustment changes money, so its state change, ledger entry and
+	// queue claim must share one transaction. The generic path below applies the
+	// side effect first and claims afterwards, which cannot offer that
+	// guarantee.
+	if task.BizType == BizBalanceAdjust {
+		s.approveBalanceAdjust(w, r, task, operatorID, operatorRole,
+			truncateRunes(strings.TrimSpace(req.Reason), decisionNoteMax))
+		return
+	}
+
 	if apiErr := s.applyApproval(ctx, task, operatorID, req); apiErr != nil {
 		mw.WriteError(w, r, apiErr)
 		return
@@ -92,7 +102,7 @@ func (s *Service) applyApproval(ctx context.Context, task reviewTask, operatorID
 		err := s.Fund.IssueInvoice(ctx, task.BizID, operatorID, url)
 		return s.transitionResult(ctx, task, err, "t_invoice_apply", fund.InvoiceStateIssued, fund.ErrInvoiceState)
 
-	case BizRedeemBatch, BizBalanceAdjust:
+	case BizRedeemBatch:
 		return stateConflict(
 			"单据类型 %s 在资金域没有可调用的审批方法；审批中心不直接改业务表", task.BizType).
 			WithHint("该类型的提交入口尚未实现，详见 T16 交付回执的「副作用委派」")

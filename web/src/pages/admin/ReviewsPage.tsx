@@ -42,6 +42,11 @@ const BIZ_TYPE_LABEL: Record<ReviewBizType, string> = {
   BALANCE_ADJUST: '余额调整',
 }
 
+const BALANCE_DIRECTION_LABEL: Record<string, string> = {
+  INCREASE: '增加',
+  DECREASE: '减少',
+}
+
 const BIZ_TYPE_OPTIONS: Array<{ value: BizTypeFilter; label: string }> = [
   { value: 'ALL', label: '全部单据类型' },
   { value: 'QUOTA_APPLY', label: BIZ_TYPE_LABEL.QUOTA_APPLY },
@@ -195,7 +200,13 @@ export default function AdminReviewsPage() {
         toast.success('审核已驳回')
       }
       closeDecision()
-      openAudit('t_review_task', target.id)
+      if (target.biz_type === 'BALANCE_ADJUST') {
+        // The balance decision audit row targets the business document, not
+        // the queue row, so opening t_review_task here would show nothing.
+        openAudit('t_balance_adjust', target.biz_id)
+      } else {
+        openAudit('t_review_task', target.id)
+      }
     } catch (error) {
       // 403 permission_denied (self-audit) and 409 state conflicts arrive here
       // with the backend message + hint; show both verbatim.
@@ -237,6 +248,11 @@ export default function AdminReviewsPage() {
       header: '摘要',
       render: (item) => (
         <div className="max-w-md space-y-1">
+          {item.direction ? (
+            <p className="text-xs text-ink">
+              方向：{BALANCE_DIRECTION_LABEL[item.direction] ?? item.direction}
+            </p>
+          ) : null}
           <p className="text-xs text-ink-secondary">{item.summary || '—'}</p>
           {item.anomaly ? (
             <div className="space-y-0.5">
@@ -455,6 +471,13 @@ export default function AdminReviewsPage() {
                 {decisionTarget.biz_no || `#${decisionTarget.biz_id}`}
               </p>
               <p>申请人：{decisionTarget.applicant_name}（#{decisionTarget.applicant_id}）</p>
+              {decisionTarget.direction ? (
+                <p>
+                  方向：
+                  {BALANCE_DIRECTION_LABEL[decisionTarget.direction] ??
+                    decisionTarget.direction}
+                </p>
+              ) : null}
               <p>摘要：{decisionTarget.summary || '—'}</p>
               <p>金额：{amountText(decisionTarget)}</p>
             </div>

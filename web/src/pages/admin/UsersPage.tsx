@@ -1,8 +1,20 @@
 import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { errorHint, errorMessage } from '@/api/client'
-import { useDisableUser, useEnableUser, useUser, useUsers } from '@/api/admin'
-import type { AdminUser, AdminUserListParams, AdminUserStatus } from '@/api/admin'
+import {
+  useDisableUser,
+  useEnableUser,
+  useSubmitBalanceAdjust,
+  useUser,
+  useUsers,
+} from '@/api/admin'
+import type {
+  AdminUser,
+  AdminUserListParams,
+  AdminUserStatus,
+  BalanceAdjustDirection,
+  BalanceAdjustState,
+} from '@/api/admin'
 import {
   Badge,
   Button,
@@ -44,6 +56,26 @@ const SEARCH_FIELD_LABEL: Record<DetectedField, string> = {
   email: '邮箱',
   phone: '手机号',
   user_no: '用户号',
+}
+
+const BALANCE_DIRECTION_LABEL: Record<BalanceAdjustDirection, string> = {
+  INCREASE: '增加',
+  DECREASE: '减少',
+}
+
+const BALANCE_STATE_LABEL: Record<BalanceAdjustState, string> = {
+  PENDING: '待审核',
+  APPROVED: '已通过',
+  REJECTED: '已驳回',
+}
+
+function parseBalanceAmount(raw: string): number | null {
+  const normalized = normalizeDigits(raw)
+    .replace(/[，,\s]/g, '')
+  if (!/^\d+$/.test(normalized)) return null
+  const value = Number(normalized)
+  if (!Number.isSafeInteger(value) || value <= 0) return null
+  return value
 }
 
 function normalizeDigits(raw: string): string {
@@ -124,6 +156,16 @@ export default function AdminUsersPage() {
   const [enableTarget, setEnableTarget] = useState<AdminUser | null>(null)
   const [enableError, setEnableError] = useState<string | null>(null)
 
+  const submitBalance = useSubmitBalanceAdjust()
+  const [balanceTarget, setBalanceTarget] = useState<AdminUser | null>(null)
+  const [balanceDirection, setBalanceDirection] =
+    useState<BalanceAdjustDirection>('INCREASE')
+  const [balanceAmount, setBalanceAmount] = useState('')
+  const [balanceReason, setBalanceReason] = useState('')
+  const [balanceAmountError, setBalanceAmountError] = useState<string | null>(null)
+  const [balanceReasonError, setBalanceReasonError] = useState<string | null>(null)
+  const [balanceError, setBalanceError] = useState<string | null>(null)
+
   const [auditOpen, setAuditOpen] = useState(false)
   const [auditTarget, setAuditTarget] = useState<{ type?: string; id?: string }>({})
   const [auditRefreshKey, setAuditRefreshKey] = useState(0)
@@ -180,6 +222,51 @@ export default function AdminUsersPage() {
     } catch (error) {
       const hint = errorHint(error)
       setEnableError(hint ? `${errorMessage(error)}（${hint}）` : errorMessage(error))
+    }
+  }
+
+  const openBalanceAdjust = (user: AdminUser) => {
+    setBalanceTarget(user)
+    setBalanceDirection('INCREASE')
+    setBalanceAmount('')
+    setBalanceReason('')
+    setBalanceAmountError(null)
+    setBalanceReasonError(null)
+    setBalanceError(null)
+  }
+
+  const handleBalanceAdjust = async () => {
+    if (!balanceTarget) return
+    const amount = parseBalanceAmount(balanceAmount)
+    const reason = balanceReason.trim()
+    const reasonLength = [...reason].length
+    let invalid = false
+    setBalanceAmountError(null)
+    setBalanceReasonError(null)
+    setBalanceError(null)
+    if (amount === null) {
+      setBalanceAmountError('金额需为大于 0 的整数微积分；超过后端单张上限会被拒绝。')
+      invalid = true
+    }
+    if (reasonLength < 5) {
+      setBalanceReasonError('调整理由至少 5 个字。')
+      invalid = true
+    } else if (reasonLength > 255) {
+      setBalanceReasonError('调整理由最多 255 个字符。')
+      invalid = true
+    }
+    if (invalid || amount === null) return
+    try {
+      const response = await submitBalance.mutateAsync({
+        id: balanceTarget.id,
+        input: { direction: balanceDirection, amount_micro: amount, reason },
+      })
+      toast.success('已提交审核', '需由其他审核人批准后才会落账。')
+      openAudit('t_balance_adjust', response.balance_adjust.id)
+      setBalanceTarget(null)
+    } catch (error) {
+      const hint = errorHint(error)
+      setBalanceError(hint ? `${errorMessage(error)}（${hint}）` : errorMessage(error))
     }
   }
 
@@ -292,7 +379,7 @@ export default function AdminUsersPage() {
     <div className="space-y-5">
       <PageHeader
         title="用户管理"
-        description="账号状态、套餐与余额只读展示；余额调整与 Key 数暂无后端接口。"
+        description="账号状态、套餐与余额展示；余额调整提交后进入审核队列，由他人批准后落账。"
         actions={
           <Button variant="secondary" onClick={() => openAudit()}>
             审计记录
@@ -369,7 +456,7 @@ export default function AdminUsersPage() {
         open={detailId !== null}
         onClose={() => setDetailId(null)}
         title="用户详情"
-        description="余额与状态只读；余额调整暂无后端接口，Key 数为实时聚合值。"
+        description="余额与状态展示；余额调整需另一位审核人批准，Key 数为实时聚合值。"
         size="lg"
       >
         {detail.isLoading ? (
@@ -426,19 +513,13 @@ export default function AdminUsersPage() {
             <section className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-ink">余额</h3>
-                <div className="flex flex-col items-end gap-1">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    disabled
-                    title="后端暂未提供余额调整接口（需 T24）"
-                  >
-                    调整余额
-                  </Button>
-                  <span className="text-xs text-ink-muted">
-                    后端暂未提供余额调整接口（需 T24）
-                  </span>
-                </div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => openBalanceAdjust(detailUser)}
+                >
+                  调整余额
+                </Button>
               </div>
               {balance && !balance.exists ? (
                 <p className="text-xs text-ink-muted">该用户尚无积分账户，以下数值为零值。</p>
@@ -463,6 +544,53 @@ export default function AdminUsersPage() {
                 label="透支额度"
                 value={`${formatCreditAmount(balance?.overdraft_limit_micro ?? 0)} 积分`}
               />
+            </section>
+
+            <section className="space-y-1">
+              <h3 className="text-sm font-semibold text-ink">最近余额调整</h3>
+              {detail.data?.latest_balance_adjust ? (
+                <>
+                  <DetailRow
+                    label="状态"
+                    value={
+                      <Badge
+                        variant={
+                          detail.data.latest_balance_adjust.state === 'APPROVED'
+                            ? 'success'
+                            : detail.data.latest_balance_adjust.state === 'REJECTED'
+                              ? 'danger'
+                              : 'warning'
+                        }
+                      >
+                        {BALANCE_STATE_LABEL[detail.data.latest_balance_adjust.state]}
+                      </Badge>
+                    }
+                  />
+                  <DetailRow
+                    label="方向"
+                    value={
+                      BALANCE_DIRECTION_LABEL[detail.data.latest_balance_adjust.direction]
+                    }
+                  />
+                  <DetailRow
+                    label="金额"
+                    value={`${formatCreditAmount(detail.data.latest_balance_adjust.amount_micro)} 积分`}
+                  />
+                  <DetailRow label="理由" value={detail.data.latest_balance_adjust.reason} />
+                  <DetailRow
+                    label="提交时间"
+                    value={formatDateTime(detail.data.latest_balance_adjust.created_at)}
+                  />
+                  {detail.data.latest_balance_adjust.decided_at ? (
+                    <DetailRow
+                      label="审批时间"
+                      value={formatDateTime(detail.data.latest_balance_adjust.decided_at)}
+                    />
+                  ) : null}
+                </>
+              ) : (
+                <p className="text-xs text-ink-muted">该用户暂无余额调整记录。</p>
+              )}
             </section>
 
             <section className="space-y-1">
@@ -531,6 +659,66 @@ export default function AdminUsersPage() {
           if (enableUser.isPending) return
           setEnableTarget(null)
           setEnableError(null)
+        }}
+      />
+
+      <ConfirmDialog
+        open={balanceTarget !== null}
+        title="提交余额调整"
+        description={
+          balanceTarget ? (
+            <div className="space-y-3">
+              <p>
+                调整「{balanceTarget.nickname || balanceTarget.user_no}」的余额会进入审核队列；
+                必须由另一位审核人批准后才会产生账本分录。
+              </p>
+              <Select
+                label="方向"
+                value={balanceDirection}
+                onChange={(event) =>
+                  setBalanceDirection(event.target.value as BalanceAdjustDirection)
+                }
+                options={[
+                  { value: 'INCREASE', label: '增加余额' },
+                  { value: 'DECREASE', label: '减少余额' },
+                ]}
+              />
+              <Input
+                label="金额（微积分）"
+                required
+                inputMode="numeric"
+                value={balanceAmount}
+                error={balanceAmountError ?? undefined}
+                hint="必须大于 0；单张上限由后端校验，超限会返回 400。"
+                onChange={(event) => {
+                  setBalanceAmount(event.target.value)
+                  setBalanceAmountError(null)
+                }}
+              />
+              <Input
+                label="调整理由"
+                required
+                value={balanceReason}
+                error={balanceReasonError ?? undefined}
+                hint="至少 5 个字；会写入审核队列与审计。"
+                onChange={(event) => {
+                  setBalanceReason(event.target.value)
+                  setBalanceReasonError(null)
+                }}
+              />
+            </div>
+          ) : undefined
+        }
+        confirmLabel="提交审核"
+        loading={submitBalance.isPending}
+        error={balanceError}
+        onConfirm={() => void handleBalanceAdjust()}
+        onCancel={() => {
+          if (submitBalance.isPending) return
+          setBalanceTarget(null)
+          setBalanceAmountError(null)
+          setBalanceReasonError(null)
+          setBalanceError(null)
         }}
       />
 

@@ -98,6 +98,12 @@ type GrantParams struct {
 	OperatorID *int64
 	Reason     *string
 
+	// SourceID overrides t_credit_batch.source_id without claiming the credit
+	// came from a recharge order. A manual balance adjustment stores the
+	// t_balance_adjust id here; OrderID stays nil so t_ledger_entry has no
+	// recharge_order_id it cannot justify.
+	SourceID *int64
+
 	IdemKeyRecharge string
 	IdemKeyBonus    string
 
@@ -164,11 +170,16 @@ func (s *Store) GrantTx(ctx context.Context, tx *sql.Tx, p GrantParams, now time
 	}
 	running := acct.TotalMicro()
 
+	sourceID := p.OrderID
+	if p.SourceID != nil {
+		sourceID = p.SourceID
+	}
+
 	if p.RechargeMicro > 0 {
 		batchID, err := InsertCreditBatch(ctx, tx, CreditBatchParams{
 			UserID:      p.UserID,
 			BatchType:   BatchTypeRecharge,
-			SourceID:    p.OrderID,
+			SourceID:    sourceID,
 			AmountMicro: p.RechargeMicro,
 			Refundable:  true,
 			ExpireAt:    nil, // recharge credits never expire
@@ -217,7 +228,7 @@ func (s *Store) GrantTx(ctx context.Context, tx *sql.Tx, p GrantParams, now time
 		batchID, err := InsertCreditBatch(ctx, tx, CreditBatchParams{
 			UserID:      p.UserID,
 			BatchType:   bonusType,
-			SourceID:    p.OrderID,
+			SourceID:    sourceID,
 			AmountMicro: p.BonusMicro,
 			Refundable:  false,
 			ExpireAt:    p.BonusExpireAt,

@@ -144,8 +144,17 @@ func New(d Deps) (*Server, error) {
 		tickets.Mailer = d.Mailer
 	}
 	// The review centre decides through the fund service; it has no balance
-	// writer of its own.
+	// writer of its own. The ledger store is shared with fund so both paths use
+	// one entry_no generator.
 	reviews := review.New(d.DB, d.Audit, d.Now, d.Logger, funds)
+	authSvc := &auth.Service{
+		DB:       d.DB,
+		Sessions: d.Sessions,
+		Audit:    d.Audit,
+		Logger:   d.Logger,
+		Now:      d.Now,
+	}
+	authSvc.CancellableCheck = tickets.CheckAccountCancellable
 	// Log reads go to LogDB when a separate log database is configured. The
 	// service falls back to DB on its own, so both the split and the
 	// single-database deployments share one route table.
@@ -156,14 +165,8 @@ func New(d Deps) (*Server, error) {
 	usageSvc := usage.New(d.DB, d.Redis, d.Now, d.Logger)
 	auditSvc := auditq.New(d.DB, d.Now, d.Logger)
 	return &Server{
-		d: d,
-		auth: &auth.Service{
-			DB:       d.DB,
-			Sessions: d.Sessions,
-			Audit:    d.Audit,
-			Logger:   d.Logger,
-			Now:      d.Now,
-		},
+		d:       d,
+		auth:    authSvc,
 		user:    user.New(d.DB, d.Redis, d.Now, d.Logger),
 		keys:    keys,
 		models:  model.New(d.DB, d.Now, d.Logger),
@@ -202,6 +205,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// account owns (K30 → K20). No capability: every signed-in account may
 	// change its own credential.
 	mux.Handle("POST /api/v1/auth/password", s.authed("", s.auth.ChangePassword))
+	// Self-service cancellation: open tickets block it, then status=DISABLED
+	// and every session key are cleared. No capability beyond being signed in.
+	mux.Handle("POST /api/v1/auth/cancel", s.authed("", s.auth.Cancel))
 
 	// Console account.
 	mux.Handle("GET /api/console/overview", s.authed(mw.PermUserRead, s.user.Overview))
@@ -293,6 +299,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/announcements", s.authed(mw.PermNoticeWrite, s.ops.CreateAnnouncement))
 	mux.Handle("PATCH /api/admin/announcements/{id}", s.authed(mw.PermNoticeWrite, s.ops.UpdateAnnouncement))
 	mux.Handle("POST /api/admin/announcements/{id}/publish", s.authed(mw.PermNoticeWrite, s.ops.PublishAnnouncement))
+	mux.Handle("POST /api/admin/announcements/{id}/offline", s.authed(mw.PermNoticeWrite, s.ops.OfflineAnnouncement))
 
 	mux.Handle("GET /api/admin/risk/rules", s.authed(mw.PermRiskWrite, s.ops.ListRiskRules))
 	mux.Handle("POST /api/admin/risk/rules", s.authed(mw.PermRiskWrite, s.ops.CreateRiskRule))
@@ -305,6 +312,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/admin/users/{id}", s.authed(mw.PermAdminRead, s.ops.GetUser))
 	mux.Handle("POST /api/admin/users/{id}/disable", s.authed(mw.PermUserWrite, s.ops.DisableUser))
 	mux.Handle("POST /api/admin/users/{id}/enable", s.authed(mw.PermUserWrite, s.ops.EnableUser))
+	// T24 balance adjustment: user.write submits, fund.approve decides. The
+	// document never changes money on submission; approval posts a ledger entry.
+	mux.Handle("POST /api/admin/users/{id}/balance-adjust", s.authed(mw.PermUserWrite, s.reviews.SubmitBalanceAdjust))
 
 	mux.Handle("GET /api/admin/config", s.authed(mw.PermConfigWrite, s.ops.GetConfig))
 	mux.Handle("PUT /api/admin/config", s.authed(mw.PermConfigWrite, s.ops.PutConfig))

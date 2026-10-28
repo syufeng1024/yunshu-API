@@ -57,6 +57,14 @@ func (s *Service) Reject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Rejection writes no money, but both the document and the queue row must
+	// move in one transaction so a crash cannot leave an APPROVED queue row
+	// pointing at a PENDING document.
+	if task.BizType == BizBalanceAdjust {
+		s.rejectBalanceAdjust(w, r, task, operatorID, operatorRole, reason)
+		return
+	}
+
 	if apiErr := s.applyRejection(ctx, task, operatorID, reason); apiErr != nil {
 		mw.WriteError(w, r, apiErr)
 		return
@@ -86,7 +94,7 @@ func (s *Service) applyRejection(ctx context.Context, task reviewTask, operatorI
 		return stateConflict("开票申请暂无可调用的驳回方法（资金域未导出 RejectInvoice）").
 			WithHint("驳回开票申请需由资金域补充导出方法；见 T16 交付回执「副作用委派」")
 
-	case BizRedeemBatch, BizBalanceAdjust:
+	case BizRedeemBatch:
 		return stateConflict(
 			"单据类型 %s 在资金域没有可调用的驳回方法；审批中心不直接改业务表", task.BizType).
 			WithHint("该类型的提交入口尚未实现，详见 T16 交付回执的「副作用委派」")

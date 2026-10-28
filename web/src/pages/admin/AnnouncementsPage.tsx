@@ -3,6 +3,8 @@ import { errorHint, errorMessage } from '@/api/client'
 import {
   useAnnouncements,
   useCreateAnnouncement,
+  useModels,
+  useOfflineAnnouncement,
   usePublishAnnouncement,
   useUpdateAnnouncement,
 } from '@/api/admin'
@@ -76,7 +78,10 @@ interface AnnouncementFormState {
   positionMask: string
   pinned: boolean
   publishAt: string
+  effectiveFrom: string
   effectiveTo: string
+  /** t_announcement_model associations; empty means "all models". */
+  modelIds: number[]
 }
 
 function emptyForm(): AnnouncementFormState {
@@ -87,7 +92,9 @@ function emptyForm(): AnnouncementFormState {
     positionMask: '1',
     pinned: false,
     publishAt: '',
+    effectiveFrom: '',
     effectiveTo: '',
+    modelIds: [],
   }
 }
 
@@ -98,11 +105,12 @@ function formFromAnnouncement(announcement: Announcement): AnnouncementFormState
     annType: announcement.ann_type,
     positionMask: String(announcement.position_mask),
     pinned: announcement.pinned,
-    // Leave the schedule blank: an empty publish_at keeps the current
-    // DRAFT/SCHEDULED state, while prefilling the past effective_from would
-    // publish the notice immediately on save.
+    // Leave publish_at blank: it is the reschedule action. effective_from is
+    // the visibility start and is editable for DRAFT/SCHEDULED rows.
     publishAt: '',
+    effectiveFrom: announcement.effective_from,
     effectiveTo: announcement.effective_to ?? '',
+    modelIds: [...announcement.model_ids],
   }
 }
 
@@ -144,6 +152,22 @@ function validateAnnouncement(
     }
   }
 
+  let effectiveFrom: Date | null = null
+  if (form.effectiveFrom) {
+    effectiveFrom = new Date(form.effectiveFrom)
+    if (Number.isNaN(effectiveFrom.getTime())) {
+      errors.effectiveFrom = '生效时间格式不正确。'
+    }
+  }
+  if (
+    publishAt &&
+    effectiveFrom &&
+    !Number.isNaN(effectiveFrom.getTime()) &&
+    effectiveFrom.getTime() < publishAt.getTime()
+  ) {
+    errors.effectiveFrom = '生效时间不能早于定时发布时间。'
+  }
+
   let effectiveTo: Date | null = null
   if (form.effectiveTo) {
     effectiveTo = new Date(form.effectiveTo)
@@ -152,11 +176,14 @@ function validateAnnouncement(
     }
   }
 
-  const effectiveFrom = publishAt ?? (editing ? new Date(editing.effective_from) : now)
+  const effectiveStart =
+    effectiveFrom ??
+    publishAt ??
+    (editing ? new Date(editing.effective_from) : now)
   if (
     effectiveTo &&
-    !Number.isNaN(effectiveFrom.getTime()) &&
-    effectiveTo.getTime() <= effectiveFrom.getTime()
+    !Number.isNaN(effectiveStart.getTime()) &&
+    effectiveTo.getTime() <= effectiveStart.getTime()
   ) {
     errors.effectiveTo = '失效时间必须晚于公告生效时间。'
   }
@@ -171,8 +198,12 @@ function validateAnnouncement(
     ann_type: form.annType,
     position_mask: positionMask as number,
     pinned: form.pinned,
+    // Always send the current set: an empty array clears existing associations,
+    // which is the operator's explicit choice in the picker.
+    model_ids: form.modelIds,
   }
   if (publishAt) payload.publish_at = publishAt.toISOString()
+  if (effectiveFrom) payload.effective_from = effectiveFrom.toISOString()
   if (effectiveTo) payload.effective_to = effectiveTo.toISOString()
   return { errors, payload }
 }
@@ -224,13 +255,19 @@ export default function AdminAnnouncementsPage() {
     sort: 'created_at',
     order: 'desc',
   })
-  // Coarse promotion-vs-price-change hint. The announcement API has no
-  // model_ids on reads, so this can only report a time-window overlap.
+  // The price-change feed carries model_ids, so the promotion hint can compare
+  // associations instead of only overlapping time windows. The backend
+  // save/publish check remains the authority.
   const hintFeed = useAnnouncements({ page: 1, pageSize: 100 })
+  // Model names for the association picker and the conflict list. 100 is the
+  // backend's page-size ceiling (mw.MaxPageSize); an operator who needs a model
+  // outside the first page can still save associations created elsewhere.
+  const models = useModels({ page: 1, pageSize: 100, sort: 'model_name', order: 'asc' })
 
   const createAnnouncement = useCreateAnnouncement()
   const updateAnnouncement = useUpdateAnnouncement()
   const publishAnnouncement = usePublishAnnouncement()
+  const offlineAnnouncement = useOfflineAnnouncement()
 
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<Announcement | null>(null)
@@ -242,6 +279,9 @@ export default function AdminAnnouncementsPage() {
 
   const [publishTarget, setPublishTarget] = useState<Announcement | null>(null)
   const [publishError, setPublishError] = useState<string | null>(null)
+
+  const [offlineTarget, setOfflineTarget] = useState<Announcement | null>(null)
+  const [offlineError, setOfflineError] = useState<string | null>(null)
 
   const [auditOpen, setAuditOpen] = useState(false)
   const [auditTarget, setAuditTarget] = useState<{ type?: string; id?: string }>({})
@@ -301,6 +341,15 @@ export default function AdminAnnouncementsPage() {
     })
   }
 
+  const toggleModel = (id: number) => {
+    updateField(
+      'modelIds',
+      form.modelIds.includes(id)
+        ? form.modelIds.filter((modelID) => modelID !== id)
+        : [...form.modelIds, id],
+    )
+  }
+
   const handleSave = async () => {
     if (!creating && !editing) return
     const result = validateAnnouncement(form, editing)
@@ -348,8 +397,33 @@ export default function AdminAnnouncementsPage() {
     }
   }
 
+  const handleOffline = async () => {
+    if (!offlineTarget) return
+    setOfflineError(null)
+    try {
+      await offlineAnnouncement.mutateAsync(offlineTarget.id)
+      toast.success('公告已下线')
+      openAudit('t_announcement', offlineTarget.id)
+      setOfflineTarget(null)
+    } catch (error) {
+      const hint = errorHint(error)
+      setOfflineError(hint ? `${errorMessage(error)}（${hint}）` : errorMessage(error))
+    }
+  }
+
   const now = Date.now()
   const windowEnd = now + PRICE_NOTICE_WINDOW_MS
+  const selectedModelIDs = new Set(form.modelIds)
+  const modelNameByID = new Map<number, string>(
+    (models.data?.items ?? []).map(
+      (model) => [model.id, model.display_name || model.model_name] as const,
+    ),
+  )
+  const modelLabel = (id: number) => modelNameByID.get(id) ?? `模型#${id}`
+  const listedModelIDs = new Set(modelNameByID.keys())
+  // Associations created before this page loaded remain selected and are sent
+  // back untouched, even when they fall outside the fetched page.
+  const unlistedModelIDs = form.modelIds.filter((id) => !listedModelIDs.has(id))
   const priceChangeNotices = (hintFeed.data?.items ?? []).filter((announcement) => {
     if (announcement.ann_type !== 'PRICE_CHANGE') return false
     const from = new Date(announcement.effective_from).getTime()
@@ -357,7 +431,11 @@ export default function AdminAnnouncementsPage() {
       ? new Date(announcement.effective_to).getTime()
       : Number.POSITIVE_INFINITY
     if (Number.isNaN(from) || Number.isNaN(to)) return false
-    return from < windowEnd && to > now
+    if (!(from < windowEnd && to > now)) return false
+    // Empty model_ids on either side means "all models" (backend conflict
+    // check semantics), so only two non-empty sets can miss each other.
+    if (selectedModelIDs.size === 0 || announcement.model_ids.length === 0) return true
+    return announcement.model_ids.some((id) => selectedModelIDs.has(id))
   })
 
   const columns: TableColumn<Announcement>[] = [
@@ -450,6 +528,7 @@ export default function AdminAnnouncementsPage() {
       render: (announcement) => {
         const editable = EDITABLE_STATES.includes(announcement.state)
         const published = announcement.state === 'PUBLISHED'
+        const offline = announcement.state === 'OFFLINE'
         return (
           <div className="flex flex-wrap items-center justify-end gap-1">
             <Button
@@ -478,6 +557,23 @@ export default function AdminAnnouncementsPage() {
               }}
             >
               发布
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-danger"
+              disabled={offline}
+              title={
+                offline
+                  ? '已下线公告无需重复下线；后端会返回 409。'
+                  : '下线后立即停止展示，状态变为 OFFLINE。'
+              }
+              onClick={() => {
+                setOfflineError(null)
+                setOfflineTarget(announcement)
+              }}
+            >
+              下线
             </Button>
             {!editable || published ? (
               <span className="w-full text-right text-xs text-ink-muted">
@@ -592,7 +688,7 @@ export default function AdminAnnouncementsPage() {
     <div className="space-y-5">
       <PageHeader
         title="公告与风控"
-        description="公告发布、定时发布与模型上下架自动草稿；当前无撤回接口。"
+        description="公告发布、定时发布、下线与模型上下架自动草稿。"
         actions={
           <>
             <Button variant="secondary" onClick={() => openAudit()}>
@@ -602,10 +698,6 @@ export default function AdminAnnouncementsPage() {
           </>
         }
       />
-
-      <p className="rounded-lg border border-warning bg-warning-soft px-4 py-2 text-xs text-warning">
-        当前无撤回接口，如需下线请联系后端补口（T24）。公告发布后不可在原处撤回或删除。
-      </p>
 
       <Tabs
         ariaLabel="公告分区"
@@ -721,21 +813,82 @@ export default function AdminAnnouncementsPage() {
             />
           </div>
 
-          <div className="rounded-lg border border-border bg-surface-muted p-3 text-xs text-ink-secondary">
-            <p>
-              生效起：
-              {editing ? formatDateTime(editing.effective_from) : '保存时由后端决定'}
+          <Input
+            label="生效时间（可选）"
+            type="datetime-local"
+            value={
+              form.effectiveFrom
+                ? toLocalDateTimeValue(new Date(form.effectiveFrom))
+                : ''
+            }
+            error={errors.effectiveFrom}
+            hint={
+              form.publishAt
+                ? '不能早于定时发布时间；留空则由 publish_at 决定。'
+                : '留空则由 publish_at 或后端当前时间决定；已发布公告不可修改。'
+            }
+            onChange={(event) => {
+              const value = event.target.value
+              updateField('effectiveFrom', value ? new Date(value).toISOString() : '')
+            }}
+          />
+          {editing ? (
+            <p className="text-xs text-ink-muted">
+              当前生效起：{formatDateTime(editing.effective_from)}
             </p>
-            <p className="mt-1 text-ink-muted">
-              写入接口不接收 effective_from；新建时由 publish_at 或后端当前时间决定，编辑时保留原生效时间（除非设置新的 publish_at）。
-            </p>
-          </div>
+          ) : null}
+
+          {form.annType === 'PROMOTION' || form.annType === 'PRICE_CHANGE' ? (
+            <div className="space-y-2">
+              <p className="text-sm font-medium text-ink">关联模型（可选）</p>
+              <p className="text-xs text-ink-muted">
+                留空表示全部模型；保存后写入 t_announcement_model，并用于活动与调价冲突检查。
+              </p>
+              {models.isError ? (
+                <p className="text-xs text-danger">
+                  模型列表加载失败：{errorMessage(models.error)}；仍可保存，冲突检查按全部模型处理。
+                </p>
+              ) : models.isLoading ? (
+                <p className="text-xs text-ink-muted">加载模型列表…</p>
+              ) : (models.data?.items ?? []).length === 0 ? (
+                <p className="text-xs text-ink-muted">暂无可用模型。</p>
+              ) : (
+                <div className="max-h-48 overflow-y-auto rounded-lg border border-border-strong p-3">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {(models.data?.items ?? []).map((model) => (
+                      <label
+                        key={model.id}
+                        className="flex items-center gap-2 text-xs text-ink"
+                      >
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-border-strong text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                          checked={form.modelIds.includes(model.id)}
+                          onChange={() => toggleModel(model.id)}
+                        />
+                        <span>{model.display_name || model.model_name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <p className="text-xs text-ink-muted">
+                已关联 {form.modelIds.length} 个模型
+                {unlistedModelIDs.length > 0
+                  ? `（其中 ${unlistedModelIDs
+                      .map(modelLabel)
+                      .join('、')} 不在当前列表，仍会提交）`
+                  : ''}
+                。
+              </p>
+            </div>
+          ) : null}
 
           {form.annType === 'PROMOTION' ? (
             <div className="space-y-2 rounded-lg border border-warning bg-warning-soft p-3 text-xs">
-              <p className="font-medium text-warning">活动与调价冲突（粗提示）</p>
+              <p className="font-medium text-warning">活动与调价冲突</p>
               <p className="text-ink-secondary">
-                判定依据：现有 PRICE_CHANGE 公告的生效区间与未来 7 天调价窗口重叠。公告读取接口不返回 model_ids，无法判定具体模型；最终以后端保存/发布校验为准。
+                判定依据：现有 PRICE_CHANGE 公告的生效区间与未来 7 天调价窗口重叠，且与本次关联模型有交集（任一方未关联模型时按全部模型处理）。最终以后端保存/发布校验为准。
               </p>
               {hintFeed.isError ? (
                 <p className="text-danger">
@@ -743,7 +896,7 @@ export default function AdminAnnouncementsPage() {
                 </p>
               ) : priceChangeNotices.length === 0 ? (
                 <p className="text-ink-secondary">
-                  未发现同期 PRICE_CHANGE 公告（粗提示，不保证无冲突）。
+                  未发现同期、同模型的 PRICE_CHANGE 公告（最终以后端校验为准）。
                 </p>
               ) : (
                 <ul className="space-y-1">
@@ -754,7 +907,10 @@ export default function AdminAnnouncementsPage() {
                       {announcement.effective_to
                         ? formatDateTime(announcement.effective_to)
                         : '长期'}
-                      ）
+                      ）·{' '}
+                      {announcement.model_ids.length === 0
+                        ? '全部模型'
+                        : announcement.model_ids.map(modelLabel).join('、')}
                     </li>
                   ))}
                 </ul>
@@ -769,7 +925,7 @@ export default function AdminAnnouncementsPage() {
         title="发布公告"
         description={
           publishTarget
-            ? `发布后「${publishTarget.title}」立即对用户可见且不可编辑；当前无撤回接口。确认发布？`
+            ? `发布后「${publishTarget.title}」立即对用户可见且不可编辑；如需停止展示可使用「下线」。确认发布？`
             : undefined
         }
         confirmLabel="确认发布"
@@ -780,6 +936,25 @@ export default function AdminAnnouncementsPage() {
           if (publishAnnouncement.isPending) return
           setPublishTarget(null)
           setPublishError(null)
+        }}
+      />
+
+      <ConfirmDialog
+        open={offlineTarget !== null}
+        title="下线公告"
+        description={
+          offlineTarget
+            ? `下线后「${offlineTarget.title}」立即停止对用户展示，状态变为 OFFLINE；该操作不可撤销。确认下线？`
+            : undefined
+        }
+        confirmLabel="确认下线"
+        loading={offlineAnnouncement.isPending}
+        error={offlineError}
+        onConfirm={() => void handleOffline()}
+        onCancel={() => {
+          if (offlineAnnouncement.isPending) return
+          setOfflineTarget(null)
+          setOfflineError(null)
         }}
       />
 

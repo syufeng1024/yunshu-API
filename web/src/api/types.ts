@@ -139,6 +139,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 注销当前账号（禁用账号并删除全部会话）
+         * @description 先调用 ticket.CheckAccountCancellable：存在 OPEN / RESPONDED 工单时返回
+         *     409，并在 message 中列出全部未结工单号。成功后 status 置为 DISABLED、
+         *     disable_source=SELF_CANCEL、cancel_apply_at=now，并删除该 uid 的全部
+         *     K20 / K30 会话键；旧 sid 立即失效。不新增 t_user.status 枚举值。
+         */
+        post: operations["cancelAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/overview": {
         parameters: {
             query?: never;
@@ -494,6 +517,56 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/announcements/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_announcement.id；不存在或已删除返回 404 resource_not_found */
+                id: components["parameters"]["AnnouncementID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /**
+         * 编辑公告（DRAFT / SCHEDULED；PUBLISHED 与 OFFLINE 拒绝）
+         * @description effective_from 是可见起点。请求同时带 publish_at 时，effective_from 不得
+         *     早于它，否则返回 400 并点名 effective_from。已 PUBLISHED / OFFLINE 的
+         *     公告不可编辑，返回 409 resource_state_conflict。model_ids 传 null/缺省
+         *     表示保留现有 t_announcement_model 关联，传 [] 表示清空。
+         */
+        patch: operations["updateAdminAnnouncement"];
+        trace?: never;
+    };
+    "/api/admin/announcements/{id}/offline": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_announcement.id；不存在或已删除返回 404 resource_not_found */
+                id: components["parameters"]["AnnouncementID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 下线公告（DRAFT / SCHEDULED / PUBLISHED → OFFLINE）
+         * @description OFFLINE 是展示终态，不是删除：行与审计保留。已 OFFLINE 的公告再次调用
+         *     返回 409 resource_state_conflict，不静默成功。
+         */
+        post: operations["offlineAdminAnnouncement"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/overview": {
         parameters: {
             query?: never;
@@ -529,6 +602,58 @@ export interface paths {
         get: operations["listAdminUsers"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_user.id；不存在或已删除返回 404 resource_not_found */
+                id: components["parameters"]["UserID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * 运营用户详情（余额 + 最近一张余额调整单）
+         * @description 余额来自 t_credit_account；用户尚无积分账户时 exists=false 且各数值为 0。
+         *     latest_balance_adjust 取 t_balance_adjust 按 created_at DESC, id DESC 的
+         *     第一行，无记录时为 null。
+         */
+        get: operations["getAdminUser"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users/{id}/balance-adjust": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_user.id；不存在或已删除返回 404 resource_not_found */
+                id: components["parameters"]["UserID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 提交余额调整（进入审核队列，不直接改余额）
+         * @description 写 t_balance_adjust(PENDING) + t_review_task(BALANCE_ADJUST) + 审计，三者
+         *     同一事务。amount_micro 恒 > 0，方向由 direction 表达；同一用户同时只能
+         *     有一张 PENDING（生成列唯一索引 uk_ba_user_pending），第二次提交返回 409。
+         *     审批通过后由 review/balance.go 经 ledger.AdjustTx 落账；本接口不写
+         *     t_credit_account。
+         */
+        post: operations["submitBalanceAdjust"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2109,6 +2234,131 @@ export interface components {
             /** Format: int64 */
             total: number;
         };
+        AdminCreditBalance: {
+            /** @description t_credit_account 是否存在；false 时其余数值均为 0 */
+            exists: boolean;
+            /** Format: int64 */
+            balance_recharge_micro: number;
+            /** Format: int64 */
+            balance_bonus_micro: number;
+            /** Format: int64 */
+            balance_micro: number;
+            /** Format: int64 */
+            frozen_refund_micro: number;
+            /** Format: int64 */
+            overdraft_limit_micro: number;
+            /** Format: int64 */
+            total_recharge_micro: number;
+            /** Format: int64 */
+            total_bonus_micro: number;
+            /** Format: int64 */
+            total_consumed_micro: number;
+            /** Format: date-time */
+            last_settled_at?: string | null;
+        };
+        BalanceAdjustSummary: {
+            /** Format: int64 */
+            id: number;
+            /** @enum {string} */
+            direction: "INCREASE" | "DECREASE";
+            /**
+             * Format: int64
+             * @description 恒 > 0；方向由 direction 表达
+             */
+            amount_micro: number;
+            reason: string;
+            /** @enum {string} */
+            state: "PENDING" | "APPROVED" | "REJECTED";
+            /** Format: int64 */
+            applicant_id: number;
+            /** Format: int64 */
+            decided_by?: number | null;
+            /** Format: date-time */
+            decided_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AdminUserDetail: {
+            user: components["schemas"]["AdminUser"];
+            balance: components["schemas"]["AdminCreditBalance"];
+            /** @description 最近一张调整单；从未提交过时为 null */
+            latest_balance_adjust: components["schemas"]["BalanceAdjustSummary"] | null;
+        };
+        BalanceAdjustSubmitRequest: {
+            /** @enum {string} */
+            direction: "INCREASE" | "DECREASE";
+            /**
+             * Format: int64
+             * @description 微积分；1 积分 = 10000 微积分，单张上限 1,000,000 积分
+             */
+            amount_micro: number;
+            /** @description 至少 5 个字符；写入审核队列与审计 */
+            reason: string;
+        };
+        BalanceAdjustSubmitResponse: {
+            balance_adjust: components["schemas"]["BalanceAdjustSummary"] & {
+                /** Format: int64 */
+                user_id: number;
+                /** Format: date-time */
+                updated_at: string;
+            };
+            /** Format: int64 */
+            review_task_id: number;
+        };
+        Announcement: {
+            /** Format: int64 */
+            id: number;
+            title: string;
+            content: string;
+            /** @enum {string} */
+            ann_type: "NOTICE" | "MAINTENANCE" | "PROMOTION" | "PRICE_CHANGE";
+            /** Format: int64 */
+            position_mask: number;
+            pinned: boolean;
+            /**
+             * Format: date-time
+             * @description 可见起点；不得早于 publish_at
+             */
+            effective_from: string;
+            /** Format: date-time */
+            effective_to?: string | null;
+            /** @enum {string} */
+            state: "DRAFT" | "SCHEDULED" | "PUBLISHED" | "OFFLINE";
+            /** @description t_announcement_model 关联；无关联时返回 [] 而非 null */
+            model_ids: number[];
+            /** Format: int64 */
+            created_by: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AnnouncementWriteRequest: {
+            title?: string;
+            content?: string;
+            /** @enum {string} */
+            ann_type?: "NOTICE" | "MAINTENANCE" | "PROMOTION" | "PRICE_CHANGE";
+            /** Format: int64 */
+            position_mask?: number;
+            pinned?: boolean;
+            /**
+             * Format: date-time
+             * @description 未来时间进入 SCHEDULED；过去/缺省不改变发布状态
+             */
+            publish_at?: string;
+            /**
+             * Format: date-time
+             * @description 可见起点；与 publish_at 同时出现时不得早于它
+             */
+            effective_from?: string;
+            /** Format: date-time */
+            effective_to?: string | null;
+            /** @description 缺省保留现有关系；[] 清空；白名单外/不存在的模型返回 400 */
+            model_ids?: number[];
+        };
+        AnnouncementDetailResponse: {
+            announcement: components["schemas"]["Announcement"];
+        };
         AdminChannel: {
             /** Format: int64 */
             id: number;
@@ -2723,6 +2973,10 @@ export interface components {
         KeyID: number;
         /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
         TicketID: number;
+        /** @description t_user.id；不存在或已删除返回 404 resource_not_found */
+        UserID: number;
+        /** @description t_announcement.id；不存在或已删除返回 404 resource_not_found */
+        AnnouncementID: number;
     };
     requestBodies: never;
     headers: never;
@@ -3021,6 +3275,60 @@ export interface operations {
                 };
             };
             /** @description 会话存储不可用，密码可能已更新（auth_unavailable） */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    cancelAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 账号已禁用，全部会话已吊销，cookie 已清除 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 未登录或会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description CSRF token 缺失或不匹配（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 存在未结工单（resource_state_conflict，message 含工单号） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话存储不可用，注销可能已提交（auth_unavailable） */
             503: {
                 headers: {
                     [name: string]: unknown;
@@ -4403,6 +4711,137 @@ export interface operations {
             };
         };
     };
+    updateAdminAnnouncement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_announcement.id；不存在或已删除返回 404 resource_not_found */
+                id: components["parameters"]["AnnouncementID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AnnouncementWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description 更新后的公告 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnnouncementDetailResponse"];
+                };
+            };
+            /** @description 字段不合法（invalid_request_body；effective_from / effective_to / model_ids） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 notice.write（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 公告不存在或已删除（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 已发布/已下线公告不可编辑（resource_state_conflict） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    offlineAdminAnnouncement: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_announcement.id；不存在或已删除返回 404 resource_not_found */
+                id: components["parameters"]["AnnouncementID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已下线 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AnnouncementDetailResponse"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 notice.write（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 公告不存在或已删除（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 公告已下线（resource_state_conflict） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getAdminOverview: {
         parameters: {
             query?: never;
@@ -4479,6 +4918,128 @@ export interface operations {
             };
             /** @description 角色缺少 admin.read（permission_denied） */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getAdminUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_user.id；不存在或已删除返回 404 resource_not_found */
+                id: components["parameters"]["UserID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 用户详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserDetail"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 admin.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 用户不存在或已删除（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    submitBalanceAdjust: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_user.id；不存在或已删除返回 404 resource_not_found */
+                id: components["parameters"]["UserID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BalanceAdjustSubmitRequest"];
+            };
+        };
+        responses: {
+            /** @description 调整单已创建并进入审核队列 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BalanceAdjustSubmitResponse"];
+                };
+            };
+            /** @description 字段不合法（invalid_request_body；direction / amount_micro / reason） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 user.write（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 用户不存在或已删除（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 用户已有待审调整单，或尚无积分账户（resource_state_conflict） */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

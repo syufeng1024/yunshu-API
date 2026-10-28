@@ -590,6 +590,18 @@ export function useDeleteModelAlias() {
 // ---------------------------------------------------------------------------
 
 /** priceRuleView. Amounts are integer micro-credits; costs may be null. */
+/** priceWriteRequest.clear_fields whitelist (T24). */
+export type PriceClearField =
+  | 'cache_hit_ratio_bp'
+  | 'cache_write_ratio_bp'
+  | 'long_ctx_threshold_tokens'
+  | 'long_ctx_in_price_micro_per_k'
+  | 'long_ctx_out_price_micro_per_k'
+  | 'cost_in_micro_per_k'
+  | 'cost_out_micro_per_k'
+  | 'cost_per_call_micro'
+  | 'effective_to'
+
 export interface AdminPriceRule {
   id: number
   scope_level: string
@@ -650,6 +662,12 @@ export interface PriceWriteInput {
   effective_from?: string
   effective_to?: string | null
   enabled?: boolean
+  /**
+   * Explicit NULLs. A missing field means "leave alone", so clearing an existing
+   * value requires this list. A field may not appear here and also carry a
+   * value in the same request (backend 400).
+   */
+  clear_fields?: PriceClearField[]
   /** Required when a sell price has no matching upstream cost. */
   confirm_no_cost?: boolean
 }
@@ -813,6 +831,8 @@ export interface Announcement {
   effective_from: string
   effective_to?: string | null
   state: AnnouncementState
+  /** Persisted t_announcement_model associations; always an array, never null. */
+  model_ids: number[]
   created_by: number
   created_at: string
   updated_at: string
@@ -831,7 +851,7 @@ export interface AnnouncementListParams extends PageParams {
   order?: SortOrder
 }
 
-/** announcementWriteRequest. model_ids only narrows the promotion conflict check. */
+/** announcementWriteRequest. model_ids is persisted and also narrows the promotion conflict check. */
 export interface AnnouncementWriteInput {
   title?: string
   content?: string
@@ -839,6 +859,8 @@ export interface AnnouncementWriteInput {
   position_mask?: number
   pinned?: boolean
   publish_at?: string
+  /** Visibility start. Must not be earlier than publish_at (backend 400). */
+  effective_from?: string
   effective_to?: string | null
   model_ids?: number[]
 }
@@ -887,6 +909,15 @@ export function publishAnnouncement(
   )
 }
 
+/** OFFLINE is terminal for display; a second call answers 409. */
+export function offlineAnnouncement(
+  id: number | string,
+): Promise<AnnouncementDetailResponse> {
+  return api.post<AnnouncementDetailResponse>(
+    `/api/admin/announcements/${encodeURIComponent(String(id))}/offline`,
+  )
+}
+
 export function useAnnouncements(params: AnnouncementListParams = {}) {
   return useQuery({
     queryKey: ['admin', 'announcements', 'list', params],
@@ -921,6 +952,14 @@ export function usePublishAnnouncement() {
   return useMutation({
     mutationFn: ({ id, input }: { id: number | string; input?: AnnouncementPublishInput }) =>
       publishAnnouncement(id, input),
+    onSuccess: () => invalidateAnnouncements(client),
+  })
+}
+
+export function useOfflineAnnouncement() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number | string) => offlineAnnouncement(id),
     onSuccess: () => invalidateAnnouncements(client),
   })
 }
@@ -967,9 +1006,44 @@ export interface CreditBalance {
   last_settled_at?: string | null
 }
 
+export type BalanceAdjustDirection = 'INCREASE' | 'DECREASE'
+export type BalanceAdjustState = 'PENDING' | 'APPROVED' | 'REJECTED'
+
+/**
+ * User detail's most recent t_balance_adjust row. null means the user has never
+ * had one (not "unknown").
+ */
+export interface BalanceAdjustSummary {
+  id: number
+  direction: BalanceAdjustDirection
+  amount_micro: number
+  reason: string
+  state: BalanceAdjustState
+  applicant_id: number
+  decided_by?: number | null
+  decided_at?: string | null
+  created_at: string
+}
+
 export interface AdminUserDetailResponse {
   user: AdminUser
   balance: CreditBalance
+  latest_balance_adjust: BalanceAdjustSummary | null
+}
+
+export interface BalanceAdjustInput {
+  direction: BalanceAdjustDirection
+  amount_micro: number
+  /** At least 5 characters; the backend also caps it at 255. */
+  reason: string
+}
+
+export interface BalanceAdjustResponse {
+  balance_adjust: BalanceAdjustSummary & {
+    user_id: number
+    updated_at: string
+  }
+  review_task_id: number
 }
 
 export type AdminUserListResponse = Page<AdminUser>
@@ -1013,6 +1087,20 @@ export function disableUser(
 ): Promise<AdminUserDetailResponse> {
   return api.post<AdminUserDetailResponse>(
     `/api/admin/users/${encodeURIComponent(String(id))}/disable`,
+    input,
+  )
+}
+
+/**
+ * Submits a balance adjustment for review. The account is not changed here:
+ * a different operator must approve it and only then does the ledger move.
+ */
+export function submitBalanceAdjust(
+  id: number | string,
+  input: BalanceAdjustInput,
+): Promise<BalanceAdjustResponse> {
+  return api.post<BalanceAdjustResponse>(
+    `/api/admin/users/${encodeURIComponent(String(id))}/balance-adjust`,
     input,
   )
 }
@@ -1063,6 +1151,18 @@ export function useEnableUser() {
   })
 }
 
+export function useSubmitBalanceAdjust() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: number | string; input: BalanceAdjustInput }) =>
+      submitBalanceAdjust(id, input),
+    onSuccess: (_response, variables) => {
+      invalidateUsers(client, variables.id)
+      void client.invalidateQueries({ queryKey: ['admin', 'reviews'] })
+    },
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Reviews (internal/control/review)
 // ---------------------------------------------------------------------------
@@ -1084,6 +1184,8 @@ export interface ReviewItem {
   applicant_name: string
   amount_micro?: number | null
   amount_fen?: number | null
+  /** BALANCE_ADJUST only; the console renders the sign next to the amount. */
+  direction?: BalanceAdjustDirection | null
   summary: string
   business_state?: string
   state: ReviewState
