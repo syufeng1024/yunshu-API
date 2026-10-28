@@ -8,7 +8,7 @@
 | 需求基线 | PRD V1.2（2026-10-25） |
 | 技术基线 | TDS V1.2（2026-10-25） |
 | 任务卡版本 | T-1.0（2026-10-26） |
-| 卡片总数 | 27 张（阶段 0–6，含补口卡 T24/T25、防线卡 T26、功能补口 T27） |
+| 卡片总数 | 28 张（阶段 0–6，含补口卡 T24/T25、防线卡 T26、功能补口 T27、缺陷修复 T28） |
 | 交付总监（需求拆分 / 派单 / 验收） | 齐活林（本会话主理人） |
 | 实现方（按卡执行） | Claude Code（`claude_code_run`） |
 
@@ -150,7 +150,8 @@
 | [T24](T24-运营与控制面后端补口.md) | 运营与控制面后端补口（T19/T20 反查 16 项） | T15,T16,T19,T20 | `internal/control/`、`internal/ledger/`、`api/openapi.yaml`、`web/src/pages/admin/` | ✅ 两段完成（11 项） |
 | [T25](T25-日志请求正文落库.md) | 日志请求正文落库（迁移 0022 + 写入端 + 解密接线） | T14,T22 段1/2,T24 | `internal/platform/migrate/`、`internal/settle/`、`internal/logq/` | ✅ 一次通过（2026-10-28） |
 | [T26](T26-行尾一致性与迁移校验守卫.md) | 行尾一致性与迁移校验守卫（防 checksum 跨平台漂移） | T25 | `scripts/`、`.gitattributes`、`docs/dev-setup.md` | ✅ 通过（2026-10-28） |
-| [T27](T27-在线调试台段1内网扣费链路.md) | 在线调试台（段 1 内网扣费链路 + 段 2 前端接入） | T07–T09,T11,T12,T19 | `internal/gw/`、`internal/control/console/`、`web/src/`、`deploy/` | ✅ 两段完成（2026-10-29）；端到端待账号 |
+| [T27](T27-在线调试台段1内网扣费链路.md) | 在线调试台（段 1 内网扣费链路 + 段 2 前端接入） | T07–T09,T11,T12,T19 | `internal/gw/`、`internal/control/console/`、`web/src/`、`deploy/` | ✅ 两段完成（2026-10-29）；端到端已跑通 |
+| [T28](T28-实测缺陷修复与待办总账.md) | 实测缺陷修复与待办总账（5 修复 + 9 项总账） | T27 | `web/src/`、`internal/control/console/`、`scripts/` | ⬜ 未开始 |
 | [T22](T22-部署与可观测.md) | 部署·可观测·灰度回滚 | T09,T21 | `deploy/`、`internal/obs/` | 🟨 段 1–3 ✅（指标 / 日志+trace / 容器化+灰度）；段 4 未开始 |
 | [T23](T23-验收对照与交付.md) | 验收对照与交付（82 项功能点） | 全部 | `docs/tasks/acceptance/` | ⬜ |
 
