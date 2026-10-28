@@ -62,6 +62,10 @@ jobs:
   soak:
     name: soak (200 QPS, 10 minutes)
     runs-on: ubuntu-latest
+    # The load itself is 10 minutes; anything past ~20 means the job is wedged
+    # (service containers unreachable, goroutines leaked) and should stop
+    # instead of burning the 360-minute default.
+    timeout-minutes: 25
     services:
       mysql:
         image: mysql:8.0
@@ -100,7 +104,11 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          go test -tags soak -count=1 -v -run TestSoak ./internal/load/ \
+          # -timeout must exceed SOAK_DURATION plus seeding: `go test` defaults
+          # to 10m, which equals the load itself, so nightly #1 panicked with
+          # "test timed out after 10m0s" while still inside the tick loop and
+          # never reached the P99 / error-rate assertions.
+          go test -tags soak -timeout 20m -count=1 -v -run TestSoak ./internal/load/ \
             2>&1 | tee nightly-soak.log
 
       - name: upload soak log

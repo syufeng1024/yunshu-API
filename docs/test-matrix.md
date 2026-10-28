@@ -66,7 +66,7 @@
 | embedded 迁移与 `checksums.golden` 逐条一致（真实文件改动即变红） | `TestEmbeddedMigrationsMatchGoldenChecksums` | `go test -run TestEmbeddedMigrationsMatchGoldenChecksums ./internal/platform/migrate/` |
 | 覆盖率四条阈值 | `scripts/coverage-gate.sh` | `bash scripts/coverage-gate.sh` |
 | 全量 GWT | `scripts/test-gwt.sh` | `bash scripts/test-gwt.sh` |
-| 长跑稳定性（200 QPS） | `TestSoak` | `go test -tags soak -run TestSoak ./internal/load/` |
+| 长跑稳定性（200 QPS） | `TestSoak` | `go test -tags soak -timeout 20m -run TestSoak ./internal/load/` |
 | 本地一条命令 | `scripts/dev.sh ci` | `bash scripts/dev.sh ci` |
 
 ## 覆盖率阈值与卡面偏差
