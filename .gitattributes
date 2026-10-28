@@ -7,3 +7,11 @@
 # Pin these to LF so the bytes are identical on every platform.
 internal/platform/migrate/sql/mysql/*.sql text eol=lf
 internal/platform/migrate/checksums.golden text eol=lf
+
+# Lua scripts are embedded into the binary too (go:embed in the breaker,
+# idemstore, lock and ratelimit packages). No checksum covers them, so CRLF
+# cannot break `migrate up`; pinning them is about reproducible builds — a
+# Windows-built image would otherwise carry different script bytes than a
+# CI-built image from the same commit. This is hardening, not correctness:
+# scripts/check-eol.sh deliberately leaves Lua out of its mandatory list.
+*.lua text eol=lf

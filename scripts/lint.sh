@@ -91,6 +91,17 @@ else
   echo "WARN: golangci-lint not installed; skipped (CI installs it)"
 fi
 
+# 10. Files whose exact bytes are hashed must be LF on every platform. A CRLF
+#     checkout changes every migration checksum, so a Windows-built image stops
+#     matching a CI-built one. check-eol.sh lists the offending paths and the
+#     command that repairs them, and is silent when everything is clean.
+if eol_out="$(bash scripts/check-eol.sh 2>&1)"; then
+  echo "ok: 字节校验文件为 LF"
+else
+  printf '%s\n' "$eol_out"
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo
   echo "lint: FAILED"

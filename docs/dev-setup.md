@@ -16,6 +16,50 @@ docker compose version
 
 `make` 需要 GNU Make。Windows 仅在 Git Bash + GNU Make 下可用；没有 `make` 时执行下方“等价命令”列。
 
+### 行尾（Windows / `core.autocrlf=true`）
+
+`core.autocrlf=true` 的 checkout 会把文本转成 CRLF，本机 607 个非 `web/` 已跟踪文件中 467 个是 CRLF（含 360 个 `.go`，2026-10-28 实测），这是预期状态。**不要执行 `git add --renormalize .`**：会把 400+ 文件塞进同一次 diff，且与 autocrlf 的行为冲突。
+
+只有「字节被 SHA-256 校验」或「被 embed 且不做行尾归一」的文件必须为 LF。否则同一份代码在 Windows 与 CI 上构建出的镜像内嵌不同字节，`schema_migrations` 记录的 checksum 对不上，`migrate up` 报：
+
+```
+迁移 0001 的 checksum 不匹配：库中 55b0b46…，文件 78273f6…
+```
+
+强制清单由 `scripts/check-eol.sh` 维护：
+
+| 路径 | 数量 | 原因 |
+| :--- | :--- | :--- |
+| `internal/platform/migrate/sql/mysql/*.sql` | 46 | 文件字节的 SHA-256 写入 `schema_migrations` |
+| `internal/platform/migrate/checksums.golden` | 1 | `golden_test.go` 与 embed 迁移逐条比对 |
+
+`internal/{breaker,idemstore,lock,ratelimit}/scripts/*.lua`（6 个）也被 embed，但不参与任何 checksum，Lua 引擎容忍 `\r`；`.gitattributes` 已钉 LF，`check-eol.sh` 不强制检查这一项。
+
+检查入口：
+
+```bash
+bash scripts/check-eol.sh    # 正常：无输出、退出码 0；命中：列出文件 + 修复命令、退出码 1
+bash scripts/lint.sh         # 第 10 项；scripts/dev.sh ci 与 CI static job 都会执行到这里
+```
+
+`.gitattributes` 只对新 clone 生效。**规则加入之前就已存在的旧工作区不会自动重写**，一次性修复如下。`git checkout -- <path>` 会因 stat 缓存把这些文件当作未改动而跳过，必须先 `touch` 改变 mtime，再用 `git checkout-index -f` 从索引强制覆盖：
+
+```bash
+# 迁移 SQL 与 golden：--renormalize 先把 LF 版本写进索引，未提交的内容改动不会丢
+git add --renormalize internal/platform/migrate/sql/mysql/ internal/platform/migrate/checksums.golden
+touch internal/platform/migrate/sql/mysql/*.sql internal/platform/migrate/checksums.golden
+git checkout-index -f -- internal/platform/migrate/sql/mysql/*.sql internal/platform/migrate/checksums.golden
+
+# Lua 同理
+git add --renormalize internal/breaker/scripts/*.lua internal/idemstore/scripts/*.lua internal/lock/scripts/*.lua internal/ratelimit/scripts/*.lua
+touch internal/breaker/scripts/*.lua internal/idemstore/scripts/*.lua internal/lock/scripts/*.lua internal/ratelimit/scripts/*.lua
+git checkout-index -f -- internal/breaker/scripts/*.lua internal/idemstore/scripts/*.lua internal/lock/scripts/*.lua internal/ratelimit/scripts/*.lua
+
+bash scripts/check-eol.sh    # 确认无输出、退出码 0
+```
+
+TODO(T26)：release 流水线尚未校验「镜像内 embed checksum == `checksums.golden`」；该校验需要在 CI 内起容器执行，另开卡处理。
+
 ## 2. 启动依赖
 
 ```bash
