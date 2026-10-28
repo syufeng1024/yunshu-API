@@ -4,7 +4,11 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { api } from './client'
+import { createSSEParser } from '@/lib/sseStream'
+import type { SSEEvent } from '@/lib/sseStream'
+import { ApiError, api } from './client'
+import { CSRF_HEADER, getCsrfToken } from './csrf'
+import type { components } from './types'
 
 /**
  * Console contracts, transcribed from internal/control/{user,key,model}.
@@ -1371,4 +1375,248 @@ export function useCloseTicket() {
       void client.invalidateQueries({ queryKey: ['console', 'tickets', 'list'] })
     },
   })
+}
+
+// ---------------------------------------------------------------------------
+// Playground (POST /api/console/playground/chat)
+// ---------------------------------------------------------------------------
+
+const PLAYGROUND_PATH = '/api/console/playground/chat'
+const PLAYGROUND_BASE_URL = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
+
+export interface PlaygroundChatRequest {
+  /** Outer field only. Never merged into `body`. */
+  keyId: number
+  /** Forwarded verbatim; the console does not add or rewrite fields. */
+  body: Record<string, unknown>
+  signal?: AbortSignal
+  /** Receives each content delta as it arrives (the whole text at once when stream=false). */
+  onDelta?: (text: string) => void
+  /** Called once after a successful stream or JSON response. Not called on abort/error. */
+  onDone?: () => void
+}
+
+export interface PlaygroundChatResult {
+  /** `X-Credits-Remaining`: pre-deduction balance in credits, null when the header is absent. */
+  creditsRemaining: number | null
+  /** Parsed JSON payload for a non-streaming response; null for streams. */
+  payload: unknown
+  /** Concatenated assistant text actually received. */
+  content: string
+  streamed: boolean
+}
+
+/** ApiError carrying the response's `X-Credits-Remaining` (402 always has one). */
+export interface PlaygroundChatError extends ApiError {
+  creditsRemaining: number | null
+}
+
+type ErrorBody = components['schemas']['ErrorBody']
+type ErrorEnvelope = components['schemas']['ErrorEnvelope']
+
+function isAbortError(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { name?: unknown }).name === 'AbortError'
+  )
+}
+
+function playgroundNetworkError(): ApiError {
+  return new ApiError({
+    status: 0,
+    type: 'network_error',
+    code: 'network_error',
+    message: '网络连接失败，请检查网络后重试。',
+    hint: '确认网络可达后重新加载页面。',
+  })
+}
+
+function readCreditsRemaining(response: Response): number | null {
+  const raw = response.headers.get('X-Credits-Remaining')
+  if (raw === null || raw.trim() === '') return null
+  const value = Number(raw)
+  return Number.isFinite(value) ? value : null
+}
+
+function parseJson(text: string): unknown {
+  if (!text) return null
+  try {
+    return JSON.parse(text) as unknown
+  } catch {
+    return null
+  }
+}
+
+function readErrorDetail(payload: unknown): ErrorBody | null {
+  if (typeof payload !== 'object' || payload === null) return null
+  const error = (payload as Partial<ErrorEnvelope>).error
+  if (!error || typeof error.code !== 'string' || typeof error.message !== 'string') {
+    return null
+  }
+  return error
+}
+
+function apiErrorFromDetail(
+  detail: ErrorBody | null,
+  status: number,
+  creditsRemaining: number | null,
+): PlaygroundChatError {
+  const error = new ApiError({
+    status,
+    type: detail?.type ?? 'internal_error',
+    code: detail?.code ?? `http_${status}`,
+    message: detail?.message ?? (status >= 500 ? '服务暂时不可用，请稍后重试。' : `请求失败（HTTP ${status}）。`),
+    hint: detail?.hint ?? '',
+    requestId: detail?.request_id,
+    retryAfterSeconds: detail?.retry_after_seconds,
+  }) as PlaygroundChatError
+  error.creditsRemaining = creditsRemaining
+  return error
+}
+
+/** Reads X-Credits-Remaining off an error thrown by playgroundChat. */
+export function playgroundCreditsRemaining(error: unknown): number | null {
+  if (typeof error !== 'object' || error === null) return null
+  const value = (error as { creditsRemaining?: unknown }).creditsRemaining
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function contentOf(value: unknown): string {
+  if (typeof value !== 'object' || value === null) return ''
+  const content = (value as { content?: unknown }).content
+  if (typeof content === 'string') return content
+  // OpenAI-compatible upstreams normally return a string, but some emit an
+  // array of text parts. Join the text parts rather than dropping the delta.
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === 'string') return part
+        if (
+          typeof part === 'object' &&
+          part !== null &&
+          typeof (part as { text?: unknown }).text === 'string'
+        ) {
+          return (part as { text: string }).text
+        }
+        return ''
+      })
+      .join('')
+  }
+  return ''
+}
+
+function firstChoiceContent(payload: unknown): string {
+  if (typeof payload !== 'object' || payload === null) return ''
+  const choices = (payload as { choices?: unknown }).choices
+  if (!Array.isArray(choices) || choices.length === 0) return ''
+  const choice = choices[0]
+  if (typeof choice !== 'object' || choice === null) return ''
+  // Streaming chunks carry `delta`; a non-streaming body carries `message`.
+  return contentOf((choice as { delta?: unknown }).delta) || contentOf((choice as { message?: unknown }).message)
+}
+
+/**
+ * Calls the T27 console proxy with the session cookie and CSRF header.
+ *
+ * The browser's one-shot event-source API cannot be used here: the endpoint is
+ * POST, requires the CSRF double-submit header, and has to be abortable.
+ * Reading the body through `fetch` + `ReadableStream` satisfies all three.
+ */
+export async function playgroundChat({
+  keyId,
+  body,
+  signal,
+  onDelta,
+  onDone,
+}: PlaygroundChatRequest): Promise<PlaygroundChatResult> {
+  const headers = new Headers()
+  headers.set('Content-Type', 'application/json')
+  headers.set('Accept', body.stream === true ? 'text/event-stream' : 'application/json')
+  const csrf = getCsrfToken()
+  if (csrf) headers.set(CSRF_HEADER, csrf)
+
+  let response: Response
+  try {
+    response = await fetch(`${PLAYGROUND_BASE_URL}${PLAYGROUND_PATH}`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({ key_id: keyId, body }),
+      signal,
+    })
+  } catch (error) {
+    if (isAbortError(error)) throw error
+    throw playgroundNetworkError()
+  }
+
+  const creditsRemaining = readCreditsRemaining(response)
+
+  if (!response.ok) {
+    const detail = readErrorDetail(parseJson(await response.text()))
+    throw apiErrorFromDetail(detail, response.status, creditsRemaining)
+  }
+
+  const streamed = (response.headers.get('Content-Type') ?? '').includes('text/event-stream')
+  if (!streamed) {
+    const payload = parseJson(await response.text())
+    const text = firstChoiceContent(payload)
+    if (text) onDelta?.(text)
+    onDone?.()
+    return { creditsRemaining, payload, content: text, streamed: false }
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) throw playgroundNetworkError()
+
+  const decoder = new TextDecoder()
+  const parser = createSSEParser()
+  let content = ''
+  let finished = false
+
+  const handleEvents = (events: SSEEvent[]) => {
+    for (const event of events) {
+      if (event.done) {
+        finished = true
+        return
+      }
+      const payload = parseJson(event.data)
+      // gatewayd signals mid-stream failures as a `data: {"error":{...}}`
+      // frame. Surface it instead of rendering an empty successful reply.
+      const detail = readErrorDetail(payload)
+      if (detail) throw apiErrorFromDetail(detail, response.status, creditsRemaining)
+      const text = firstChoiceContent(payload)
+      if (text) {
+        content += text
+        onDelta?.(text)
+      }
+    }
+  }
+
+  try {
+    while (!finished) {
+      const { done, value } = await reader.read()
+      if (done) break
+      // stream:true holds an incomplete multi-byte UTF-8 sequence until the
+      // next chunk; without it every split Chinese character becomes U+FFFD.
+      handleEvents(parser.push(decoder.decode(value, { stream: true })))
+    }
+    if (!finished) {
+      handleEvents(parser.push(decoder.decode()))
+      handleEvents(parser.flush())
+    }
+  } catch (error) {
+    if (error instanceof ApiError || isAbortError(error)) throw error
+    throw playgroundNetworkError()
+  } finally {
+    try {
+      await reader.cancel()
+    } catch {
+      // The connection is already gone; releasing the lock is all that matters.
+    }
+    reader.releaseLock()
+  }
+
+  onDone?.()
+  return { creditsRemaining, payload: null, content, streamed: true }
 }
