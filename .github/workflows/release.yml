@@ -1,0 +1,163 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（v1.2.3）'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write # cosign keyless
+
+env:
+  TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  IMAGE_OWNER: ${{ github.repository_owner }}
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # 基础镜像只编译一次；三个派生镜像 FROM 它，用同一个 APP_TAG。
+      - name: Build base image
+        run: |
+          docker buildx build --load \
+            -f deploy/Dockerfile.app \
+            -t "yunshu-app:${TAG}" \
+            --build-arg APP_VERSION="${TAG}" \
+            --build-arg VCS_REF="${GITHUB_SHA}" \
+            .
+
+      - name: Build gatewayd
+        run: |
+          docker buildx build --load \
+            -f deploy/Dockerfile.gatewayd \
+            --build-arg APP_TAG="${TAG}" \
+            -t "ghcr.io/${IMAGE_OWNER}/gatewayd:${TAG}" \
+            .
+
+      - name: Build controld
+        run: |
+          docker buildx build --load \
+            -f deploy/Dockerfile.controld \
+            --build-arg APP_TAG="${TAG}" \
+            -t "ghcr.io/${IMAGE_OWNER}/controld:${TAG}" \
+            .
+
+      - name: Build jobsd
+        run: |
+          docker buildx build --load \
+            -f deploy/Dockerfile.jobsd \
+            --build-arg APP_TAG="${TAG}" \
+            -t "ghcr.io/${IMAGE_OWNER}/jobsd:${TAG}" \
+            .
+
+      - name: Scan gatewayd (HIGH,CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/${{ env.IMAGE_OWNER }}/gatewayd:${{ env.TAG }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          trivyignores: .trivyignore
+
+      - name: Scan controld (HIGH,CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/${{ env.IMAGE_OWNER }}/controld:${{ env.TAG }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          trivyignores: .trivyignore
+
+      - name: Scan jobsd (HIGH,CRITICAL)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/${{ env.IMAGE_OWNER }}/jobsd:${{ env.TAG }}
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          trivyignores: .trivyignore
+
+      - name: Push images
+        run: |
+          docker push "ghcr.io/${IMAGE_OWNER}/gatewayd:${TAG}"
+          docker push "ghcr.io/${IMAGE_OWNER}/controld:${TAG}"
+          docker push "ghcr.io/${IMAGE_OWNER}/jobsd:${TAG}"
+
+      - name: Write SHA256SUMS
+        run: |
+          : > SHA256SUMS
+          for svc in gatewayd controld jobsd; do
+            image="ghcr.io/${IMAGE_OWNER}/${svc}:${TAG}"
+            digest=$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')
+            printf '%s  %s\n' "${digest#sha256:}" "$image" >> SHA256SUMS
+          done
+          cat SHA256SUMS
+
+      - name: Upload SHA256SUMS
+        uses: actions/upload-artifact@v4
+        with:
+          name: SHA256SUMS-${{ env.TAG }}
+          path: SHA256SUMS
+
+      # keyless 签名依赖 id-token。CI 权限不具备时这一步失败，但发布继续，
+      # 由 job summary 明确标注“未签名”，不自造签名方案。
+      - name: Sign with cosign (keyless)
+        id: sign
+        continue-on-error: true
+        run: |
+          curl -sSfL https://github.com/sigstore/cosign/releases/latest/download/cosign-linux-amd64 \
+            -o /usr/local/bin/cosign
+          chmod +x /usr/local/bin/cosign
+          for svc in gatewayd controld jobsd; do
+            image="ghcr.io/${IMAGE_OWNER}/${svc}:${TAG}"
+            digest=$(docker buildx imagetools inspect "$image" --format '{{.Manifest.Digest}}')
+            cosign sign --yes "${image}@${digest}"
+          done
+
+      - name: Changelog and signature status
+        if: always()
+        run: |
+          prev=$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)
+          {
+            echo "## Release ${TAG}"
+            echo
+            if [ -n "$prev" ]; then
+              echo "变更范围: \`${prev}..${TAG}\`"
+              echo
+              echo '```'
+              git log --oneline "${prev}..${TAG}"
+              echo '```'
+            else
+              echo "首个 tag；展示最近 50 条提交。"
+              echo
+              echo '```'
+              git log --oneline -50
+              echo '```'
+            fi
+            echo
+            if [ "${{ steps.sign.outcome }}" = "success" ]; then
+              echo "签名: cosign keyless 已完成。"
+            else
+              echo "签名: **未签名**（CI 无 OIDC 权限或 cosign 失败）。镜像摘要见 SHA256SUMS 工件。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

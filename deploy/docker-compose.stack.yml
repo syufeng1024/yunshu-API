@@ -138,6 +138,9 @@ services:
     environment:
       <<: *app-env
       CONTROL_HTTP_ADDR: ":8081"
+      # 控制面 metrics 独立端口；不再回落 :9090（否则同机与 gatewayd 抢端口）。
+      CONTROL_METRICS_ADDR: ":9091"
+      GATEWAY_METRICS_TOKEN: ${GATEWAY_METRICS_TOKEN:-}
     ports:
       - "${CONTROL_PORT:-18081}:8081"
     depends_on:
@@ -162,6 +165,9 @@ services:
     command: ["/usr/local/bin/jobsd"]
     environment:
       <<: *app-env
+      # jobsd 的 metrics / healthz / readyz 共用 :9092。
+      JOBSD_METRICS_ADDR: ":9092"
+      GATEWAY_METRICS_TOKEN: ${GATEWAY_METRICS_TOKEN:-}
     depends_on:
       mysql:
         condition: service_healthy
@@ -169,12 +175,11 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-    # jobsd 不开 HTTP 端口，没有可探的 endpoint，只能确认进程还活着。
-    # 真正的健康信号是它持有的 t_job_lock 租约与日志。
-    # 注意用 `pgrep jobsd` 而不是 `pgrep -x jobsd`：alpine 的 busybox pgrep
-    # 对 -x 的匹配口径与 procps 不同，实测 -x 永远返回 1，会把健康容器判死。
+    # jobsd 无公开 HTTP 端口；/healthz 挂在 metrics 监听器 :9092 上，只表示
+    # 进程存活。依赖与 t_job_lock 租约由 /readyz 表达，容器级探针不探它：
+    # 租约过期应摘流量，不应重启进程。
     healthcheck:
-      test: ["CMD-SHELL", "pgrep jobsd >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9092/healthz || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3

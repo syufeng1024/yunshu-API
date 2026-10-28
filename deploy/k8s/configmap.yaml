@@ -1,0 +1,18 @@
+# 非密配置。口令、票据、KEK、DSN 凭据一律不入本文件；
+# 凭据统一走独立的凭据资源（见同目录的模板）。
+#
+# DB_HOST 只是主机部分，供运维拼接 DSN；应用读的是凭据模板里的完整 DB_DSN。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: yunshu-config
+  namespace: yunshu
+  labels:
+    app.kubernetes.io/part-of: yunshu
+data:
+  ENV: "prod"
+  REDIS_ADDR: "redis.yunshu.svc.cluster.local:6379"
+  DB_HOST: "mysql.yunshu.svc.cluster.local:3306"
+  GATEWAY_METRICS_ADDR: ":9090"
+  CONTROL_METRICS_ADDR: ":9091"
+  JOBSD_METRICS_ADDR: ":9092"

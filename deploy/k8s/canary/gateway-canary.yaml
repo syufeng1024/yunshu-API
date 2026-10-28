@@ -1,0 +1,140 @@
+# 数据面灰度池。只在灰度发布期间 apply；deploy/k8s/gatewayd.yaml 不含本文件，
+# 所以「liveness 绑定核对」按 deploy/k8s/*.yaml 统计时恰好是 gateway-stable、
+# controld、jobsd 三处。
+#
+# Service 名 gateway-canary 是 deploy/nginx/gateway.conf 里 canary upstream 的
+# 主机名。nginx 启动时就解析它，即使灰度结束也必须保留至少一个 ready 的副本，
+# 因此发布完成后 canary 权重收回到 0.01%（nginx 不接受 0%）而不是缩容到 0。
+#
+# 探针、资源、宽限期、preStop 与 gateway-stable 逐字一致：灰度期指标要和基线
+# 可比，排水时机也必须相同，否则 preStop 差异会被误判成新版本劣化。
+#
+# 灰度池不挂 HPA、不挂 PDB：它不是常驻容量，副本数固定 1。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-canary
+  namespace: yunshu
+  labels:
+    app: gatewayd
+    pool: canary
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: gatewayd
+      pool: canary
+  template:
+    metadata:
+      labels:
+        app: gatewayd
+        pool: canary
+    spec:
+      terminationGracePeriodSeconds: 150
+      containers:
+        - name: gatewayd
+          image: ghcr.io/yunshu/gatewayd:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: yunshu-config
+          env:
+            - name: GATEWAY_HTTP_ADDR
+              value: ":8080"
+            - name: DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: DB_DSN
+            - name: GW_WRITE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: DB_DSN
+            - name: LOG_SQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: DB_DSN
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: REDIS_PASSWORD
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: SESSION_SECRET
+            - name: CHANNEL_KEY_KEK
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: CHANNEL_KEY_KEK
+            - name: GATEWAY_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: GATEWAY_METRICS_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 120"]
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+---
+# 只选 pool=canary。选成 app=gatewayd 会把稳定池的 3 个副本也纳入灰度上游，
+# split_clients 的分流等于失效。
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-canary
+  namespace: yunshu
+  labels:
+    app: gatewayd
+    pool: canary
+spec:
+  type: ClusterIP
+  selector:
+    app: gatewayd
+    pool: canary
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

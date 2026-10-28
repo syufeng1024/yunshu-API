@@ -76,6 +76,21 @@ func RequiredFor(service string) []string {
 	}
 }
 
+// metricsAddr returns the service-specific listener variable and its default.
+// The three processes used to share GATEWAY_METRICS_ADDR, so a second process
+// on the same host failed to bind :9090 and exited. controld and jobsd now read
+// their own keys and never fall back to :9090 (T22 §14.2).
+func metricsAddr(service string) (name, def string) {
+	switch service {
+	case ServiceControl:
+		return "CONTROL_METRICS_ADDR", ":9091"
+	case ServiceJobs:
+		return "JOBSD_METRICS_ADDR", ":9092"
+	default:
+		return "GATEWAY_METRICS_ADDR", ":9090"
+	}
+}
+
 // Load reads the environment for service. It collects all missing required
 // variables and all malformed optional values, then returns a single error.
 func Load(service string) (*Config, error) {
@@ -84,6 +99,7 @@ func Load(service string) (*Config, error) {
 		return nil, &Error{Service: service, Invalid: []string{"service name"}}
 	}
 
+	metricsVar, metricsDefault := metricsAddr(service)
 	cfg := &Config{
 		Env:               strings.TrimSpace(os.Getenv("ENV")),
 		DBDSN:             os.Getenv("DB_DSN"),
@@ -91,7 +107,7 @@ func Load(service string) (*Config, error) {
 		GWWriteDSN:        os.Getenv("GW_WRITE_DSN"),
 		RedisAddr:         strings.TrimSpace(os.Getenv("REDIS_ADDR")),
 		RedisPassword:     os.Getenv("REDIS_PASSWORD"),
-		MetricsAddr:       strings.TrimSpace(os.Getenv("GATEWAY_METRICS_ADDR")),
+		MetricsAddr:       strings.TrimSpace(os.Getenv(metricsVar)),
 		MetricsToken:      os.Getenv("GATEWAY_METRICS_TOKEN"),
 		GatewayAddr:       strings.TrimSpace(os.Getenv("GATEWAY_HTTP_ADDR")),
 		ControlAddr:       strings.TrimSpace(os.Getenv("CONTROL_HTTP_ADDR")),
@@ -120,7 +136,7 @@ func Load(service string) (*Config, error) {
 	}
 
 	if cfg.MetricsAddr == "" {
-		cfg.MetricsAddr = ":9090"
+		cfg.MetricsAddr = metricsDefault
 	}
 	if cfg.GatewayAddr == "" {
 		cfg.GatewayAddr = ":8080"

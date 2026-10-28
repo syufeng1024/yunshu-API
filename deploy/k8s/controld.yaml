@@ -1,0 +1,129 @@
+# 控制面。
+#
+# 无 HPA：控制面流量由后台操作驱动，固定 2 副本 + PDB 已足够；
+# metrics 监听在 :9091，与 gatewayd 的 :9090 分开。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: controld
+  namespace: yunshu
+  labels:
+    app: controld
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: controld
+  template:
+    metadata:
+      labels:
+        app: controld
+    spec:
+      # 与 gatewayd 相同：先摘流量睡 120s，再给进程 30s 收尾。
+      terminationGracePeriodSeconds: 150
+      containers:
+        - name: controld
+          image: ghcr.io/yunshu/controld:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8081
+            - name: metrics
+              containerPort: 9091
+          envFrom:
+            - configMapRef:
+                name: yunshu-config
+          env:
+            - name: CONTROL_HTTP_ADDR
+              value: ":8081"
+            - name: DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: DB_DSN
+            - name: LOG_SQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: DB_DSN
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: REDIS_PASSWORD
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: SESSION_SECRET
+            - name: GATEWAY_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: GATEWAY_METRICS_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 120"]
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: controld
+  namespace: yunshu
+  labels:
+    app: controld
+spec:
+  type: ClusterIP
+  selector:
+    app: controld
+  ports:
+    - name: http
+      port: 8081
+      targetPort: 8081
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: controld
+  namespace: yunshu
+  labels:
+    app: controld
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: controld

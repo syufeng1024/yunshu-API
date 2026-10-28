@@ -148,7 +148,7 @@
 | :--- | :--- | :--- | :--- | :--- |
 | [T21](T21-测试与CI.md) | 测试与 CI（14 条必进 CI + G-01–G-12） | T09,T10,T12–T16 | `**/*_test.go`、`e2e/`、`.github/workflows/` | ✅ 两段（含 Playwright 3 条） |
 | [T24](T24-运营与控制面后端补口.md) | 运营与控制面后端补口（T19/T20 反查 16 项） | T15,T16,T19,T20 | `internal/control/`、`internal/ledger/`、`api/openapi.yaml`、`web/src/pages/admin/` | ✅ 两段完成（11 项） |
-| [T22](T22-部署与可观测.md) | 部署·可观测·灰度回滚 | T09,T21 | `deploy/`、`internal/obs/` | 🟨 段 1–2 ✅（指标 + 日志/trace）/ 3–4 未开始 |
+| [T22](T22-部署与可观测.md) | 部署·可观测·灰度回滚 | T09,T21 | `deploy/`、`internal/obs/` | 🟨 段 1–3 ✅（指标 / 日志+trace / 容器化+灰度）；段 4 未开始 |
 | [T23](T23-验收对照与交付.md) | 验收对照与交付（82 项功能点） | 全部 | `docs/tasks/acceptance/` | ⬜ |
 
 ---
@@ -242,6 +242,7 @@ flowchart LR
 | T24 段2 | 2026-10-28 | 2026-10-28 | ✅ **通过** | 4 项非阻塞 | 6 项写接口（余额调整全链路 / 公告 effective_from+offline / model_ids / clear_fields / recommend_weight≤1000 / 注销）；迁移 0025 两表、checksums 已重生；`go build/vet/test ./internal/...` `EXIT=0`（**串行口径**，`-p 2` 本机假红）、vitest **44 文件 169 用例**、构建两道门禁通过；四处偏离见卡 §11.4 |
 | T22 段1 | 2026-10-28 | 2026-10-28 | ✅ **通过** | 3 项（1 项须段 3 前定） | 指标子系统：`internal/obs/metrics` 1625 行（Registry/Recorder/A8 门禁）、23/23 项在真实调用点打点、三进程挂 `/metrics`；热路径栈上拼 key + `atomic.Pointer[map]` 命中、无锁无分配；counter 窗口增量与快照累计双通道；桶编码累加成 `le` 语义；`TEST_EXIT=0`（4m58s，`-p 1`）、`lint.sh` 绿；**遗留 P1：三进程共用 `GATEWAY_METRICS_ADDR`（默认 :9090），同机双进程会绑不上端口** |
 | T22 段2 | 2026-10-28 | 2026-10-28 | ✅ **通过**（打回 1 项已修） | 5 项（1 项 P1 须 T23 裁定） | 请求级+尝试级两型固定 schema（35/24 字段，键序全比对）、W3C traceparent 单点解析、六个掩码函数；`TEST_EXIT=0`（5m10s）、A10/A11 全 PASS。打回 R-1：首版 traceparent 解析在 gw 里是死代码（中间件已先写 Meta），已下沉到 `httpsrv.RequestID` 并补端到端测试；**遗留 P1：无 traceparent 时 `X-Request-Id`(UUIDv7) ≠ `X-Trace-Id`(派生 32hex)，与 TDS §5.2 不符** |
+| T22 段3 | 2026-10-28 | 2026-10-28 | ✅ **通过**（打回 2 项已修） | 4 项需真集群演练 | 镜像 30.4/31.2/28.7MB（均 <60）、非 root、单二进制；k8s 11 资源、探针 4/4 绑定 healthz/readyz、jobsd `Recreate`；nginx 双段分流 `nginx -t` 通过；`deploy.sh --dry-run` 输出四指标且不改配置；`TEST_EXIT=0`。打回：R-1 派生镜像 68.1MB→30.4MB；R-2 灰度池 `gateway-canary` 的 Service/Deployment 缺失（会 502）。**段 1 的 P1（三进程抢 :9090）已解**。遗留：k8s schema 校验与 A3–A6 演练需 CI/真集群 |
 
 **T15 全卡验收结论（交付总监复核）**
 

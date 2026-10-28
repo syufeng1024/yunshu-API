@@ -1,0 +1,173 @@
+# 数据面稳定池。
+#
+# Service 名 gateway-stable 就是 deploy/nginx/gateway.conf 里 stable upstream 的
+# 主机名，缺失时 nginx 启动即解析失败。灰度池的 Deployment/Service 在
+# deploy/k8s/canary/gateway-canary.yaml，按发布流程单独 apply（仅灰度期需要）。
+#
+# 镜像 tag 由 CI / kubectl set image 覆盖，这里保留 latest 作为占位。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway-stable
+  namespace: yunshu
+  labels:
+    app: gatewayd
+    pool: stable
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: gatewayd
+      pool: stable
+  template:
+    metadata:
+      labels:
+        app: gatewayd
+        pool: stable
+    spec:
+      # 进程内排水上限是 gw.drain_deadline_ms（默认 120s）。preStop 先摘流量
+      # 睡 120s，宽限期必须严格大于它，否则 SIGKILL 会切断在途请求。
+      terminationGracePeriodSeconds: 150
+      containers:
+        - name: gatewayd
+          image: ghcr.io/yunshu/gatewayd:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: metrics
+              containerPort: 9090
+          envFrom:
+            - configMapRef:
+                name: yunshu-config
+          env:
+            - name: GATEWAY_HTTP_ADDR
+              value: ":8080"
+            - name: DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: DB_DSN
+            - name: GW_WRITE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: DB_DSN
+            - name: LOG_SQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: DB_DSN
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: REDIS_PASSWORD
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: SESSION_SECRET
+            - name: CHANNEL_KEY_KEK
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: CHANNEL_KEY_KEK
+            - name: GATEWAY_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: GATEWAY_METRICS_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 120"]
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway-stable
+  namespace: yunshu
+  labels:
+    app: gatewayd
+    pool: stable
+spec:
+  type: ClusterIP
+  selector:
+    app: gatewayd
+    pool: stable
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway-stable
+  namespace: yunshu
+  labels:
+    app: gatewayd
+    pool: stable
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: gateway-stable
+  minReplicas: 3
+  maxReplicas: 8
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway-stable
+  namespace: yunshu
+  labels:
+    app: gatewayd
+    pool: stable
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: gatewayd
+      pool: stable

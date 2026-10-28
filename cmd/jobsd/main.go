@@ -22,6 +22,7 @@ import (
 	"yunshu.dev/core/internal/jobs"
 	"yunshu.dev/core/internal/ledger"
 	"yunshu.dev/core/internal/lock"
+	"yunshu.dev/core/internal/obs/health"
 	obslog "yunshu.dev/core/internal/obs/log"
 	obsmetrics "yunshu.dev/core/internal/obs/metrics"
 	"yunshu.dev/core/internal/platform/clock"
@@ -84,6 +85,36 @@ func main() {
 	}
 
 	instanceID := hostname() + "-" + strconv.Itoa(os.Getpid())
+
+	// /healthz and /readyz share the metrics listener (:9092): jobsd has no
+	// public HTTP port, so the metrics port is its only probe surface. healthz
+	// only reports the process; readyz checks MySQL, Redis and this instance's
+	// t_job_lock lease. An expired lease makes the pod not ready but must never
+	// exit the process (T22 §14.4).
+	h := health.New()
+	h.Add("mysql", func(ctx context.Context) error {
+		var one int
+		return mainDB.QueryRowContext(ctx, "SELECT 1").Scan(&one)
+	})
+	h.Add("redis", func(ctx context.Context) error {
+		return rdb.Ping(ctx)
+	})
+	h.Add("job_lease", func(ctx context.Context) error {
+		var held int
+		err := mainDB.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM t_job_lock
+			  WHERE owner_id = ? AND released_at IS NULL AND lease_until > NOW(3)`,
+			instanceID,
+		).Scan(&held)
+		if err != nil {
+			return err
+		}
+		if held == 0 {
+			return fmt.Errorf("no live t_job_lock lease for %s", instanceID)
+		}
+		return nil
+	})
+
 	election := jobs.NewElection(mainDB, rdb, instanceID, logger, clock.Real{})
 	stopHeartbeat := election.StartHeartbeat(rootCtx)
 	defer stopHeartbeat()
@@ -94,15 +125,17 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	// jobsd has no public HTTP port, so /metrics is the only listener. It is
-	// still a separate port with the same Bearer-token switch as the other two
-	// processes (T22 §9 errata #2; TDS §5.4's "no HTTP port" predates it).
+	// jobsd has no public HTTP port, so the metrics listener also carries
+	// /healthz and /readyz (T22 §14.4). It keeps the same Bearer-token switch
+	// on /metrics as the other two processes (T22 §9 errata #2; TDS §5.4's
+	// "no HTTP port" predates it).
 	metricsSrv := httpsrv.New(httpsrv.Config{
 		Addr:              cfg.MetricsAddr,
 		Svc:               service,
 		Env:               cfg.Env,
 		Logger:            logger,
 		Clock:             clock.Real{},
+		Health:            h,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      10 * time.Second,

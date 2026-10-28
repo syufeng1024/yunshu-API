@@ -1,0 +1,87 @@
+# 后台任务。
+#
+# 只能单实例：任务靠 t_job_lock 租约互斥，双实例同时抢租约会产生重复副作用。
+# 因此 strategy 必须是 Recreate，滚动更新会先起新 Pod 再停旧 Pod。
+#
+# 无公开 HTTP 端口；/healthz、/readyz、/metrics 共用 :9092。
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jobsd
+  namespace: yunshu
+  labels:
+    app: jobsd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: jobsd
+  template:
+    metadata:
+      labels:
+        app: jobsd
+    spec:
+      # §14.3 定数 60s。进程内 drain 上限（120s）是任务收尾预算，
+      # 超出宽限期的部分由 kubelet SIGKILL 截断。
+      terminationGracePeriodSeconds: 60
+      containers:
+        - name: jobsd
+          image: ghcr.io/yunshu/jobsd:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: metrics
+              containerPort: 9092
+          envFrom:
+            - configMapRef:
+                name: yunshu-config
+          env:
+            - name: DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: DB_DSN
+            - name: LOG_SQL_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: DB_DSN
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: REDIS_PASSWORD
+            - name: GATEWAY_METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: yunshu-secrets
+                  key: GATEWAY_METRICS_TOKEN
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 9092
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 9092
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 10001

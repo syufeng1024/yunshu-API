@@ -1,0 +1,41 @@
+#
+# gatewayd 派生镜像。
+#
+# 不重复编译：基础镜像 Dockerfile.app 已经产出四个静态二进制，这里从 alpine
+# 重新起一个运行时层，只拷 gatewayd 一个二进制。直接 FROM yunshu-app 会把
+# 四个二进制一起带上（实测 68.1MB，超 A1 的 60MB 预算）。
+# 必须与基础镜像使用同一个 APP_TAG：
+#
+#   docker build -f deploy/Dockerfile.app -t yunshu-app:<tag> .
+#   docker build -f deploy/Dockerfile.gatewayd --build-arg APP_TAG=<tag> -t yunshu/gatewayd:<tag> .
+#
+ARG RUNTIME_IMAGE=alpine:3.20
+ARG APP_TAG=latest
+
+# COPY --from 不支持变量展开，先把基础镜像声明成命名阶段再拷。
+FROM yunshu-app:${APP_TAG} AS app
+
+FROM ${RUNTIME_IMAGE}
+
+LABEL org.opencontainers.image.title="yunshu-gatewayd"
+
+# ca-certificates：gatewayd 出网访问上游必须校验 TLS。
+# tzdata：日志与限流窗口按 CST 计算，容器内需要时区库。
+RUN apk add --no-cache ca-certificates tzdata \
+ && adduser -D -H -u 10001 -s /sbin/nologin yunshu \
+ && mkdir -p /app && chown yunshu:yunshu /app
+
+COPY --from=app /usr/local/bin/gatewayd /usr/local/bin/gatewayd
+
+USER yunshu
+WORKDIR /app
+
+# alpine 默认 CMD 是 ["/bin/sh"]；不清空会被 ENTRYPOINT 当作参数再传给
+# gatewayd 一次，进程以未知参数退出。
+CMD []
+
+ENTRYPOINT ["/usr/local/bin/gatewayd"]
+
+# 只探 /healthz：/readyz 依赖 Redis/MySQL，依赖抖动不得触发容器重启。
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1

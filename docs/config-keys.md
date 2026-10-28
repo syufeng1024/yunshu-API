@@ -59,6 +59,16 @@
 | `quota.free_max_active_keys` | RATELIMIT | `3` | 否 | 密钥创建校验 F6-7：`FREE_DEFAULT` 账户活跃 Key 上限 | 482 |
 | `site.recommend_limit` | FEATURE | `8` | 否 | 官网首页「推荐模型」区块展示条数（PRD F22-6） | 483 |
 
+## 进程环境变量（非 `t_config_item`）
+
+以下三个键是进程监听地址，不写入 `t_config_item`，不计入上面的 45 键。三进程共用 `GATEWAY_METRICS_TOKEN` 一个 Bearer token，隔离靠端口与网络策略。
+
+| 环境变量 | 进程 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `GATEWAY_METRICS_ADDR` | gatewayd | `:9090` | 数据面 metrics 监听；保留旧键名向后兼容 |
+| `CONTROL_METRICS_ADDR` | controld | `:9091` | 为空时回落 `:9091`，不再回落 `:9090` |
+| `JOBSD_METRICS_ADDR` | jobsd | `:9092` | 与 `/healthz`、`/readyz` 同端口 |
+
 ## 命名空间分布
 
 | 命名空间 | 键数 | 明细 |

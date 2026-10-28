@@ -48,6 +48,14 @@ RUN go build -ldflags='-s -w' -o /out/ \
 # -------------------------------------------------------------- runtime stage
 FROM ${RUNTIME_IMAGE}
 
+ARG APP_VERSION=dev
+ARG VCS_REF=unknown
+
+LABEL org.opencontainers.image.title="yunshu-app" \
+      org.opencontainers.image.description="yunshu gatewayd/controld/jobsd/migrate 四合一镜像" \
+      org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}"
+
 # ca-certificates：gatewayd 出网访问上游必须校验 TLS。
 # tzdata：jobsd 的日切/对账按 CST 计算，容器内需要时区库。
 RUN apk add --no-cache ca-certificates tzdata \
@@ -64,3 +72,9 @@ WORKDIR /app
 
 # 四个入口用 compose 的 command 覆盖；默认给数据面，避免空 command 起不来。
 CMD ["/usr/local/bin/gatewayd"]
+
+# 容器级健康检查只探 /healthz（活进程），绝不探 /readyz：依赖抖动时
+# Docker 会因 unhealthy 重启容器，等于把 Redis 故障放大成数据面重启
+# （T22 §14.1、硬约束 1）。alpine 自带 busybox wget。
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+    CMD wget -q -O /dev/null http://127.0.0.1:8080/healthz || exit 1
