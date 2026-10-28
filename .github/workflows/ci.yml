@@ -123,28 +123,36 @@ jobs:
           DB_DSN: "root:root@tcp(127.0.0.1:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4"
         run: go run ./cmd/migrate up
 
-      # Rolling back 11 steps reaches 0013 after ten successful downs. Its
-      # down file is a deliberate SIGNAL, so migrate must exit non-zero.
+      # 逐级回滚，直到 0013.down 拒绝执行。
+      #
+      # 不写死步数：迁移号随新卡增长，`down 11` 原本"十次成功 + 第 11 次撞上 0013"，
+      # 2026-10-28 加入 0025 后同一命令变成回滚到 0014 并**正常退出**，本步因此误红
+      # （run 40663153544）。改成循环后，无论再加多少迁移都只认"失败且点名 0013"。
       - name: 0013.down must fail
         shell: bash
         env:
           ENV: local
           DB_DSN: "root:root@tcp(127.0.0.1:3306)/yunshu?parseTime=true&loc=UTC&charset=utf8mb4"
         run: |
-          set +e
-          out="$(go run ./cmd/migrate down 11 2>&1)"
-          code=$?
-          set -e
-          echo "$out"
-          if [ "$code" -eq 0 ]; then
-            echo "0013.down returned 0; it must fail"
-            exit 1
-          fi
-          if ! grep -q "0013" <<<"$out"; then
-            echo "failure did not name 0013"
-            exit 1
-          fi
-          echo "0013.down failed as required (exit $code)"
+          go build -o /tmp/migrate ./cmd/migrate
+          for i in $(seq 1 25); do
+            set +e
+            out="$(/tmp/migrate down 1 2>&1)"
+            code=$?
+            set -e
+            echo "$out" | tail -1
+            if [ "$code" -ne 0 ]; then
+              if grep -q "0013" <<<"$out"; then
+                echo "0013.down failed as required (exit $code after $((i-1)) successful downs)"
+                exit 0
+              fi
+              echo "down 1 failed but did not name 0013:"
+              echo "$out"
+              exit 1
+            fi
+          done
+          echo "rolled back 25 steps without hitting the 0013 signal"
+          exit 1
 
       - name: migrate up again
         env:
