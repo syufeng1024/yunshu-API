@@ -1316,6 +1316,16 @@ paths:
           required: false
           schema: {type: string, maxLength: 24}
           description: 如 OK / REJECTED_BY_GUARD / REJECTED；可单独使用
+        - name: target_type
+          in: query
+          required: false
+          schema: {type: string, maxLength: 32}
+          description: 精确匹配 t_admin_audit_log.target_type（不转大小写，如 t_channel）；与 target_id 同传时走 idx_aal_target
+        - name: target_id
+          in: query
+          required: false
+          schema: {type: string, maxLength: 32}
+          description: 精确匹配 target_id（字符串比较，不做数值转换）；建议与 target_type 同传
         - name: from
           in: query
           required: false
@@ -1360,6 +1370,140 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '403':
           description: 角色缺少 audit.read
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/overview:
+    get:
+      operationId: getAdminOverview
+      tags: [admin]
+      summary: 运营概览（今日聚合、告警计数、待办计数）
+      description: |
+        今日 = UTC+8 自然日。today.requests 统计全部 t_usage_record 行；
+        consumed_micro 求和全部行（失败行为 0）；success_rate_bp = SUCCESS /
+        (http_status NOT IN (402,429))，该分母为 0 时返回 null，绝不返回 0。
+        recon_diff = 近 30 天 status=OPEN 的 t_reconcile_diff；
+        open_tickets = state IN (OPEN,RESPONDED)（未关闭）。
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 运营概览
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminOverview'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 admin.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/users:
+    get:
+      operationId: listAdminUsers
+      tags: [admin]
+      summary: 运营用户列表（含活跃 Key 数 key_count）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: email
+          in: query
+          schema: {type: string, maxLength: 128}
+        - name: phone
+          in: query
+          schema: {type: string, maxLength: 128}
+        - name: user_no
+          in: query
+          schema: {type: string, maxLength: 128}
+        - name: status
+          in: query
+          schema: {type: string, enum: [NORMAL, DISABLED, FROZEN_OVERDRAFT]}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, updated_at, id, risk_score, user_no]}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 用户分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminUserList'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 admin.read（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/channels:
+    get:
+      operationId: listAdminChannels
+      tags: [admin]
+      summary: 运营渠道列表（含近 15 分钟成功率 success_rate_bp）
+      security:
+        - sessionCookie: []
+      parameters:
+        - name: q
+          in: query
+          schema: {type: string, maxLength: 64}
+        - name: region
+          in: query
+          schema: {type: string, enum: [DOMESTIC, OVERSEAS]}
+        - name: enabled
+          in: query
+          schema: {type: string, enum: ['0', '1']}
+        - name: group_scope_mode
+          in: query
+          schema: {type: string, enum: [ALL, SELECTED]}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: page_size
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+        - name: sort
+          in: query
+          schema: {type: string, enum: [created_at, updated_at, name, weight, priority]}
+        - name: order
+          in: query
+          schema: {type: string, enum: [asc, desc]}
+      responses:
+        '200':
+          description: 渠道分页
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminChannelList'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 admin.read（permission_denied）
           content:
             application/json:
               schema:
@@ -1418,6 +1562,45 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '403':
           description: 角色缺少 ticket.reply（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/admin/tickets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TicketID'
+    get:
+      operationId: getAdminTicket
+      tags: [admin, ticket]
+      summary: 运营工单详情（任意用户；含 description 与内部备注）
+      description: |
+        运营视角读取任意用户的工单；ticket.reply 是授权边界。返回列表字段、
+        description、sla，以及含 is_internal 的 replies（内部备注对运营可见）。
+        缺失或已删除的 id 与畸形 id 都返回 resource_not_found。读操作不写审计、
+        不改状态。
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: 工单详情
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminTicketDetail'
+        '401':
+          description: 会话失效
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '403':
+          description: 角色缺少 ticket.reply（permission_denied）
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: 工单不存在（resource_not_found）
           content:
             application/json:
               schema:
@@ -2987,6 +3170,148 @@ components:
         page: {type: integer}
         page_size: {type: integer}
         total: {type: integer, format: int64}
+    AdminTicketReply:
+      allOf:
+        - $ref: '#/components/schemas/TicketReply'
+        - type: object
+          required: [is_internal]
+          properties:
+            is_internal: {type: boolean, description: true = 内部备注，运营可见、用户不可见}
+    AdminTicketDetail:
+      type: object
+      required: [id, ticket_no, user_id, user_email, ticket_type, title, description, state, first_response_due_at, created_at, updated_at, sla, replies]
+      properties:
+        id: {type: integer, format: int64}
+        ticket_no: {type: string, maxLength: 20}
+        user_id: {type: integer, format: int64}
+        user_email: {type: string}
+        ticket_type: {type: string, enum: [BILLING, TECH, CONTENT_APPEAL, OTHER]}
+        title: {type: string, maxLength: 120}
+        description: {type: string, maxLength: 5000}
+        request_id: {type: string, maxLength: 36, nullable: true}
+        policy_hit_id: {type: integer, format: int64, nullable: true}
+        policy_rule_id: {type: string, nullable: true}
+        policy_category: {type: string, nullable: true}
+        state: {type: string, enum: [OPEN, RESPONDED, CLOSED]}
+        first_response_due_at: {type: string, format: date-time}
+        first_responded_at: {type: string, format: date-time, nullable: true}
+        last_replied_at: {type: string, format: date-time, nullable: true}
+        reopen_count: {type: integer, format: int64}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+        sla: {$ref: '#/components/schemas/TicketSLA'}
+        replies:
+          type: array
+          description: 全部回复；is_internal=true 为内部备注（运营可见、用户不可见）
+          items: {$ref: '#/components/schemas/AdminTicketReply'}
+    AdminUser:
+      type: object
+      required: [id, user_no, nickname, role, status, risk_score, key_count, created_at, updated_at]
+      properties:
+        id: {type: integer, format: int64}
+        user_no: {type: string}
+        email: {type: string, nullable: true}
+        phone: {type: string, nullable: true}
+        nickname: {type: string}
+        role: {type: string, enum: [PERSONAL, OPS, FINANCE, SUPER_ADMIN]}
+        status: {type: string, enum: [NORMAL, DISABLED, FROZEN_OVERDRAFT]}
+        disable_source: {type: string, nullable: true}
+        disable_reason: {type: string, nullable: true}
+        disabled_at: {type: string, format: date-time, nullable: true}
+        disabled_by: {type: integer, format: int64, nullable: true}
+        risk_score: {type: integer, format: int64}
+        plan_id: {type: integer, format: int64, nullable: true}
+        plan_code: {type: string}
+        plan_name: {type: string}
+        key_count: {type: integer, format: int64, description: status=ENABLED 且 deleted_at IS NULL 的 Key 数}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    AdminUserList:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AdminUser'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    AdminChannel:
+      type: object
+      required: [id, name, protocol_id, protocol, region, base_url, upstream_key_mask, group_scope_mode, dedicated_scope_mode, fallback_allowed, weight, priority, timeout_connect_ms, timeout_first_byte_ms, timeout_total_ms, retry_max, stream_supported, stream_usage_mode, health_state, success_rate_bp, enabled, created_at, updated_at]
+      properties:
+        id: {type: integer, format: int64}
+        name: {type: string}
+        protocol_id: {type: integer, format: int64}
+        protocol: {type: string}
+        region: {type: string, enum: [DOMESTIC, OVERSEAS]}
+        base_url: {type: string}
+        upstream_key_mask: {type: string}
+        key_rotation_at: {type: string, format: date-time, nullable: true}
+        group_scope_mode: {type: string, enum: [ALL, SELECTED]}
+        dedicated_scope_mode: {type: string, enum: [ALL, SELECTED]}
+        fallback_allowed: {type: boolean}
+        dedicated_user_ids:
+          type: array
+          items: {type: integer, format: int64}
+        weight: {type: integer, format: int64}
+        priority: {type: integer, format: int64}
+        timeout_connect_ms: {type: integer, format: int64}
+        timeout_first_byte_ms: {type: integer, format: int64}
+        timeout_total_ms: {type: integer, format: int64}
+        retry_max: {type: integer, format: int64}
+        stream_supported: {type: boolean}
+        stream_usage_mode: {type: string, enum: [NATIVE, STREAM_OPTIONS, ESTIMATE, UNKNOWN]}
+        upstream_model_name_map:
+          type: object
+          additionalProperties: {type: string}
+        health_state: {type: string, enum: [CLOSED, OPEN, HALF_OPEN, AUTH_FAIL]}
+        success_rate_bp: {type: integer, format: int64, nullable: true, description: 近 15 分钟上游尝试成功率；窗口内无尝试时为 null，不返回 10000}
+        enabled: {type: boolean}
+        created_at: {type: string, format: date-time}
+        updated_at: {type: string, format: date-time}
+    AdminChannelList:
+      type: object
+      required: [items, page, page_size, total]
+      properties:
+        items:
+          type: array
+          items: {$ref: '#/components/schemas/AdminChannel'}
+        page: {type: integer}
+        page_size: {type: integer}
+        total: {type: integer, format: int64}
+    AdminOverviewToday:
+      type: object
+      required: [requests, consumed_micro, success_rate_bp]
+      properties:
+        requests: {type: integer, format: int64, description: 今日全部请求行数}
+        consumed_micro: {type: integer, format: int64, description: 今日消耗微积分总和（失败行为 0）}
+        success_rate_bp:
+          type: integer
+          format: int64
+          nullable: true
+          description: SUCCESS / (http_status NOT IN (402,429))；分母为 0 时为 null，不返回 0
+    AdminOverviewAlerts:
+      type: object
+      required: [dangling_prehold, recon_diff, sla_overdue, channel_abnormal]
+      properties:
+        dangling_prehold: {type: integer, format: int64, description: state=HELD 且 expires_at<now}
+        recon_diff: {type: integer, format: int64, description: 近 30 天 status=OPEN 的 t_reconcile_diff}
+        sla_overdue: {type: integer, format: int64, description: OPEN 且未响应且已过 first_response_due_at}
+        channel_abnormal: {type: integer, format: int64, description: 境内、启用、未删除且 health_state<>CLOSED}
+    AdminOverviewCounts:
+      type: object
+      required: [pending_reviews, open_tickets]
+      properties:
+        pending_reviews: {type: integer, format: int64}
+        open_tickets: {type: integer, format: int64, description: state IN (OPEN,RESPONDED)，即未关闭}
+    AdminOverview:
+      type: object
+      required: [today, alerts, counts]
+      properties:
+        today: {$ref: '#/components/schemas/AdminOverviewToday'}
+        alerts: {$ref: '#/components/schemas/AdminOverviewAlerts'}
+        counts: {$ref: '#/components/schemas/AdminOverviewCounts'}
     TicketReplyRequest:
       type: object
       required: [content]

@@ -51,9 +51,12 @@ type channelView struct {
 	StreamUsageMode    string            `json:"stream_usage_mode"`
 	UpstreamModelNames map[string]string `json:"upstream_model_name_map,omitempty"`
 	HealthState        string            `json:"health_state"`
-	Enabled            bool              `json:"enabled"`
-	CreatedAt          time.Time         `json:"created_at"`
-	UpdatedAt          time.Time         `json:"updated_at"`
+	// Last-15-minute upstream attempt success rate. nil when there were no
+	// attempts; never 10000 for "no data" (hard constraint 2).
+	SuccessRateBP *int64    `json:"success_rate_bp"`
+	Enabled       bool      `json:"enabled"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type channelListResponse struct {
@@ -205,6 +208,11 @@ func (s *Service) ListChannels(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
 		return
 	}
+	if err := s.attachChannelRates(r.Context(), s.DB, items); err != nil {
+		s.logError(r.Context(), "ops_channel_rate_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
 	_ = mw.WriteJSON(w, http.StatusOK, channelListResponse{
 		Items: items, Page: page.Number, PageSize: page.Size, Total: total,
 	})
@@ -223,7 +231,13 @@ func (s *Service) GetChannel(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apiErr)
 		return
 	}
-	_ = mw.WriteJSON(w, http.StatusOK, channelDetailResponse{Channel: view})
+	views := []channelView{view}
+	if err := s.attachChannelRates(r.Context(), s.DB, views); err != nil {
+		s.logError(r.Context(), "ops_channel_rate_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
+	_ = mw.WriteJSON(w, http.StatusOK, channelDetailResponse{Channel: views[0]})
 }
 
 // CreateChannel implements POST /api/admin/channels.
@@ -309,7 +323,13 @@ func (s *Service) CreateChannel(w http.ResponseWriter, r *http.Request) {
 	}
 	committed = true
 
-	_ = mw.WriteJSON(w, http.StatusCreated, channelDetailResponse{Channel: view})
+	views := []channelView{view}
+	if err := s.attachChannelRates(ctx, s.DB, views); err != nil {
+		s.logError(ctx, "ops_channel_rate_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
+	_ = mw.WriteJSON(w, http.StatusCreated, channelDetailResponse{Channel: views[0]})
 }
 
 // UpdateChannel implements PATCH /api/admin/channels/{id}.
@@ -462,7 +482,13 @@ func (s *Service) UpdateChannel(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	_ = mw.WriteJSON(w, http.StatusOK, channelDetailResponse{Channel: after})
+	views := []channelView{after}
+	if err := s.attachChannelRates(ctx, s.DB, views); err != nil {
+		s.logError(ctx, "ops_channel_rate_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
+	_ = mw.WriteJSON(w, http.StatusOK, channelDetailResponse{Channel: views[0]})
 }
 
 // DisableChannel implements POST /api/admin/channels/{id}/disable.
@@ -531,7 +557,13 @@ func (s *Service) DisableChannel(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apiErr)
 		return
 	}
-	_ = mw.WriteJSON(w, http.StatusOK, channelDetailResponse{Channel: view})
+	views := []channelView{view}
+	if err := s.attachChannelRates(ctx, s.DB, views); err != nil {
+		s.logError(ctx, "ops_channel_rate_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
+	_ = mw.WriteJSON(w, http.StatusOK, channelDetailResponse{Channel: views[0]})
 }
 
 // DeleteChannel implements DELETE /api/admin/channels/{id}. A channel still

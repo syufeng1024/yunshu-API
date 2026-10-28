@@ -24,6 +24,10 @@ const (
 	maxModuleRunes = 32
 	maxActionRunes = 32
 	maxResultRunes = 24
+	// target_type is varchar(32); target_id is varchar(64) in the table, but
+	// the T24 contract caps both at the same 32-rune query limit. Values are
+	// compared verbatim (target_type is stored lower-case, e.g. t_channel).
+	maxTargetRunes = 32
 )
 
 type listItem struct {
@@ -92,6 +96,16 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apiErr)
 		return
 	}
+	targetType, apiErr := filterExact(q.Get("target_type"), maxTargetRunes, "target_type")
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	targetID, apiErr := filterExact(q.Get("target_id"), maxTargetRunes, "target_id")
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
 	from, to, apiErr := s.parseWindow(r)
 	if apiErr != nil {
 		mw.WriteError(w, r, apiErr)
@@ -115,6 +129,14 @@ func (s *Service) List(w http.ResponseWriter, r *http.Request) {
 	if result != "" {
 		where = append(where, "result = ?")
 		args = append(args, result)
+	}
+	if targetType != "" {
+		where = append(where, "target_type = ?")
+		args = append(args, targetType)
+	}
+	if targetID != "" {
+		where = append(where, "target_id = ?")
+		args = append(args, targetID)
 	}
 	whereSQL := strings.Join(where, " AND ")
 
@@ -219,6 +241,19 @@ func ipString(raw []byte) string {
 
 func filterValue(raw string, maxRunes int, name string) (string, *apierr.APIError) {
 	v := strings.ToUpper(strings.TrimSpace(raw))
+	if v == "" {
+		return "", nil
+	}
+	if len([]rune(v)) > maxRunes {
+		return "", mw.InvalidQueryField(name)
+	}
+	return v, nil
+}
+
+// filterExact keeps the value's case: target_type stores lower-case table
+// names (t_channel, t_user), unlike the upper-case module/action enums.
+func filterExact(raw string, maxRunes int, name string) (string, *apierr.APIError) {
+	v := strings.TrimSpace(raw)
 	if v == "" {
 		return "", nil
 	}

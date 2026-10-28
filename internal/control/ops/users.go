@@ -38,8 +38,11 @@ type userView struct {
 	PlanID        *int64     `json:"plan_id,omitempty"`
 	PlanCode      string     `json:"plan_code,omitempty"`
 	PlanName      string     `json:"plan_name,omitempty"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	// Active API keys: status='ENABLED' AND deleted_at IS NULL. Filled in one
+	// GROUP BY query per page, never per row.
+	KeyCount  int64     `json:"key_count"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type creditBalanceView struct {
@@ -163,6 +166,15 @@ func (s *Service) ListUsers(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
 		return
 	}
+	userPtrs := make([]*userView, len(items))
+	for i := range items {
+		userPtrs[i] = &items[i]
+	}
+	if err := s.fillKeyCounts(r.Context(), s.DB, userPtrs); err != nil {
+		s.logError(r.Context(), "ops_user_key_count_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
 	_ = mw.WriteJSON(w, http.StatusOK, userListResponse{
 		Items: items, Page: page.Number, PageSize: page.Size, Total: total,
 	})
@@ -180,6 +192,12 @@ func (s *Service) GetUser(w http.ResponseWriter, r *http.Request) {
 	user, apiErr := s.loadUser(r.Context(), s.DB, id)
 	if apiErr != nil {
 		mw.WriteError(w, r, apiErr)
+		return
+	}
+	userPtrs := []*userView{&user}
+	if err := s.fillKeyCounts(r.Context(), s.DB, userPtrs); err != nil {
+		s.logError(r.Context(), "ops_user_key_count_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
 		return
 	}
 	balance, err := loadBalance(r.Context(), s.DB, id)
@@ -256,6 +274,12 @@ func (s *Service) DisableUser(w http.ResponseWriter, r *http.Request) {
 		mw.WriteError(w, r, apiErr)
 		return
 	}
+	userPtrs := []*userView{&after}
+	if err := s.fillKeyCounts(ctx, tx, userPtrs); err != nil {
+		s.logError(ctx, "ops_user_key_count_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
+		return
+	}
 	if err := s.insertAudit(ctx, tx, r, "USER", "DISABLE", "t_user", id,
 		userAuditView(before), userAuditView(after), reason); err != nil {
 		s.logError(ctx, "ops_user_audit_failed: "+err.Error())
@@ -324,6 +348,12 @@ func (s *Service) EnableUser(w http.ResponseWriter, r *http.Request) {
 	after, apiErr := s.loadUserTx(ctx, tx, id, false)
 	if apiErr != nil {
 		mw.WriteError(w, r, apiErr)
+		return
+	}
+	userPtrs := []*userView{&after}
+	if err := s.fillKeyCounts(ctx, tx, userPtrs); err != nil {
+		s.logError(ctx, "ops_user_key_count_failed: "+err.Error())
+		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
 		return
 	}
 	if err := s.insertAudit(ctx, tx, r, "USER", "ENABLE", "t_user", id,
@@ -435,6 +465,53 @@ func loadBalance(ctx context.Context, q priceDB, userID int64) (creditBalanceVie
 	v.Exists = true
 	v.LastSettledAt = nullableTime(settledAt)
 	return v, nil
+}
+
+type keyCountQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// fillKeyCounts runs one GROUP BY for the whole page. idx_key_user_status
+// (user_id, status) serves the IN list; deleted_at is filtered on the fetched
+// rows. Missing users simply keep the zero value.
+func (s *Service) fillKeyCounts(ctx context.Context, q keyCountQuerier, users []*userView) error {
+	if len(users) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(users))
+	args := make([]any, 0, len(users))
+	for _, user := range users {
+		ids = append(ids, user.ID)
+		args = append(args, user.ID)
+	}
+	rows, err := q.QueryContext(ctx, `
+		SELECT user_id, COUNT(*)
+		  FROM t_api_key
+		 WHERE user_id IN (`+placeholders(len(ids))+`)
+		   AND status = 'ENABLED' AND deleted_at IS NULL
+		 GROUP BY user_id`, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	counts := make(map[int64]int64, len(ids))
+	for rows.Next() {
+		var (
+			userID int64
+			count  int64
+		)
+		if err := rows.Scan(&userID, &count); err != nil {
+			return err
+		}
+		counts[userID] = count
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, user := range users {
+		user.KeyCount = counts[user.ID]
+	}
+	return nil
 }
 
 func userAuditView(v userView) map[string]any {

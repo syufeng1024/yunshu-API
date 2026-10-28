@@ -76,6 +76,43 @@
 
 公开模型的 `protocols` 只输出前端枚举内的 `OPENAI` / `ANTHROPIC`：`t_protocol.code='OPENAI_COMPAT'` → `OPENAI`，`ANTHROPIC_COMPAT` → `ANTHROPIC`，`BAILIAN` / `CUSTOM` 或 `protocol_id` 关联不到行时输出空数组。公告 `category` 只有 `PRICE` / `RATE_LIMIT` / `GENERAL` 三值：`ann_type='PRICE_CHANGE'` 映射为 `PRICE`，其余映射为 `GENERAL`（后端没有 `RATE_LIMIT` 枚举）。
 
+## T24 段 1：运营只读接口与字段
+
+### `GET /api/admin/overview`
+
+权限 `admin.read`。只读，不写审计、不改状态。响应三组：
+
+| 分组 | 字段 | 口径 |
+| :--- | :--- | :--- |
+| `today` | `requests` / `consumed_micro` / `success_rate_bp` | UTC+8 自然日；`requests` 计全部 `t_usage_record` 行，`consumed_micro` 求和全部行（失败行为 0）；`success_rate_bp = SUCCESS / (http_status NOT IN (402,429))`，分母为 0 时 **null**，不返回 0 |
+| `alerts` | `dangling_prehold` | `t_prehold_hold.state='HELD' AND expires_at<now`，走 `idx_ph_suspend_scan` |
+| `alerts` | `recon_diff` | 近 30 天（含今天）`t_reconcile_diff.status='OPEN'`，走 `idx_rd_date_type` |
+| `alerts` | `sla_overdue` | `t_ticket.state='OPEN' AND first_responded_at IS NULL AND first_response_due_at<now`，走 `idx_tk_state_created` |
+| `alerts` | `channel_abnormal` | 未删除、`region='DOMESTIC'`、`enabled=1`、`health_state<>'CLOSED'`，走 `idx_channel_region_enabled` |
+| `counts` | `pending_reviews` | `t_review_task.state='PENDING'`，走 `idx_rt_state_created` |
+| `counts` | `open_tickets` | `t_ticket.state IN ('OPEN','RESPONDED')`（未关闭），走 `idx_tk_state_created` |
+
+今日聚合走 `t_usage_record.idx_ur_created` 的 `created_at` 范围；不使用 `t_metric_daily`（T+1 汇总可能滞后，不能用近似值冒充今日）。
+
+### `GET /api/admin/tickets/{id}`
+
+权限 `ticket.reply`。返回 `AdminTicketDetail`：列表字段 + `user_id` / `user_email` + `description` + `replies[]` + `sla`。`replies[].is_internal=true` 表示内部备注：运营可见，用户控制台不可见；该读接口不写审计、不改状态。缺失或畸形 id 都返回 404 `resource_not_found`；`ticket.reply` 是授权边界。
+
+### 运营视图新增字段
+
+| 结构 | 字段 | 口径 |
+| :--- | :--- | :--- |
+| `admin.userView` | `key_count` | `t_api_key` 中 `status='ENABLED' AND deleted_at IS NULL` 的行数；列表用一次 `GROUP BY user_id` 聚合，走 `idx_key_user_status`，无 Key 时为 0 |
+| `channelView` | `success_rate_bp` | 近 15 分钟 `t_upstream_attempt` 中 `result='SUCCESS'` / 全部尝试（分母为尝试次数）；窗口内无尝试时为 **null**，不返回 10000；走 `idx_ua_channel_created` |
+
+`success_rate_bp` 与 `key_count` 同时出现在列表和详情响应中。
+
+### `GET /api/admin/audit-logs` 新增过滤
+
+`target_type` / `target_id` 进入 SQL `WHERE`：`target_type` 按原样比较（如 `t_channel`，不转大写），`target_id` 按字符串比较；两者 trim 后最大 32 rune，超长返回 `invalid_query_parameter`。两者同传时走 `idx_aal_target (target_type,target_id,created_at)`；不传时查询与改造前一致。建议总是同时传 `target_type`，否则仅 `target_id` 无法使用该索引。
+
+OpenAPI 已同步：`/api/admin/overview`、`/api/admin/tickets/{id}`、`/api/admin/users`（含 `key_count`）、`/api/admin/channels`（含 `success_rate_bp`）与相关 schema。
+
 ## 错误码映射
 
 只列控制面会返回的码。完整 76 码见 `docs/error-codes.md`。

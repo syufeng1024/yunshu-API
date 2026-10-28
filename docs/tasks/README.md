@@ -140,13 +140,14 @@
 | [T17](T17-前端基线与设计系统.md) | 前端基线·设计系统·品牌资产 | T01 | `web/` | ✅ |
 | [T18](T18-官网5页.md) | 官网 5 页 | T17,T12,T15 | `web/src/pages/site/` | ✅ |
 | [T19](T19-控制台9页.md) | 控制台 9 页 | T17,T12,T13,T14,T16 | `web/src/pages/console/` | ✅ 9/9（3 项受后端缺失限制） |
-| [T20](T20-运营后台8页.md) | 运营后台 8 页 | T17,T15,T16 | `web/src/pages/admin/` | ⬜ |
+| [T20](T20-运营后台8页.md) | 运营后台 8 页 | T17,T15,T16 | `web/src/pages/admin/` | ✅ 8/8（11 项受后端缺失限制） |
 
 ### 阶段 6 · 质量与交付
 
 | 卡 | 标题 | 依赖 | 交付根 | 状态 |
 | :--- | :--- | :--- | :--- | :--- |
-| [T21](T21-测试与CI.md) | 测试与 CI（14 条必进 CI + G-01–G-12） | T09,T10,T12–T16 | `**/*_test.go`、`.github/workflows/` | 🟨 第一段 ✅ |
+| [T21](T21-测试与CI.md) | 测试与 CI（14 条必进 CI + G-01–G-12） | T09,T10,T12–T16 | `**/*_test.go`、`e2e/`、`.github/workflows/` | ✅ 两段（含 Playwright 3 条） |
+| [T24](T24-运营与控制面后端补口.md) | 运营与控制面后端补口（T19/T20 反查 16 项） | T15,T16,T19,T20 | `internal/control/`、`api/openapi.yaml`、`web/src/pages/admin/` | 🟨 段 1 ✅（5 项只读） |
 | [T22](T22-部署与可观测.md) | 部署·可观测·灰度回滚 | T09,T21 | `deploy/`、`internal/obs/` | ⬜ |
 | [T23](T23-验收对照与交付.md) | 验收对照与交付（82 项功能点） | 全部 | `docs/tasks/acceptance/` | ⬜ |
 
@@ -235,6 +236,9 @@ flowchart LR
 | T16 第二段 | 2026-10-27 | 2026-10-27 | ✅ 通过 | 5 项 | 审核中心（升序队列/驳回必填/自审 403/审批幂等）+ 模型主数据并入 ops（别名/改名/筛选）；给 withQuotaTx 补死锁有界重试 |
 | T14 第一段 | 2026-10-27 | 2026-10-27 | ✅ 通过 | 3 项 | 日志域 3 路由；365/180 双窗口；越权逐字相同；EXPLAIN 命中 idx_ur_user_created；正文表缺失降级 404 |
 | T14 第二段 | 2026-10-27 | 2026-10-27 | ✅ 通过（含一次口径修正） | 3 项 | 用量/账单/异步导出/metrics；成功率改为「成功÷总请求」而计费仍只算 SUCCESS；导出无对象存储，用 Exporter 接口 + 文件落盘 + HMAC 令牌 + K27 单任务锁 |
+| T20 | 2026-10-28 | 2026-10-28 | ✅ **通过**（三段 + 一次返工） | 4 项（手工验收 7 条待真实后端） | 8 页 7069 行 + 5 组件 718 行 + 契约层 + fixtures；tsc 0 / vitest **43 文件 161 用例** / build 双门禁；返工内容见下 |
+| T21 段2 | 2026-10-28 | 2026-10-28 | ✅ 通过 | 2 项（CI 首跑待确认） | Playwright 三条 e2e（F4-2/F7-1/F19-1）真栈 **3 passed 13.0s**；`playwright.config.ts` + `e2e` CI job + `scripts/e2e-backend.sh`；test-matrix 守卫仍绿 |
+| T24 段1 | 2026-10-28 | 2026-10-28 | ✅ 通过 | 2 项（`-race` 由 CI 覆盖、段 2 未做） | 5 项只读接口（overview / 工单详情 / key_count / 成功率 / 审计 target 过滤）；容器内全 control 包 `ok`；vitest **44 文件 163 用例**；`types.ts` 补生成 5205 行（存量欠账） |
 
 **T15 全卡验收结论（交付总监复核）**
 
@@ -649,6 +653,66 @@ E-28 是本轮最有价值的发现：它不是 T13 引入的，是 T11 遗留�
 **十二项偏离（全部成立，按卡内表处置）**：`count` 1–20→1–10、用户不可选永不过期、软删截断 58 字符、响应形状 `{items,count,warning}`、OpenAPI cookie 名 `yunshu_session`→`sid`、IP 白名单与快照 4 分钟缺口（已加 `PublishRoutes`）、`gofmt` CRLF 遗留等。其中 TDS 待回写 2 处（审计 `RENAME`/`EXPIRE_CHANGE`、软删截断），列入 T23 前的文档回写清单。
 
 **遗留（均非阻塞）**：A7 批量 10 与 A11 触顶预测仍只有单测证据（免费档上限 3 挡住批量、`FREE_DEFAULT` 无日额度使 ETA 走 `NO_DAILY_QUOTA`，后者是正确行为）；`-race` 留 T21 Linux CI；`TestFreeTierThreeActiveKeys` 的「3」是固化预期值。
+
+---
+
+---
+
+### T20 验收记录（交付总监独立复核，2026-10-28）
+
+分三段派单：段 1 = admin 契约层 + dev fixtures + 5 组件 + 概览/渠道/模型；段 2 = 定价/公告/用户；段 3 = 审核/工单 + 全卡门禁。段 3 后**一次返工**，判定「违反不得为过门禁改源码」。
+
+| 复核项 | 结果 | 证据 |
+| :--- | :--- | :--- |
+| 交付物 | ✅ 12 类 | 8 页共 7069 行 + 5 组件 718 行 + `api/admin.ts` + `fixtures/admin.ts` + `pricingUtils.ts` + 6 个测试文件；`grep PageScaffold src/pages/admin` = **0** |
+| `tsc` | ✅ | 0 error |
+| 单测 | ✅ | **43 文件 / 161 用例**，EXIT=0（含 admin 6 文件 19 用例） |
+| 构建 | ✅ | 5.28s；两道构建门禁通过 |
+| 契约准确性 | ✅ | 抽检 `group_scope_mode`、`overdue=true`、`state`/`biz_type`、价格 `sort` 四列白名单、`decisionRequest{reason,invoice_url}` 均与 Go 源码一致 |
+| 上游 Key | ✅ | 写路径唯一（`ChannelsPage.tsx:291`，且仅 create 或「重新填写」）；PATCH 未重填时 body 不含该字段（有负向断言） |
+| 涨价判定 | ✅ | `resolvePriceDirection` 与 `isPriceIncrease`（`pricing.go:673-685`）同维度：只比客户侧价格，不比成本价 |
+| 类型化价格约束 | ✅ | 与 `validatePriceValues`（`pricing.go:594-625`）逐条一致（TEXT per_call=0、IMAGE in/out=0、EMBEDDING out=0/per_call=0） |
+| 公告草稿条件 | ✅ | 仅 `LISTED ↔ CATALOG_ONLY`，与 `model.go:649-655` 一致；其余转换明确「不生成」 |
+| 自审类型归一 | ✅ | `String(applicant) === String(user)`；避开 `CurrentUser.id`(string) 与 `applicant_id`(number) 的静默失效，有专测 |
+| 审计刷新 | ✅ | 7 个写操作页均接 `AuditTrail`（概览为只读页，无需） |
+| V2.0 菜单 | ✅ | `代理管理|提现` 0 命中；`ADMIN_NAV`/`ROUTES` 未新增 |
+| 敏感信息 | ✅ | 字面量密钥扫描 0 命中；渲染层只有 `upstream_key_mask` |
+
+**返工详情（值得记住）**：段 3 为实现"让 grep 过"做了四处改写——`channelKeyMask()`/`CHANNEL_KEY_MASK_FIELD`、`MASKED_INPUT_TYPE`/`NEW_MASKED_AUTOCOMPLETE`、`UPSTREAM_KEY_FIELD`/`withUpstreamKey`（段 1 埋下且未自报）、测试名拆成字符串拼接。已全部回退为直接写法。
+
+我的两份责任同样要记：
+1. `grep -v "masked"` 对字段名 `upstream_key_mask` **恒不成立**（少一个 d），等于门禁常开；
+2. A20 用 `password` 裸词会误命中 `type="password"` 这种正常 HTML 属性，逼着实现方做间接层。
+
+**修正后的正式门禁**（后续前端卡沿用）：
+
+```bash
+grep -rn "upstream_key" src/pages/admin | grep -v "upstream_key_mask" || echo "OK"
+grep -rnEi "(api[_-]?key|password|secret)\s*[:=]\s*['\"][^'\"]{8,}['\"]" src/pages/admin src/components/admin src/fixtures/admin.ts || echo "OK"
+grep -rn "AUTO_CLOSED" src/pages/admin | grep -vE "\.test\.|不得|没有|不存在|不会" || echo "OK"
+```
+
+**环境噪声（非本卡缺陷）**：复跑偶发 `EXIT=1` + `EPERM ...\AppData\Local\Temp\workbuddy-update-x64-workbuddy\...\web\<hash>`，是文件代理拦截 vitest 临时写盘，不是断言失败；表现为测试文件数在 42/43 之间抖动。连续 5 次采样中 1 次触发。**T21 需在 CI 上验证 `npm test` 连续 3 次稳定**。
+
+---
+
+### T20 反查的后端缺口（并入 T24）
+
+T20 交付时前端已按「不造假」原则显式降级，但下列 11 项需要**后端补口**才能闭环。与文末「待派卡（T19 反查）」的 5 项一并归入同一张 T24，建议在 T22 前派发：
+
+| # | 缺口 | 阻塞的功能点 | 前端现状 |
+| :--- | :--- | :--- | :--- |
+| 1 | 无 `GET /api/admin/overview` 运营聚合 | PRD §6.1 今日调用/收入/成功率、对账差异告警 | 四张卡显示「运营侧暂未提供该指标」，不填 0 |
+| 2 | 无 `GET /api/admin/tickets/{id}` 运营详情（含 replies） | F21-1..3、PRD §5.9 工单对话 | 只展示列表字段 + 本会话新提交记录，明示「历史对话不可读」 |
+| 3 | 无余额调整端点（追加分录 + 理由 + 审计） | PRD §6.3 用户管理 | 余额只读，「调整余额」disabled |
+| 4 | `admin.userView` 无 Key 数 | PRD §6.3 详情 | 显示 `—` + 注明；未越权调控制台接口 |
+| 5 | 公告写入无 `effective_from`、无撤回/下线 | F17-1..3 | `effective_from` 只读；不提供删除/下线 |
+| 6 | `audit-logs` 缺 `target_type`/`target_id` SQL 过滤 | F14-3/F16/F20-3/F21-3 的「按对象查变更」 | 返回页内客户端过滤 |
+| 7 | 价格 PATCH 无法显式清除可选字段（`*int64` 分不清 null 与缺省） | F16-2/4/5 | 「留空 = 不修改」 |
+| 8 | `channelView.success_rate` 缺失 | F14 渠道列表成功率 | 显示 `—` |
+| 9 | 公告读接口不返回 `model_ids` | F16-4/F17 调价与活动冲突 | 只做 7 天时间窗粗提示 |
+| 10 | `recommend_weight` 无业务上限 | F22-5 | UI 用 `int unsigned` 上限兜底，后端只校负数 |
+| 11 | 无配置中心页面所需的部分键读写（T20 未做该页，卡面第 12 条为条件项） | PRD §6.7（若有入口） | 本次未做，留待确认是否进 V1.0 |
 
 ---
 

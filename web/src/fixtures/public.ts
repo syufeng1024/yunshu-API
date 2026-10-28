@@ -5,6 +5,7 @@ import type {
   PublicModelsResponse,
   PublicPlansResponse,
 } from '@/api/public'
+import { adminFixtureResponses } from './admin'
 
 /**
  * DEV-ONLY contract fixtures. These values never ship: client.ts imports this
@@ -194,6 +195,9 @@ const integrationLinks: PublicIntegrationLinksResponse = {
 export const fixtureResponses = {
   // The marker survives tree-shaking only if this module is actually bundled.
   __yunshu_fixture_marker__: '__YUNSHU_T18_FIXTURE__',
+  // T20 operator pages share the same dev-only lookup. Its own marker travels
+  // with the spread, so both T18 and T20 data disappear together.
+  ...adminFixtureResponses,
   '/api/public/models': models,
   '/api/public/plans': plans,
   '/api/public/announcements': announcements,

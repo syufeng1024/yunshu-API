@@ -38,6 +38,50 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/auth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 邮箱/手机号 + 密码注册
+         * @description 验证码字段 `code` 当前只接受空值：非空即 400（验证码属第二段交付）。
+         *     注册在单个事务内写 t_user、空的 t_credit_account 与审计行；
+         *     成功返回会话 cookie、可读的 `csrf` cookie 与响应体中的 `csrf_token`。
+         */
+        post: operations["postRegister"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 邮箱/手机号 + 密码登录
+         * @description 连续失败达到阈值后按 identifier + IP 锁定，锁定期内正确密码同样返回 429。
+         *     账号维度返回 `login_locked`，IP 维度返回 `rpm_limit_exceeded`。
+         *     成功返回会话 cookie、可读的 `csrf` cookie 与响应体中的 `csrf_token`。
+         */
+        post: operations["postLogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/auth/me": {
         parameters: {
             query?: never;
@@ -66,6 +110,817 @@ export interface paths {
         put?: never;
         /** 退出登录并清除会话 */
         post: operations["postLogout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/auth/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 修改本人密码并吊销全部会话
+         * @description old_password 必须匹配当前 bcrypt 哈希；new_password 与注册同一规则
+         *     （8..72 字节，不允许纯空白）。改密成功后在事务内写审计行，再删除该
+         *     uid 的全部 K20 会话；吊销失败返回 503 而不是 204，避免旧会话继续可用。
+         *     校验旧密码失败返回 401，且不吊销现有会话、不写成功审计。
+         */
+        post: operations["postPasswordChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 账户概览（余额、今日用量、24h 曲线、四维额度、触顶预测） */
+        get: operations["getConsoleOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 密钥列表（名称搜索 + 状态筛选取交集，分页） */
+        get: operations["listConsoleKeys"];
+        put?: never;
+        /** 创建密钥（单条或批量 1–10；明文只在本次响应出现） */
+        post: operations["createConsoleKeys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found */
+                id: components["parameters"]["KeyID"];
+            };
+            cookie?: never;
+        };
+        /** 密钥详情（只返回掩码；越权与不存在同为 404 key_not_found） */
+        get: operations["getConsoleKey"];
+        put?: never;
+        post?: never;
+        /** 软删除密钥（confirm=true；key_hash 改写为哨兵，K13 即时删除） */
+        delete: operations["deleteConsoleKey"];
+        options?: never;
+        head?: never;
+        /** 更新密钥（只更新传入字段；空数组与不传必须区分） */
+        patch: operations["updateConsoleKey"];
+        trace?: never;
+    };
+    "/api/console/keys/{id}/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found */
+                id: components["parameters"]["KeyID"];
+            };
+            cookie?: never;
+        };
+        /** 密钥操作日志（含前后值） */
+        get: operations["listConsoleKeyAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/keys/{id}/rotate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found */
+                id: components["parameters"]["KeyID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 重新生成密钥（旧 Key 立即失效，无宽限期） */
+        post: operations["rotateConsoleKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 模型广场（LISTED + DOMESTIC；固定推荐排序；标准价不乘分组倍率） */
+        get: operations["listConsoleModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 套餐档位（四档 + 默认档；全部读 t_plan，禁止硬编码） */
+        get: operations["listConsolePlans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/orders": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 充值订单列表（状态筛选 + 订单号搜索，交集） */
+        get: operations["listConsoleOrders"];
+        put?: never;
+        /** 创建充值/套餐订单（金额由服务端按 t_plan 计算；PENDING 不入账） */
+        post: operations["createConsoleOrder"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/redeem": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 兑换码兑换积分（单次有效；不可退的赠送批次 + REDEEM 流水） */
+        post: operations["redeemCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/pay/callback/{channel}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel: "wechat" | "alipay";
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 支付回调（无会话；HMAC 验签 + 状态 CAS 幂等） */
+        post: operations["payCallback"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/refunds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 退款单列表（按状态筛选） */
+        get: operations["listConsoleRefunds"];
+        put?: never;
+        /** 申请退款（只退未消耗充值积分；申请即冻结；赠送积分不可退） */
+        post: operations["createConsoleRefund"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/invoices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 开票申请列表 */
+        get: operations["listConsoleInvoices"];
+        put?: never;
+        /** 申请开票（需实名；金额上限 = 实付 − 已开票） */
+        post: operations["createConsoleInvoice"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/quota-applies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 提额申请列表 */
+        get: operations["listConsoleQuotaApplies"];
+        put?: never;
+        /** 提交提额申请（目标 ≤ 当前日额度 × 5；审批前额度不变） */
+        post: operations["createConsoleQuotaApply"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/trial/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 领取体验版（设备指纹 + 手机号 + IP 段任一命中即拒） */
+        post: operations["claimTrial"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/tickets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 我的工单列表（状态/类型筛选；只返回本人） */
+        get: operations["listConsoleTickets"];
+        put?: never;
+        /** 提交工单（内容申诉自动带出命中规则 ID 与 request_id） */
+        post: operations["createConsoleTicket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/tickets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+                id: components["parameters"]["TicketID"];
+            };
+            cookie?: never;
+        };
+        /** 工单详情（含可见往来记录；内部备注不返回） */
+        get: operations["getConsoleTicket"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/tickets/{id}/close": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+                id: components["parameters"]["TicketID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 用户关闭自己的工单（关闭后不能再回复） */
+        post: operations["closeConsoleTicket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/request-ids": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** request_id 选择器（只列本人最近 90 天的请求） */
+        get: operations["listConsoleRequestIDs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/audit-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 运营审计日志（按时间窗口、操作者、模块、动作、结果筛选）
+         * @description 固定 created_at DESC, id DESC（补录行也按真实时间排序），order 只接受 desc。
+         *     默认窗口为最近 7 天，最大分页 100。action / result 可单独过滤：
+         *     0024 的 idx_aal_created 与 idx_aal_action_created 保证时间窗口始终是
+         *     索引范围扫描，不会退化成全表扫描。module / action / result 入参先
+         *     trim 再转大写，与库中存储的枚举一致；超长值按 invalid_query_parameter 拒绝。
+         */
+        get: operations["listAdminAuditLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/overview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 运营概览（今日聚合、告警计数、待办计数）
+         * @description 今日 = UTC+8 自然日。today.requests 统计全部 t_usage_record 行；
+         *     consumed_micro 求和全部行（失败行为 0）；success_rate_bp = SUCCESS /
+         *     (http_status NOT IN (402,429))，该分母为 0 时返回 null，绝不返回 0。
+         *     recon_diff = 近 30 天 status=OPEN 的 t_reconcile_diff；
+         *     open_tickets = state IN (OPEN,RESPONDED)（未关闭）。
+         */
+        get: operations["getAdminOverview"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 运营用户列表（含活跃 Key 数 key_count） */
+        get: operations["listAdminUsers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/channels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 运营渠道列表（含近 15 分钟成功率 success_rate_bp） */
+        get: operations["listAdminChannels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/tickets": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** 运营工单队列（overdue=true 为 SLA 告警区，按超时时长升序） */
+        get: operations["listAdminTickets"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/tickets/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+                id: components["parameters"]["TicketID"];
+            };
+            cookie?: never;
+        };
+        /**
+         * 运营工单详情（任意用户；含 description 与内部备注）
+         * @description 运营视角读取任意用户的工单；ticket.reply 是授权边界。返回列表字段、
+         *     description、sla，以及含 is_internal 的 replies（内部备注对运营可见）。
+         *     缺失或已删除的 id 与畸形 id 都返回 resource_not_found。读操作不写审计、
+         *     不改状态。
+         */
+        get: operations["getAdminTicket"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/tickets/{id}/reply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+                id: components["parameters"]["TicketID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 运营回复（首次回复置 RESPONDED 并停表、发邮件）或写内部备注（用户不可见） */
+        post: operations["replyAdminTicket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/tickets/{id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+                id: components["parameters"]["TicketID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** 运营代用户关闭工单（唯一可达目标 CLOSED） */
+        post: operations["setAdminTicketState"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 请求日志列表（默认近 7 天；失败请求同样出现）
+         * @description 与用量接口的过滤口径相反：这里不按 result 过滤，失败请求默认可见。
+         *     from 早于 365 天在线窗口返回 400 并提示使用归档导出。
+         */
+        get: operations["listConsoleLogs"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/logs/{request_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * 单次请求元数据 + 重试时间线
+         * @description 366 天前的元数据仍在保留期内可查；他人 request_id 与不存在返回同一 404。
+         */
+        get: operations["getConsoleLogDetail"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/logs/{request_id}/body": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        /** 请求正文（正文保留 180 天且 full_log_enabled） */
+        get: operations["getConsoleLogBody"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 用量聚合（模型/渠道/日维度；计费列仅 SUCCESS）
+         * @description 维度切换只改 GROUP BY，model_id/channel_id 等筛选条件保持并回显在 filter。
+         *     排序为消耗积分降序、维度键升序。金额提供 amount_fen 与两位小数的 amount_yuan。
+         *     口径分层：request_total/request_success/success_rate_bp 统计全部 result（含 FAILED）；
+         *     tokens_in/tokens_out/consumed_* 与金额只累加 result='SUCCESS' 的行。
+         */
+        get: operations["getConsoleUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/bills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 自然月账单（CST 日界；计费列仅 SUCCESS）
+         * @description 12,345 积分 → amount_fen=12345、amount_yuan="123.45"；前端不再做除法。
+         *     request_total/request_success/success_rate_bp 统计当月全部 result，金额与积分只累加 SUCCESS。
+         */
+        get: operations["getConsoleBill"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/usage/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 实时值（K14/K15）与历史值（t_metric_daily）分字段返回
+         * @description realtime_* 与 settled_* 永不相加；realtime_window 与 settled_until 说明各自覆盖范围。
+         *     scope=channel 的实时值来自 K15，是平台维度（realtime_scope=PLATFORM）。
+         */
+        get: operations["getConsoleUsageMetrics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/usage/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * 异步生成用量 CSV（202，立即返回任务令牌）
+         * @description 单账号同时只能有 1 个任务（K27 exp:user:{uid}，TTL 1h），第二个 409。
+         *     未配置 EXPORT_HMAC_KEY 时 503，绝不退化到无签名链接。
+         *     CSV 表头与 usage 页一致；「请求数/成功数/成功率」统计全部 result，token 与积分类只累加 SUCCESS。
+         */
+        post: operations["startConsoleUsageExport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/exports/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        /**
+         * 任务状态（task 令牌）或 CSV 下载（download 令牌）
+         * @description 同一路径由签名令牌的 kind 区分：task 返回 JSON 状态，dl 返回 text/csv。
+         *     状态由“文件是否存在 + K27 是否存在”推导；令牌 1 小时过期后返回 404。
+         */
+        get: operations["getConsoleExport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/public/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 官网套餐列表
+         * @description `SELECT ... FROM t_plan WHERE enabled=1 ORDER BY sort_order ASC`。
+         *     无需 `sid` 会话与 `X-CSRF-Token`；响应头固定
+         *     `Cache-Control: public, max-age=60`，500 响应不写该头。
+         *     `daily_quota_micro` 为 NULL 时输出 JSON `null`（FREE_DEFAULT 无额度上限），
+         *     不回退为 `0`——`0` 的语义是“继承上一档”。
+         */
+        get: operations["getPublicPlans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/public/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 官网模型广场
+         * @description 只返回 `t_model.listing_state='LISTED'` 且 `deleted_at IS NULL` 的模型，
+         *     按 `recommend_weight DESC, published_at DESC` 排序。价格取当前生效的
+         *     MODEL 级 `t_price_rule`（`enabled=1`、`effective_from<=now`、
+         *     `effective_to IS NULL OR > now`，`version DESC, id DESC` 取最新）。
+         *     无生效价或价格列为 NULL 的模型整行不返回，不补 0。
+         *     `context_window` 对应 `t_model.context_length`；`protocols` 只输出
+         *     站点枚举内的 `OPENAI` / `ANTHROPIC`，协议关联不到时为空数组。
+         */
+        get: operations["getPublicModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/public/announcements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 官网公告（当前生效）
+         * @description 只返回 `state='PUBLISHED'`、`effective_from<=now`、
+         *     `effective_to IS NULL OR > now`、`deleted_at IS NULL` 的公告，
+         *     按 `effective_from DESC` 取前 20 条。字段改名为前端契约：
+         *     `content→body`、`ann_type→category`、`effective_from→effective_at`、
+         *     `created_at→published_at`。`category` 取值 `PRICE` / `RATE_LIMIT` /
+         *     `GENERAL`；V1.0 的 `PRICE_CHANGE` 映射为 `PRICE`，其余 `ann_type`
+         *     映射为 `GENERAL`（后端暂无 `RATE_LIMIT` 枚举）。
+         */
+        get: operations["getPublicAnnouncements"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/public/endpoints": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 官网公开接入点（V1.0 恒为空）
+         * @description V1.0 没有接入点数据表（全部迁移中不存在 endpoint / integration / tool
+         *     表），`t_channel` 是上游渠道池，不得对外当作接入点。契约已固定，
+         *     后端按 `TODO(T24)` 返回空数组，前端使用通用接入说明兜底。
+         */
+        get: operations["getPublicEndpoints"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/public/integration-links": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * 客户端深链导入模板（V1.0 恒为空）
+         * @description 与接入点同因：V1.0 无 integration/tool 表。深链模板须由后端持有，
+         *     浏览器不感知参数名（F4-2），因此在表与运营入口落地前返回空数组，
+         *     不编造模板（`TODO(T24)`）。
+         */
+        get: operations["getPublicIntegrationLinks"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -110,6 +965,98 @@ export interface components {
             display_name: string;
             role: components["schemas"]["UserRole"];
             status: components["schemas"]["UserStatus"];
+            /**
+             * @description HMAC(secret, "csrf|"+sid)，与可读的 `csrf` cookie 同值；
+             *     写请求回传到 X-CSRF-Token 头。GET /api/v1/auth/me 每次下发新 cookie
+             *     并在响应头重复一次。
+             */
+            csrf_token: string;
+        };
+        AuthUser: {
+            id: string;
+            /** Format: email */
+            email: string;
+            display_name: string;
+            role: components["schemas"]["UserRole"];
+            status: components["schemas"]["UserStatus"];
+        };
+        LoginRequest: {
+            /** @description 邮箱或手机号；手机号支持 +86 前缀 */
+            identifier: string;
+            /** Format: password */
+            password: string;
+            /** @description 验证码；第一段只接受空值，非空返回 400 */
+            code?: string;
+        };
+        RegisterRequest: {
+            /** @description 邮箱或手机号；手机号支持 +86 前缀 */
+            identifier: string;
+            /**
+             * Format: password
+             * @description 8..72 字节，不可为纯空白
+             */
+            password: string;
+            /** @description 验证码；第一段只接受空值，非空返回 400 */
+            code?: string;
+            /** @description 去首尾空格后按 rune 计数；空则回退到 email/phone */
+            nickname?: string;
+            agreement_version?: string;
+        };
+        AuthSessionResponse: {
+            user: components["schemas"]["AuthUser"];
+            /** @description 与本响应 Set-Cookie 的 `csrf` 同值，见 CurrentUser.csrf_token */
+            csrf_token: string;
+        };
+        PasswordChangeRequest: {
+            /** Format: password */
+            old_password: string;
+            /**
+             * Format: password
+             * @description 8..72 字节，不可为纯空白
+             */
+            new_password: string;
+        };
+        AuditLogItem: {
+            /** Format: int64 */
+            id: number;
+            /** @description 与结构化日志的 Trace ID 一致 */
+            trace_id: string;
+            /** @description t_admin_audit_log.operator_id 的十进制字符串 */
+            operator_id: string;
+            /** @description PERSONAL / OPS / FINANCE / SUPER_ADMIN */
+            operator_role: string;
+            /** @description varbinary(16) 还原后的字符串；无法解析时为空串 */
+            operator_ip: string;
+            module: string;
+            action: string;
+            target_type: string;
+            target_id: string;
+            /** @description 操作前快照，任意 JSON；数据库为 NULL 时响应为 null */
+            before: unknown;
+            /** @description 操作后快照，任意 JSON；数据库为 NULL 时响应为 null */
+            after: unknown;
+            /** @description 调额 / 禁用 / 定价变更必填 */
+            reason?: string;
+            result: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AuditLogListResponse: {
+            items: components["schemas"]["AuditLogItem"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /**
+             * Format: date-time
+             * @description 实际生效的窗口起点（UTC）
+             */
+            from: string;
+            /**
+             * Format: date-time
+             * @description 实际生效的窗口终点（UTC）
+             */
+            to: string;
         };
         /**
          * @description 与后端 t_user.role 同名。
@@ -121,9 +1068,1662 @@ export interface components {
          * @enum {string}
          */
         UserStatus: "NORMAL" | "DISABLED" | "FROZEN_OVERDRAFT";
+        Overview: {
+            balance: {
+                /**
+                 * Format: int64
+                 * @description 微积分；账本唯一存储单位
+                 */
+                micro: number;
+                /** @description 积分字符串（micro ÷ 10000），避免浮点 */
+                credits: string;
+                /** @description 人民币参考字符串（1 元 = 100 积分） */
+                cny: string;
+                /** Format: int64 */
+                recharge_micro: number;
+                /** Format: int64 */
+                bonus_micro: number;
+            };
+            today: {
+                /** Format: int64 */
+                requests: number;
+                /** Format: int64 */
+                consumed_micro: number;
+                consumed_credits: string;
+                /** @description 对内口径；分母排除 402/429，无分母时为 null */
+                success_rate_bp: number | null;
+            };
+            /** @description 固定 24 个点，按 UTC+8 小时对齐，空小时补 0 */
+            hourly: {
+                /** Format: date-time */
+                hour: string;
+                /** Format: int64 */
+                requests: number;
+                /** Format: int64 */
+                consumed_micro: number;
+            }[];
+            plan: {
+                /** @description TRIAL / STANDARD / PRO / ENTERPRISE / FREE_DEFAULT */
+                code: string;
+                name: string;
+                /** @enum {string} */
+                policy_source: "PLAN" | "TRIAL" | "QUOTA_APPLY" | "OPS_OVERRIDE" | "FREE_DEFAULT";
+                /** Format: date-time */
+                trial_expire_at?: string | null;
+            };
+            quota: {
+                /** Format: int64 */
+                rpm: number;
+                /** Format: int64 */
+                tpm: number;
+                /** Format: int64 */
+                concurrency: number;
+                /**
+                 * Format: int64
+                 * @description null = 无上限（FREE_DEFAULT），不得写成 0
+                 */
+                daily_quota_micro: number | null;
+                /** Format: int64 */
+                used_today_micro: number;
+                /** Format: int64 */
+                remaining_micro: number | null;
+            };
+            eta: {
+                reachable: boolean;
+                /** @enum {string} */
+                reason: "OK" | "NO_DAILY_QUOTA" | "NO_RECENT_USAGE" | "QUOTA_REACHED";
+                /** Format: date-time */
+                eta_at: string | null;
+                /** Format: int64 */
+                seconds_left: number | null;
+                /**
+                 * Format: int64
+                 * @description 近 1 小时消耗
+                 */
+                burn_micro_per_hour: number;
+            };
+        };
+        KeyList: {
+            items: components["schemas"]["KeyListItem"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        KeyListItem: {
+            /** Format: int64 */
+            id: number;
+            key_name: string;
+            /** @description 前 8 位 + **** + 后 4 位 */
+            key_masked: string;
+            /** @enum {string} */
+            status: "ENABLED" | "DISABLED";
+            expired: boolean;
+            /** @description internal 分组不返回该字段 */
+            group_code?: string;
+            group_ratio_bp: number | null;
+            /** @enum {string} */
+            model_scope_mode: "SELECTED" | "ALL";
+            model_count?: number;
+            /** @enum {string} */
+            ip_whitelist_mode?: "ON" | "OFF";
+            ip_rule_count?: number;
+            /** Format: date-time */
+            expire_at?: string | null;
+            /** Format: int64 */
+            today_consumed_micro?: number;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            last_used_at?: string | null;
+        };
+        /**
+         * @description 四步向导参数：名称 / 模型范围 / 有效期 / IP 白名单。
+         *     请求体出现 group_code（含 null）一律 400 invalid_request_body。
+         */
+        CreateKeyRequest: {
+            name: string;
+            /**
+             * @default SELECTED
+             * @enum {string}
+             */
+            model_scope_mode: "SELECTED" | "ALL";
+            /** @description SELECTED 时必填且非空；ALL 时必须为空 */
+            model_ids?: number[];
+            /**
+             * Format: date-time
+             * @description 必须晚于当前时间；用户侧不可设永久（PRD §5.2）
+             */
+            expire_at: string;
+            /** @description 单 IP 或 CIDR；空数组 = ip_whitelist_mode OFF */
+            ip_allowlist?: string[];
+            /**
+             * @description PRD F6-5 上限 10；免费档按整批计数，活跃数 + count 超过 quota.free_max_active_keys 整批拒绝
+             * @default 1
+             */
+            count: number;
+        };
+        CreatedKeys: {
+            items: components["schemas"]["CreatedKey"][];
+            count: number;
+            warning: string;
+        };
+        CreatedKey: {
+            /** Format: int64 */
+            id: number;
+            key_name: string;
+            /** @description 完整明文，仅创建响应出现一次；t_api_key 只存 SHA256 */
+            key: string;
+            /** @description 明文前 8 位 */
+            key_prefix: string;
+            key_last4: string;
+            key_masked: string;
+            /** @enum {string} */
+            model_scope_mode: "SELECTED" | "ALL";
+            model_ids?: number[];
+            /** @description 新建恒为 standard */
+            group_code: string;
+            /** Format: date-time */
+            expire_at: string;
+            ip_allowlist?: string[];
+        };
+        /**
+         * @description 只更新出现的字段。model_ids 传 [] 返回 400（SELECTED 不允许空白名单）；
+         *     ip_allowlist 传 [] 表示清空并置 OFF；不传则保持原值。
+         *     任何情况下出现 group_code 即 400。
+         */
+        UpdateKeyRequest: {
+            key_name?: string;
+            model_ids?: number[];
+            /** @enum {string} */
+            model_scope_mode?: "SELECTED" | "ALL";
+            /**
+             * Format: date-time
+             * @description null 不被接受；永久仅运营可设
+             */
+            expire_at?: string;
+            ip_allowlist?: string[];
+            /** @enum {string} */
+            status?: "ENABLED" | "DISABLED";
+            /** @description status=DISABLED 时必填 true；转入 ENABLED 不需要 */
+            confirm?: boolean;
+        };
+        UpdateKeyResponse: {
+            changed: boolean;
+            key_name: string;
+            /** @enum {string} */
+            status: "ENABLED" | "DISABLED";
+            /** @enum {string} */
+            model_scope_mode: "SELECTED" | "ALL";
+            /** Format: date-time */
+            expire_at: string | null;
+            /** @enum {string} */
+            ip_whitelist_mode: "ON" | "OFF";
+            ip_allowlist: string[];
+        };
+        KeyDetail: {
+            /** Format: int64 */
+            id: number;
+            key_name: string;
+            key_masked: string;
+            key_prefix: string;
+            /** @enum {string} */
+            status: "ENABLED" | "DISABLED";
+            expired: boolean;
+            /** @description internal 分组不返回 */
+            group_code?: string;
+            group_ratio_bp: number | null;
+            group_note?: string;
+            /** @enum {string} */
+            model_scope_mode: "SELECTED" | "ALL";
+            models: {
+                /** Format: int64 */
+                id?: number;
+                model_name?: string;
+                display_name?: string;
+            }[];
+            /** @enum {string} */
+            ip_whitelist_mode: "ON" | "OFF";
+            ip_allowlist: {
+                cidr?: string;
+                /** @enum {integer} */
+                ip_family?: 4 | 6;
+                note?: string;
+            }[];
+            /** Format: date-time */
+            expire_at?: string | null;
+            /** Format: int64 */
+            remaining_days?: number | null;
+            /** Format: date-time */
+            created_at?: string;
+            /** Format: date-time */
+            last_used_at?: string | null;
+            realtime: {
+                /** Format: date-time */
+                as_of: string;
+                /** @description false 时三个 used 均为 null */
+                available: boolean;
+                /** Format: int64 */
+                rpm_used: number | null;
+                /** Format: int64 */
+                rpm_limit: number;
+                /** Format: int64 */
+                tpm_used: number | null;
+                /** Format: int64 */
+                tpm_limit: number;
+                /** Format: int64 */
+                concurrency_used: number | null;
+                /** Format: int64 */
+                concurrency_limit: number;
+            };
+            account_quota: {
+                /** Format: int64 */
+                used_today_micro: number;
+                /** Format: int64 */
+                daily_quota_micro: number | null;
+                /** Format: int64 */
+                remaining_micro: number | null;
+                plan_code: string;
+                plan_name: string;
+                policy_source: string;
+            };
+        };
+        KeyAuditList: {
+            items: {
+                /** @description CREATE / ROTATE / DISABLE / ENABLE / DELETE / MODEL_SCOPE_CHANGE / IP_RULE_CHANGE / RENAME / EXPIRE_CHANGE */
+                action: string;
+                /** @description 变更前（脱敏 JSON），CREATE 时为 null */
+                before: unknown;
+                /** @description 变更后（脱敏 JSON） */
+                after: unknown;
+                operator_id: string;
+                /** Format: date-time */
+                created_at: string;
+            }[];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        RotatedKey: {
+            /** Format: int64 */
+            id: number;
+            /** Format: int64 */
+            rotated_from_id: number;
+            key_name: string;
+            /** @description 完整明文，仅本次响应出现 */
+            key: string;
+            key_prefix: string;
+            key_last4: string;
+            key_masked: string;
+            /** @description 继承旧 Key 分组；internal 不返回 */
+            group_code: string;
+            /** Format: date-time */
+            expire_at?: string | null;
+            warning?: string;
+            /**
+             * @description T12 选择立即失效，无 5 分钟宽限
+             * @enum {string}
+             */
+            revocation: "immediate";
+        };
+        ModelCatalog: {
+            items: components["schemas"]["ModelCatalogItem"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        ModelCatalogItem: {
+            /** Format: int64 */
+            id: number;
+            model_name: string;
+            display_name: string;
+            /** @enum {string} */
+            model_type: "TEXT" | "IMAGE" | "EMBEDDING";
+            /** Format: int64 */
+            context_length: number;
+            protocol: string;
+            aliases: string[];
+            capabilities: components["schemas"]["ModelCapabilities"];
+            /** Format: int64 */
+            recommend_weight: number;
+            /** Format: date-time */
+            published_at: string | null;
+            pricing: components["schemas"]["ModelPricing"] | null;
+        };
+        ModelCapabilities: {
+            /** @description null = 未配置（B-53 显示「—」） */
+            stream?: boolean | null;
+            tool_call?: boolean | null;
+            vision?: boolean | null;
+            json_mode?: boolean | null;
+        };
+        /** @description 标准单价（t_price_rule），不乘任何分组倍率 */
+        ModelPricing: {
+            /** Format: int64 */
+            in_price_micro_per_k: number;
+            /** Format: int64 */
+            out_price_micro_per_k: number;
+            /** Format: int64 */
+            per_call_price_micro: number;
+            in_price_credits_per_k: string;
+            out_price_credits_per_k: string;
+            per_call_credits_per_call: string;
+            in_price_cny_per_k: string;
+            out_price_cny_per_k: string;
+            per_call_cny_per_call: string;
+            cache_billing_enabled: boolean;
+            /** @description pricing.cache_billing_enabled=false 时不返回 */
+            cache_hit_ratio_bp?: number | null;
+            cache_write_ratio_bp?: number | null;
+            cache_hit_price_credits_per_k?: string | null;
+            cache_write_price_credits_per_k?: string | null;
+        };
+        /** @description 一个档位；全部数值来自 t_plan（PRD §3.2.1 为唯一来源） */
+        Plan: {
+            /** Format: int64 */
+            id: number;
+            /** @description TRIAL / STANDARD / PRO / ENTERPRISE / FREE_DEFAULT */
+            code: string;
+            name: string;
+            /**
+             * Format: int64
+             * @description 售价（分）
+             */
+            price_fen: number;
+            /**
+             * Format: int64
+             * @description 售价（元，整数展示）
+             */
+            price_yuan: number;
+            /**
+             * Format: int64
+             * @description 充值积分（微积分）
+             */
+            grant_recharge_micro: number;
+            /**
+             * Format: int64
+             * @description 赠送积分（微积分）
+             */
+            grant_bonus_micro: number;
+            /**
+             * Format: int64
+             * @description 充值积分（积分）
+             */
+            grant_recharge?: number;
+            /**
+             * Format: int64
+             * @description 赠送积分（积分）
+             */
+            grant_bonus?: number;
+            /** Format: int64 */
+            bonus_valid_days: number;
+            /** Format: int64 */
+            rpm: number;
+            /** Format: int64 */
+            tpm: number;
+            /** Format: int64 */
+            concurrency: number;
+            /**
+             * Format: int64
+             * @description null = 无上限（默认档）
+             */
+            daily_quota_micro?: number | null;
+            /**
+             * Format: int64
+             * @description 账户日额度（积分）
+             */
+            daily_quota?: number | null;
+            /** @description 权益有效期永久（付费三档为 true） */
+            permanent: boolean;
+            /** @description price_fen > 0；默认档与体验档为 false */
+            purchasable: boolean;
+            /**
+             * Format: int64
+             * @description 档位顺序：体验 < 标准 < 专业 < 企业
+             */
+            sort_order: number;
+        };
+        PlanList: {
+            items: components["schemas"]["Plan"][];
+            /** @description 未购套餐时的档位 code（FREE_DEFAULT） */
+            default_tier: string;
+            /** @description plan.default_tier 配置值 */
+            default_tier_label: string;
+            /**
+             * Format: int64
+             * @description plan.trial_days
+             */
+            trial_days: number;
+            /**
+             * Format: int64
+             * @description billing.bonus_expire_days
+             */
+            bonus_expire_days: number;
+            /**
+             * Format: int64
+             * @description 恒为 10000
+             */
+            micro_per_credit: number;
+        };
+        Order: {
+            /** Format: int64 */
+            id: number;
+            /** @description yyyymmddHHmmss + 14 位随机（28 字符） */
+            order_no: string;
+            /** @enum {string} */
+            order_type: "CUSTOM" | "PLAN";
+            plan_code?: string;
+            /**
+             * Format: int64
+             * @description 实付（分）
+             */
+            pay_amount_fen: number;
+            /** Format: int64 */
+            pay_amount_yuan: number;
+            /** Format: int64 */
+            recharge_micro: number;
+            /** Format: int64 */
+            bonus_micro: number;
+            /** Format: int64 */
+            recharge?: number;
+            /** Format: int64 */
+            bonus?: number;
+            /** @enum {string} */
+            pay_channel: "WECHAT" | "ALIPAY";
+            /** @enum {string} */
+            state: "PENDING" | "PAID" | "CLOSED" | "REFUNDING" | "REFUNDED" | "PARTIAL_REFUNDED";
+            /** Format: date-time */
+            paid_at?: string | null;
+            /**
+             * Format: date-time
+             * @description 下单 + 30 分钟
+             */
+            expire_at: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        OrderList: {
+            items: components["schemas"]["Order"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        CreateOrderRequest: {
+            /** @enum {string} */
+            order_type: "CUSTOM" | "PLAN";
+            /**
+             * Format: int64
+             * @description PLAN 必填；CUSTOM 不得出现
+             */
+            plan_id?: number;
+            /**
+             * Format: int64
+             * @description CUSTOM 必填（1~5000000）；PLAN 若传必须等于档位价
+             */
+            pay_amount_fen?: number;
+            /**
+             * @description OFFLINE（对公转账）不走自动回调，V1.0 不开放
+             * @enum {string}
+             */
+            pay_channel: "WECHAT" | "ALIPAY";
+            /** @description 也可用同名请求头；10s 窗口 */
+            idempotency_key?: string;
+        };
+        CreatedOrder: {
+            order: components["schemas"]["Order"];
+            /** @description true = 同一 Idempotency-Key 的重放，未新建订单 */
+            idempotent_replay: boolean;
+        };
+        RedeemRequest: {
+            /** @description 兑换码明文；服务端只存 SHA-256 */
+            code: string;
+        };
+        RedeemResult: {
+            batch_name: string;
+            /** Format: int64 */
+            amount_micro: number;
+            /**
+             * Format: int64
+             * @description 积分
+             */
+            amount: number;
+            /**
+             * @description B-44 A 档固定 BONUS（不可退）
+             * @enum {string}
+             */
+            credit_target: "BONUS" | "RECHARGE";
+            /** Format: date-time */
+            expire_at: string;
+            /** Format: int64 */
+            balance_after_micro: number;
+        };
+        PayCallbackRequest: {
+            /** @description 本平台订单号 */
+            out_trade_no: string;
+            /** @description 渠道流水号（uk_ro_pay_txn 幂等键） */
+            trade_no: string;
+            /**
+             * Format: int64
+             * @description 实付（分），必须与订单一致且参与验签
+             */
+            amount_fen: number;
+            /** @enum {string} */
+            status: "SUCCESS" | "FAILED";
+            /** @description hex(HMAC-SHA256(secret, out_trade_no|trade_no|amount_fen|status)) */
+            sign: string;
+        };
+        PayCallbackAck: {
+            /** @description 固定 SUCCESS（渠道约定，非统一错误体） */
+            code: string;
+            order_no?: string;
+            /** @description true = 本次或此前已入账 */
+            credited: boolean;
+            /** @description true = 重复通知，未重复入账 */
+            replayed: boolean;
+            /** @description ORDER_NOT_FOUND / ORDER_CLOSED / ORDER_REFUNDED / PAY_TXN_MISMATCH / CHANNEL_REPORTED_FAILURE */
+            reason?: string;
+        };
+        Refund: {
+            /** Format: int64 */
+            id: number;
+            /** @description 28 位退款单号 */
+            refund_no: string;
+            /** Format: int64 */
+            recharge_order_id: number;
+            /**
+             * Format: int64
+             * @description 申请退款积分（微积分）
+             */
+            apply_micro: number;
+            /**
+             * Format: int64
+             * @description 申请退款积分（积分 = micro / 10000）
+             */
+            apply_credits?: number;
+            /**
+             * Format: int64
+             * @description 实际退款积分基数（= apply_micro）
+             */
+            refund_micro: number;
+            /** Format: int64 */
+            refund_credits?: number;
+            /**
+             * Format: int64
+             * @description 退回人民币（分）= micro × 9 / 100000
+             */
+            refund_fen: number;
+            /**
+             * Format: int64
+             * @description 元（整除，展示用；分位见 refund_fen % 100）
+             */
+            refund_yuan?: number;
+            /**
+             * Format: int64
+             * @description 手续费（分）= 可退积分 − refund_fen
+             */
+            fee_fen: number;
+            /** Format: int64 */
+            fee_yuan?: number;
+            /** @enum {string} */
+            state: "APPLIED" | "APPROVED" | "REJECTED" | "PAYING" | "PAID" | "FAILED";
+            reject_reason?: string | null;
+            fail_reason?: string | null;
+            /** @description 原路退回渠道流水号 */
+            pay_txn_id?: string | null;
+            /** Format: int64 */
+            auditor_id?: number | null;
+            /** Format: date-time */
+            audited_at?: string | null;
+            /** Format: date-time */
+            paid_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        RefundList: {
+            items: components["schemas"]["Refund"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        CreateRefundRequest: {
+            /**
+             * Format: int64
+             * @description 必须属于当前账号且 state=PAID
+             */
+            recharge_order_id: number;
+            /** @description 也可用同名请求头；10s 窗口 */
+            idempotency_key?: string;
+        };
+        CreatedRefund: {
+            refund: components["schemas"]["Refund"];
+            idempotent_replay: boolean;
+        };
+        Invoice: {
+            /** Format: int64 */
+            id: number;
+            apply_no: string;
+            /** Format: int64 */
+            recharge_order_id: number;
+            /** @enum {string} */
+            invoice_type: "VAT_NORMAL_E";
+            /** @enum {string} */
+            title_type: "PERSONAL" | "COMPANY";
+            title: string;
+            /** @description COMPANY 必填 */
+            tax_no?: string | null;
+            receive_email: string;
+            /** Format: int64 */
+            amount_fen: number;
+            /** Format: int64 */
+            amount_yuan?: number;
+            /**
+             * Format: int64
+             * @description V1.0 固定 10000（1.00，Q-03），不做价税分离
+             */
+            tax_rate_bp?: number;
+            /** @enum {string} */
+            state: "APPLIED" | "APPROVED" | "ISSUED" | "REJECTED" | "VOIDED";
+            reject_reason?: string | null;
+            invoice_url?: string | null;
+            /** Format: int64 */
+            auditor_id?: number | null;
+            /** Format: date-time */
+            issued_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        InvoiceList: {
+            items: components["schemas"]["Invoice"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        CreateInvoiceRequest: {
+            /** Format: int64 */
+            recharge_order_id: number;
+            /** @enum {string} */
+            title_type: "PERSONAL" | "COMPANY";
+            title: string;
+            /** @description title_type=COMPANY 时必填 */
+            tax_no?: string;
+            receive_email: string;
+            /**
+             * Format: int64
+             * @description 省略 = 剩余可开金额；超过剩余额度即拒绝
+             */
+            amount_fen?: number;
+            idempotency_key?: string;
+        };
+        CreatedInvoice: {
+            invoice: components["schemas"]["Invoice"];
+            idempotent_replay: boolean;
+        };
+        QuotaApply: {
+            /** Format: int64 */
+            id: number;
+            apply_no: string;
+            /**
+             * Format: int64
+             * @description 提交时的日额度快照
+             */
+            current_quota_micro: number;
+            /** Format: int64 */
+            current_quota?: number;
+            /**
+             * Format: int64
+             * @description 提交时当日已用
+             */
+            used_at_apply_micro: number;
+            /** Format: int64 */
+            used_at_apply?: number;
+            /** Format: int64 */
+            target_quota_micro: number;
+            /** Format: int64 */
+            target_quota?: number;
+            /** Format: int64 */
+            approved_quota_micro?: number | null;
+            /** Format: int64 */
+            approved_quota?: number | null;
+            apply_reason: string;
+            /** @enum {string} */
+            state: "PENDING" | "APPROVED" | "REJECTED" | "EXPIRED";
+            /**
+             * Format: date-time
+             * @description 批准日次日 00:00 UTC+8
+             */
+            effective_from?: string | null;
+            /**
+             * Format: date-time
+             * @description effective_from + 30 天
+             */
+            effective_to?: string | null;
+            reject_reason?: string | null;
+            /** Format: int64 */
+            auditor_id?: number | null;
+            /** Format: date-time */
+            audited_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        QuotaApplyList: {
+            items: components["schemas"]["QuotaApply"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        CreateQuotaApplyRequest: {
+            /**
+             * Format: int64
+             * @description 必须 > 当前日额度且 ≤ 当前日额度 × 5
+             */
+            target_quota_micro: number;
+            apply_reason: string;
+            idempotency_key?: string;
+        };
+        CreatedQuotaApply: {
+            apply: components["schemas"]["QuotaApply"];
+            idempotent_replay: boolean;
+        };
+        TrialClaimRequest: {
+            /** @description 客户端设备指纹原始串；服务端存 HMAC-SHA256(串 */
+            fingerprint: string;
+        };
+        TrialClaimResult: {
+            /** @enum {string} */
+            plan_code: "TRIAL";
+            /** Format: int64 */
+            granted_micro: number;
+            /**
+             * Format: int64
+             * @description 7
+             */
+            granted_credits: number;
+            /** Format: date-time */
+            trial_expire_at: string;
+            /**
+             * Format: date-time
+             * @description 90 天
+             */
+            bonus_expire_at: string;
+            /** Format: int64 */
+            balance_after_micro: number;
+            /** @description DEVICE+PHONE+IP_SEGMENT+ACCOUNT */
+            anti_abuse_checks?: string;
+        };
+        TicketSLA: {
+            /**
+             * Format: date-time
+             * @description created_at + 4h
+             */
+            first_response_due_at: string;
+            /** Format: date-time */
+            first_responded_at?: string | null;
+            responded: boolean;
+            /** @description 仅 OPEN 且已过 due；超时只进告警区，不自动关闭 */
+            overdue: boolean;
+            /**
+             * Format: int64
+             * @description 未响应且未超时的剩余秒数，其余为 0
+             */
+            remaining_seconds: number;
+            /**
+             * Format: int64
+             * @description 已超出的秒数，未超时为 0
+             */
+            overdue_seconds: number;
+            /** @description 「已响应（用时 xx）」/「剩余 xx」/「已超时 xx」 */
+            display: string;
+        };
+        TicketReply: {
+            /** Format: int64 */
+            id: number;
+            /** @enum {string} */
+            author_type: "USER" | "OPS";
+            content: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        Ticket: {
+            /** Format: int64 */
+            id: number;
+            /** @description TK + yyyyMMddHHmmss + 4 位随机数 */
+            ticket_no: string;
+            /** @enum {string} */
+            ticket_type: "BILLING" | "TECH" | "CONTENT_APPEAL" | "OTHER";
+            title: string;
+            description: string;
+            request_id?: string | null;
+            /**
+             * Format: int64
+             * @description 内容申诉从 t_content_policy_hit 派生
+             */
+            policy_hit_id?: number | null;
+            /** @description 命中的规则标识，由服务端带出，用户不可手填 */
+            policy_rule_id?: string | null;
+            policy_category?: string | null;
+            /**
+             * @description 只有三态
+             * @enum {string}
+             */
+            state: "OPEN" | "RESPONDED" | "CLOSED";
+            /** Format: date-time */
+            first_response_due_at: string;
+            /** Format: date-time */
+            first_responded_at?: string | null;
+            /** Format: date-time */
+            last_replied_at?: string | null;
+            /** Format: int64 */
+            reopen_count?: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            sla: components["schemas"]["TicketSLA"];
+            /** @description 只含 is_internal = 0 的回复；内部备注不会出现在此数组 */
+            replies: components["schemas"]["TicketReply"][];
+        };
+        TicketListItem: {
+            /** Format: int64 */
+            id: number;
+            ticket_no: string;
+            /** @enum {string} */
+            ticket_type: "BILLING" | "TECH" | "CONTENT_APPEAL" | "OTHER";
+            title: string;
+            /** @enum {string} */
+            state: "OPEN" | "RESPONDED" | "CLOSED";
+            /** Format: date-time */
+            first_response_due_at: string;
+            /** Format: date-time */
+            first_responded_at?: string | null;
+            /** Format: date-time */
+            last_replied_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            sla: components["schemas"]["TicketSLA"];
+        };
+        TicketList: {
+            items: components["schemas"]["TicketListItem"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        CreateTicketRequest: {
+            /** @enum {string} */
+            ticket_type: "BILLING" | "TECH" | "CONTENT_APPEAL" | "OTHER";
+            title: string;
+            /** @description 纯文本；CRLF 归一为 LF，控制字符剔除 */
+            description: string;
+            /** @description 可选；必须为本人 90 天内的请求 */
+            request_id?: string;
+            /**
+             * Format: int64
+             * @description 仅 CONTENT_APPEAL；t_content_policy_hit.id（不是规则标识）。与 request_id 同传时以命中记录为准
+             */
+            policy_hit_id?: number;
+        };
+        CreatedTicket: {
+            ticket: components["schemas"]["Ticket"];
+            /**
+             * @description POLICY_HIT 表示 request_id 由命中记录带出
+             * @enum {string}
+             */
+            request_id_source: "" | "USER" | "POLICY_HIT";
+            /** @description 传了与命中记录不一致的 request_id 时的校正说明 */
+            notice?: string;
+        };
+        RequestIDItem: {
+            request_id: string;
+            model_name: string;
+            http_status: number;
+            /** @enum {string} */
+            result: "SUCCESS" | "PARTIAL" | "FAILED";
+            /** Format: date-time */
+            created_at: string;
+        };
+        RequestIDList: {
+            items: components["schemas"]["RequestIDItem"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /**
+             * Format: date-time
+             * @description 90 天窗口起点
+             */
+            since: string;
+        };
+        AdminTicket: {
+            /** Format: int64 */
+            id: number;
+            ticket_no: string;
+            /** Format: int64 */
+            user_id: number;
+            user_email: string;
+            /** @enum {string} */
+            ticket_type: "BILLING" | "TECH" | "CONTENT_APPEAL" | "OTHER";
+            title: string;
+            request_id?: string | null;
+            /** Format: int64 */
+            policy_hit_id?: number | null;
+            /** @enum {string} */
+            state: "OPEN" | "RESPONDED" | "CLOSED";
+            /** Format: date-time */
+            first_response_due_at: string;
+            /** Format: date-time */
+            first_responded_at?: string | null;
+            /** Format: date-time */
+            last_replied_at?: string | null;
+            /** Format: date-time */
+            created_at: string;
+            sla: components["schemas"]["TicketSLA"];
+        };
+        AdminTicketList: {
+            items: components["schemas"]["AdminTicket"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        AdminTicketReply: components["schemas"]["TicketReply"] & {
+            /** @description true = 内部备注，运营可见、用户不可见 */
+            is_internal: boolean;
+        };
+        AdminTicketDetail: {
+            /** Format: int64 */
+            id: number;
+            ticket_no: string;
+            /** Format: int64 */
+            user_id: number;
+            user_email: string;
+            /** @enum {string} */
+            ticket_type: "BILLING" | "TECH" | "CONTENT_APPEAL" | "OTHER";
+            title: string;
+            description: string;
+            request_id?: string | null;
+            /** Format: int64 */
+            policy_hit_id?: number | null;
+            policy_rule_id?: string | null;
+            policy_category?: string | null;
+            /** @enum {string} */
+            state: "OPEN" | "RESPONDED" | "CLOSED";
+            /** Format: date-time */
+            first_response_due_at: string;
+            /** Format: date-time */
+            first_responded_at?: string | null;
+            /** Format: date-time */
+            last_replied_at?: string | null;
+            /** Format: int64 */
+            reopen_count?: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+            sla: components["schemas"]["TicketSLA"];
+            /** @description 全部回复；is_internal=true 为内部备注（运营可见、用户不可见） */
+            replies: components["schemas"]["AdminTicketReply"][];
+        };
+        AdminUser: {
+            /** Format: int64 */
+            id: number;
+            user_no: string;
+            email?: string | null;
+            phone?: string | null;
+            nickname: string;
+            /** @enum {string} */
+            role: "PERSONAL" | "OPS" | "FINANCE" | "SUPER_ADMIN";
+            /** @enum {string} */
+            status: "NORMAL" | "DISABLED" | "FROZEN_OVERDRAFT";
+            disable_source?: string | null;
+            disable_reason?: string | null;
+            /** Format: date-time */
+            disabled_at?: string | null;
+            /** Format: int64 */
+            disabled_by?: number | null;
+            /** Format: int64 */
+            risk_score: number;
+            /** Format: int64 */
+            plan_id?: number | null;
+            plan_code?: string;
+            plan_name?: string;
+            /**
+             * Format: int64
+             * @description status=ENABLED 且 deleted_at IS NULL 的 Key 数
+             */
+            key_count: number;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AdminUserList: {
+            items: components["schemas"]["AdminUser"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        AdminChannel: {
+            /** Format: int64 */
+            id: number;
+            name: string;
+            /** Format: int64 */
+            protocol_id: number;
+            protocol: string;
+            /** @enum {string} */
+            region: "DOMESTIC" | "OVERSEAS";
+            base_url: string;
+            upstream_key_mask: string;
+            /** Format: date-time */
+            key_rotation_at?: string | null;
+            /** @enum {string} */
+            group_scope_mode: "ALL" | "SELECTED";
+            /** @enum {string} */
+            dedicated_scope_mode: "ALL" | "SELECTED";
+            fallback_allowed: boolean;
+            dedicated_user_ids?: number[];
+            /** Format: int64 */
+            weight: number;
+            /** Format: int64 */
+            priority: number;
+            /** Format: int64 */
+            timeout_connect_ms: number;
+            /** Format: int64 */
+            timeout_first_byte_ms: number;
+            /** Format: int64 */
+            timeout_total_ms: number;
+            /** Format: int64 */
+            retry_max: number;
+            stream_supported: boolean;
+            /** @enum {string} */
+            stream_usage_mode: "NATIVE" | "STREAM_OPTIONS" | "ESTIMATE" | "UNKNOWN";
+            upstream_model_name_map?: {
+                [key: string]: string;
+            };
+            /** @enum {string} */
+            health_state: "CLOSED" | "OPEN" | "HALF_OPEN" | "AUTH_FAIL";
+            /**
+             * Format: int64
+             * @description 近 15 分钟上游尝试成功率；窗口内无尝试时为 null，不返回 10000
+             */
+            success_rate_bp: number | null;
+            enabled: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        AdminChannelList: {
+            items: components["schemas"]["AdminChannel"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+        };
+        AdminOverviewToday: {
+            /**
+             * Format: int64
+             * @description 今日全部请求行数
+             */
+            requests: number;
+            /**
+             * Format: int64
+             * @description 今日消耗微积分总和（失败行为 0）
+             */
+            consumed_micro: number;
+            /**
+             * Format: int64
+             * @description SUCCESS / (http_status NOT IN (402,429))；分母为 0 时为 null，不返回 0
+             */
+            success_rate_bp: number | null;
+        };
+        AdminOverviewAlerts: {
+            /**
+             * Format: int64
+             * @description state=HELD 且 expires_at<now
+             */
+            dangling_prehold: number;
+            /**
+             * Format: int64
+             * @description 近 30 天 status=OPEN 的 t_reconcile_diff
+             */
+            recon_diff: number;
+            /**
+             * Format: int64
+             * @description OPEN 且未响应且已过 first_response_due_at
+             */
+            sla_overdue: number;
+            /**
+             * Format: int64
+             * @description 境内、启用、未删除且 health_state<>CLOSED
+             */
+            channel_abnormal: number;
+        };
+        AdminOverviewCounts: {
+            /** Format: int64 */
+            pending_reviews: number;
+            /**
+             * Format: int64
+             * @description state IN (OPEN
+             */
+            open_tickets: number;
+        };
+        AdminOverview: {
+            today: components["schemas"]["AdminOverviewToday"];
+            alerts: components["schemas"]["AdminOverviewAlerts"];
+            counts: components["schemas"]["AdminOverviewCounts"];
+        };
+        TicketReplyRequest: {
+            content: string;
+            /**
+             * @description true = 内部备注，用户不可见，不改状态、不发邮件
+             * @default false
+             */
+            is_internal: boolean;
+        };
+        TicketReplyResult: {
+            reply: components["schemas"]["TicketReply"];
+            ticket: components["schemas"]["AdminTicket"];
+        };
+        TicketStateRequest: {
+            /**
+             * @description 唯一可达目标；RESPONDED 由回复动作写入，OPEN 由用户补充回复重开
+             * @enum {string}
+             */
+            state: "CLOSED";
+            /** @description 写入审计 reason */
+            reason?: string;
+        };
+        LogItem: {
+            request_id: string;
+            /** Format: int64 */
+            api_key_id: number;
+            api_key_name?: string;
+            /** Format: int64 */
+            model_id?: number | null;
+            model_name: string;
+            request_model: string;
+            inbound_protocol: string;
+            /** Format: int64 */
+            channel_id?: number | null;
+            channel_name?: string | null;
+            group_code: string;
+            is_stream: boolean;
+            http_status: number;
+            biz_code: string;
+            /** @enum {string} */
+            result: "SUCCESS" | "PARTIAL" | "FAILED";
+            fail_stage?: string | null;
+            fail_owner?: string | null;
+            /** Format: int64 */
+            tokens_in: number;
+            /** Format: int64 */
+            tokens_out: number;
+            /** Format: int64 */
+            consumed_micro: number;
+            /** Format: int64 */
+            upstream_attempts: number;
+            /** Format: int64 */
+            ttft_ms?: number | null;
+            /** Format: int64 */
+            total_ms: number;
+            /** Format: int64 */
+            upstream_ms: number;
+            client_ip: string;
+            client_aborted: boolean;
+            full_log_saved: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        LogListResponse: {
+            items: components["schemas"]["LogItem"][];
+            page: number;
+            page_size: number;
+            /** Format: int64 */
+            total: number;
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            /** @description 365 天在线窗口 */
+            window_days: number;
+        };
+        LogAttempt: {
+            attempt_index: number;
+            result: string;
+            http_status?: number | null;
+            phase: string;
+            /** Format: int64 */
+            channel_id: number;
+            channel_name: string;
+            protocol_code: string;
+            upstream_model: string;
+            /** Format: int64 */
+            connect_ms?: number | null;
+            /** Format: int64 */
+            first_byte_ms?: number | null;
+            /** Format: int64 */
+            total_ms: number;
+            /** Format: int64 */
+            tokens_in: number;
+            /** Format: int64 */
+            tokens_out: number;
+            is_retryable: boolean;
+            retry_decision?: string | null;
+            error_class?: string | null;
+            upstream_code?: string | null;
+            upstream_msg?: string | null;
+            /** Format: date-time */
+            created_at: string;
+        };
+        LogDetailRequest: {
+            request_id: string;
+            /** Format: int64 */
+            api_key_id: number;
+            api_key_name: string;
+            /** Format: int64 */
+            model_id?: number | null;
+            model_name: string;
+            request_model: string;
+            inbound_protocol: string;
+            /** Format: int64 */
+            channel_id?: number | null;
+            channel_name?: string | null;
+            outbound_protocol?: string | null;
+            group_code: string;
+            is_stream: boolean;
+            http_status: number;
+            biz_code: string;
+            /** @enum {string} */
+            result: "SUCCESS" | "PARTIAL" | "FAILED";
+            fail_stage?: string | null;
+            fail_owner?: string | null;
+            /** Format: int64 */
+            tokens_in: number;
+            /** Format: int64 */
+            tokens_out: number;
+            /** Format: int64 */
+            prehold_micro: number;
+            /** Format: int64 */
+            consumed_micro: number;
+            /** Format: int64 */
+            consumed_recharge_micro: number;
+            /** Format: int64 */
+            consumed_bonus_micro: number;
+            /** Format: int64 */
+            upstream_attempts: number;
+            /** Format: int64 */
+            ttft_ms?: number | null;
+            /** Format: int64 */
+            total_ms: number;
+            /** Format: int64 */
+            upstream_ms: number;
+            client_ip: string;
+            client_aborted: boolean;
+            full_log_saved: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        LogDetailResponse: {
+            request: components["schemas"]["LogDetailRequest"];
+            /** @description 按 attempt_index 升序；重试 1 次即 2 条 */
+            timeline: components["schemas"]["LogAttempt"][];
+        };
+        LogBodyResponse: {
+            request_id: string;
+            model_name: string;
+            /** Format: date-time */
+            created_at: string;
+            body: string;
+            /** @description 敏感字段是否被替换 */
+            redacted: boolean;
+        };
+        UsageRow: {
+            /** @enum {string} */
+            dimension: "model" | "channel" | "day" | "total";
+            /**
+             * Format: int64
+             * @description 模型/渠道 id；day 与 total 为 0
+             */
+            id: number;
+            /** @description 维度名称或 CST 日期 YYYY-MM-DD */
+            name: string;
+            /**
+             * Format: int64
+             * @description 全部请求数，含 FAILED
+             */
+            request_total: number;
+            /**
+             * Format: int64
+             * @description result='SUCCESS' 的请求数
+             */
+            request_success: number;
+            /**
+             * Format: int64
+             * @description 基点，10000 = 100%；request_success*10000/request_total 整数截断，total=0 时为 0
+             */
+            success_rate_bp: number;
+            /**
+             * Format: int64
+             * @description 仅累加 SUCCESS 行
+             */
+            tokens_in: number;
+            /**
+             * Format: int64
+             * @description 仅累加 SUCCESS 行
+             */
+            tokens_out: number;
+            /**
+             * Format: int64
+             * @description 微积分；仅累加 SUCCESS 行；1 积分 = 10000 微积分
+             */
+            consumed_micro: number;
+            /** Format: int64 */
+            consumed_recharge_micro: number;
+            /** Format: int64 */
+            consumed_bonus_micro: number;
+            /**
+             * Format: int64
+             * @description 四舍五入到分
+             */
+            amount_fen: number;
+            /** @description 永远是两位小数的元字符串 */
+            amount_yuan: string;
+        };
+        UsageFilter: {
+            /** Format: int64 */
+            model_id: number | null;
+            /** Format: int64 */
+            channel_id: number | null;
+        };
+        UsageResponse: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            /** @enum {string} */
+            dimension: "model" | "channel" | "day";
+            filter: components["schemas"]["UsageFilter"];
+            window_days: number;
+            /** @description 与 CSV 表头同一份定义、同一顺序 */
+            columns: string[];
+            items: components["schemas"]["UsageRow"][];
+            totals: components["schemas"]["UsageRow"];
+        };
+        BillResponse: {
+            /** @description YYYY-MM，CST 自然月 */
+            month: string;
+            /**
+             * Format: date-time
+             * @description CST 月初 00:00 对应的 UTC 时刻
+             */
+            period_start: string;
+            /**
+             * Format: date-time
+             * @description 下月月初 00:00 CST 对应的 UTC 时刻（不含）
+             */
+            period_end: string;
+            /**
+             * Format: int64
+             * @description 当月全部请求数，含 FAILED
+             */
+            request_total: number;
+            /**
+             * Format: int64
+             * @description 当月 result='SUCCESS' 的请求数
+             */
+            request_success: number;
+            /**
+             * Format: int64
+             * @description request_success*10000/request_total 整数截断
+             */
+            success_rate_bp: number;
+            /**
+             * Format: int64
+             * @description 仅累加 SUCCESS 行
+             */
+            consumed_micro: number;
+            /** Format: int64 */
+            consumed_recharge_micro: number;
+            /** Format: int64 */
+            consumed_bonus_micro: number;
+            /** Format: int64 */
+            amount_fen: number;
+            amount_yuan: string;
+        };
+        ExportStartResponse: {
+            /** @description HMAC 签名的任务令牌，可直接用于状态查询 */
+            task_id: string;
+            /** @enum {string} */
+            state: "RUNNING";
+        };
+        ExportStatusResponse: {
+            task_id: string;
+            /** @enum {string} */
+            state: "RUNNING" | "DONE" | "FAILED";
+            /** @description DONE 时的签名下载路径 */
+            url?: string | null;
+            /**
+             * Format: date-time
+             * @description 令牌失效时刻
+             */
+            expires_at?: string | null;
+        };
+        RealtimeWindow: {
+            /** Format: date-time */
+            from: string;
+            /** Format: date-time */
+            to: string;
+            minutes: number;
+            /** @description 实时值的展示延迟 */
+            lag_seconds: number;
+        };
+        UsageMetricsResponse: {
+            /** @enum {string} */
+            scope: "user" | "channel";
+            /** Format: int64 */
+            scope_id: number;
+            /** @enum {string} */
+            realtime_scope: "ACCOUNT" | "PLATFORM";
+            /** @enum {string} */
+            realtime_source: "REDIS_K14" | "REDIS_K15";
+            realtime_window: components["schemas"]["RealtimeWindow"];
+            /** Format: int64 */
+            realtime_request_total: number;
+            /** Format: int64 */
+            realtime_request_success: number;
+            /** Format: int64 */
+            realtime_request_failed: number;
+            /** Format: int64 */
+            realtime_tokens_in: number;
+            /** Format: int64 */
+            realtime_tokens_out: number;
+            /** Format: int64 */
+            realtime_consumed_micro: number;
+            /** Format: int64 */
+            realtime_consumed_fen: number;
+            /** @enum {string} */
+            settled_source: "T_METRIC_DAILY";
+            /** Format: date */
+            settled_from: string;
+            /**
+             * Format: date
+             * @description 最新完整 CST 自然日
+             */
+            settled_until: string;
+            /** Format: int64 */
+            settled_request_total: number;
+            /** Format: int64 */
+            settled_request_success: number;
+            /** Format: int64 */
+            settled_request_failed: number;
+            /** Format: int64 */
+            settled_tokens_in: number;
+            /** Format: int64 */
+            settled_tokens_out: number;
+            /** Format: int64 */
+            settled_consumed_micro: number;
+            /** Format: int64 */
+            settled_consumed_recharge_micro: number;
+            /** Format: int64 */
+            settled_consumed_bonus_micro: number;
+            /** Format: int64 */
+            settled_consumed_fen: number;
+            /** Format: int64 */
+            settled_success_rate_bp: number;
+        };
+        PublicPlan: {
+            /** @enum {string} */
+            code: "TRIAL" | "STANDARD" | "PRO" | "ENTERPRISE" | "FREE_DEFAULT";
+            /** @description t_plan.name varchar(64) */
+            name: string;
+            /**
+             * Format: int64
+             * @description 售价，单位分
+             */
+            price_fen: number;
+            /**
+             * Format: int64
+             * @description 到账充值积分，微积分
+             */
+            grant_recharge_micro: number;
+            /**
+             * Format: int64
+             * @description 赠送积分，微积分
+             */
+            grant_bonus_micro: number;
+            /** @description 赠送积分有效天数 */
+            bonus_valid_days: number;
+            rpm: number;
+            tpm: number;
+            /** @description 名义并发上限 */
+            concurrency: number;
+            /**
+             * Format: int64
+             * @description 账户日额度；NULL = 无上限，0 = 继承上一档
+             */
+            daily_quota_micro: number | null;
+            /** @description V1.0 恒为 ALL */
+            model_scope_mode: string;
+            /** @enum {integer} */
+            invoice_supported: 0 | 1;
+            sla_text: string;
+            /** @enum {integer} */
+            permanent: 0 | 1;
+            sort_order: number;
+        };
+        PublicPlansResponse: {
+            data: components["schemas"]["PublicPlan"][];
+        };
+        PublicModel: {
+            /** @description t_model.id 的十进制字符串 */
+            id: string;
+            /** @description 客户端可传入的对外模型名 */
+            model_name: string;
+            display_name: string;
+            /**
+             * @description 官网价格表只渲染 TEXT / IMAGE
+             * @enum {string}
+             */
+            model_type: "TEXT" | "IMAGE" | "EMBEDDING";
+            /**
+             * @description 公开列表只含 LISTED
+             * @enum {string}
+             */
+            listing_state: "LISTED";
+            /**
+             * Format: int64
+             * @description 对应 t_model.context_length
+             */
+            context_window: number;
+            /**
+             * Format: int64
+             * @description 当前生效价，微积分/千 token
+             */
+            input_price_micro_per_k: number;
+            /**
+             * Format: int64
+             * @description 当前生效价，微积分/千 token
+             */
+            output_price_micro_per_k: number;
+            /** @description 协议关联不到时为空数组，不猜测标签 */
+            protocols: ("OPENAI" | "ANTHROPIC")[];
+            /**
+             * Format: int64
+             * @description 0 表示不进推荐位
+             */
+            recommend_weight: number;
+            /**
+             * Format: date-time
+             * @description t_model.published_at；NULL 时回退 created_at
+             */
+            published_at: string;
+        };
+        PublicModelsResponse: {
+            data: components["schemas"]["PublicModel"][];
+        };
+        PublicAnnouncement: {
+            /** @description t_announcement.id 的十进制字符串 */
+            id: string;
+            title: string;
+            /** @description 对应 t_announcement.content（字段名不同） */
+            body: string;
+            /** @enum {string} */
+            category: "PRICE" | "RATE_LIMIT" | "GENERAL";
+            /**
+             * Format: date-time
+             * @description 对应 t_announcement.effective_from
+             */
+            effective_at: string;
+            /**
+             * Format: date-time
+             * @description 对应 t_announcement.created_at
+             */
+            published_at: string;
+        };
+        PublicAnnouncementsResponse: {
+            data: components["schemas"]["PublicAnnouncement"][];
+        };
+        /** @description V1.0 无数据表，接口恒返回空数组（TODO T24） */
+        PublicEndpoint: {
+            id: string;
+            name: string;
+            base_url: string;
+            line: string;
+            description: string;
+            /** @enum {string} */
+            role: "PRIMARY" | "BACKUP";
+            status_page_url: string;
+            /** @enum {string|null} */
+            health_status: "PASS" | "FAIL" | null;
+        };
+        PublicEndpointsResponse: {
+            data: components["schemas"]["PublicEndpoint"][];
+        };
+        /** @description V1.0 无数据表，接口恒返回空数组（TODO T24） */
+        PublicIntegrationLink: {
+            tool_key: string;
+            /** @description 后端持有的深链模板，浏览器不感知参数名 */
+            deep_link_template: string | null;
+            enabled: boolean;
+        };
+        PublicIntegrationLinksResponse: {
+            data: components["schemas"]["PublicIntegrationLink"][];
+        };
     };
     responses: never;
-    parameters: never;
+    parameters: {
+        /** @description t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found */
+        KeyID: number;
+        /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+        TicketID: number;
+    };
     requestBodies: never;
     headers: never;
     pathItems: never;
@@ -175,6 +2775,135 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HealthStatus"];
+                };
+            };
+        };
+    };
+    postRegister: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterRequest"];
+            };
+        };
+        responses: {
+            /** @description 注册成功并已登录 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSessionResponse"];
+                };
+            };
+            /** @description 请求体或字段不合法（invalid_request_body / invalid_field） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 邮箱或手机号已注册（account_exists） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话存储不可用（auth_unavailable） */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    postLogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoginRequest"];
+            };
+        };
+        responses: {
+            /** @description 登录成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSessionResponse"];
+                };
+            };
+            /** @description 请求体或字段不合法（invalid_request_body / invalid_field） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 账号或密码错误（invalid_credentials，不区分账号是否存在） */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 账号因欠费冻结（account_frozen_due_to_overdraft） */
+            402: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 账号已禁用（account_disabled） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 失败次数过多（账号维度 `login_locked`；同一 IP 维度 `rpm_limit_exceeded`。均带 retry_after_seconds / reset_at，retry_after_seconds 为剩余锁定秒数） */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话存储或风控依赖不可用（auth_unavailable） */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
         };
@@ -240,6 +2969,2380 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    postPasswordChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PasswordChangeRequest"];
+            };
+        };
+        responses: {
+            /** @description 密码已更新，所有会话已吊销，cookie 已清除 */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description 请求体或字段不合法（invalid_request_body / invalid_field） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 未登录、会话失效或旧密码错误（session_expired / invalid_credentials） */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description CSRF token 缺失或不匹配（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话存储不可用，密码可能已更新（auth_unavailable） */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConsoleOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 概览 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Overview"];
+                };
+            };
+            /** @description 会话失效（session_expired） */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 user.read */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsoleKeys: {
+        parameters: {
+            query?: {
+                q?: string;
+                status?: "enabled" | "disabled";
+                page?: number;
+                page_size?: number;
+                sort?: "created_at" | "last_used_at" | "key_name";
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 密钥列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyList"];
+                };
+            };
+            /** @description 查询参数非法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createConsoleKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description 创建成功；items[].key 是唯一一次明文 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedKeys"];
+                };
+            };
+            /** @description 字段非法（invalid_request_body）：含 group_code、count 超出 1–10、expire_at 不是未来时刻等 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 免费档活跃 Key 已达 quota.free_max_active_keys 上限（key_limit_reached）；message 给出上限、当前活跃数与本次新增数，hint 指向停用或升级套餐 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConsoleKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found */
+                id: components["parameters"]["KeyID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyDetail"];
+                };
+            };
+            /** @description 密钥不存在或不属于当前账号（key_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deleteConsoleKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found */
+                id: components["parameters"]["KeyID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    confirm: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description 已删除 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** Format: int64 */
+                        id?: number;
+                        deleted?: boolean;
+                    };
+                };
+            };
+            /** @description 缺少 confirm 或出现 group_code */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 密钥不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updateConsoleKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found */
+                id: components["parameters"]["KeyID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description 更新结果 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UpdateKeyResponse"];
+                };
+            };
+            /** @description 字段非法、group_code 出现、DISABLED 未带 confirm、model_ids 为空 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 密钥不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsoleKeyAudit: {
+        parameters: {
+            query?: {
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path: {
+                /** @description t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found */
+                id: components["parameters"]["KeyID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 操作日志 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyAuditList"];
+                };
+            };
+            /** @description 密钥不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    rotateConsoleKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_api_key.id；非本人 Key 与不存在同样返回 404 key_not_found */
+                id: components["parameters"]["KeyID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    /** Format: date-time */
+                    expire_at?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description 新密钥；key 是唯一一次明文 */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RotatedKey"];
+                };
+            };
+            /** @description 旧 Key 已过期且未提供新的 expire_at、或出现 group_code（invalid_request_body） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 密钥不存在 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 旧 Key 非活跃时轮换会新占一个名额，免费档已满（key_limit_reached） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsoleModels: {
+        parameters: {
+            query?: {
+                model_type?: "TEXT" | "IMAGE" | "EMBEDDING";
+                protocol?: string;
+                q?: string;
+                page?: number;
+                page_size?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 模型列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelCatalog"];
+                };
+            };
+            /** @description 查询参数非法 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsolePlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 档位列表与默认档元数据 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlanList"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsoleOrders: {
+        parameters: {
+            query?: {
+                status?: "pending" | "paid" | "closed" | "refunding" | "refunded";
+                /** @description 订单号片段 */
+                q?: string;
+                page?: number;
+                page_size?: number;
+                sort?: "created_at" | "paid_at";
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 订单列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OrderList"];
+                };
+            };
+            /** @description 查询参数非法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createConsoleOrder: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 10s 去重窗口（idem.duplicate_window_seconds）；窗口内重放返回同一订单 */
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateOrderRequest"];
+            };
+        };
+        responses: {
+            /** @description 同一 Idempotency-Key 的重放，返回首次创建的订单 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedOrder"];
+                };
+            };
+            /** @description 新建订单（PENDING，积分未变） */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedOrder"];
+                };
+            };
+            /** @description 字段非法（invalid_request_body）：order_type / plan_id / pay_amount_fen / pay_channel */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 同一 Idempotency-Key 的首次请求仍在处理中（request_in_flight） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    redeemCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeemRequest"];
+            };
+        };
+        responses: {
+            /** @description 兑换成功 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RedeemResult"];
+                };
+            };
+            /** @description 兑换码不可用（已用 / 过期 / 不存在），message 指明 code */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    payCallback: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel: "wechat" | "alipay";
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PayCallbackRequest"];
+            };
+        };
+        responses: {
+            /** @description 已处理（首次入账 / 重放 / 语义异常，见 reason） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PayCallbackAck"];
+                };
+            };
+            /** @description 字段非法或验签失败（invalid_request_body，message 指明字段） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 未知渠道（unknown_endpoint） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 验签密钥未配置（config_unavailable）；渠道应退避重试 */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsoleRefunds: {
+        parameters: {
+            query?: {
+                status?: "applied" | "approved" | "rejected" | "paying" | "paid" | "failed";
+                page?: number;
+                page_size?: number;
+                sort?: "created_at" | "paid_at";
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 退款单列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RefundList"];
+                };
+            };
+            /** @description 查询参数非法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createConsoleRefund: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 10s 去重窗口；窗口内重放返回同一退款单 */
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRefundRequest"];
+            };
+        };
+        responses: {
+            /** @description 同一 Idempotency-Key 的重放 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedRefund"];
+                };
+            };
+            /** @description 已受理（APPLIED，已冻结对应余额） */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedRefund"];
+                };
+            };
+            /** @description order_id 缺失或非法（invalid_request_body，改字段即可成功） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 同一 Idempotency-Key 的首次请求仍在处理中（request_in_flight）；或订单不可退 / 低于起退额 / 已开票 / 已有进行中的退款（resource_state_conflict，message 带原因） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsoleInvoices: {
+        parameters: {
+            query?: {
+                status?: "applied" | "approved" | "issued" | "rejected" | "voided";
+                page?: number;
+                page_size?: number;
+                sort?: "created_at" | "issued_at";
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 开票申请列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvoiceList"];
+                };
+            };
+            /** @description 查询参数非法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createConsoleInvoice: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 10s 去重窗口 */
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateInvoiceRequest"];
+            };
+        };
+        responses: {
+            /** @description 同一 Idempotency-Key 的重放 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedInvoice"];
+                };
+            };
+            /** @description 已受理（APPLIED） */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedInvoice"];
+                };
+            };
+            /** @description 字段非法（invalid_request_body）：tax_no 缺失、标题为空、amount_fen 超过可开额度 */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 未实名（account_not_verified） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 订单非已支付 / 已有处理中的申请（resource_state_conflict）； 同订单已开具发票（invoice_already_issued） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsoleQuotaApplies: {
+        parameters: {
+            query?: {
+                status?: "pending" | "approved" | "rejected" | "expired";
+                page?: number;
+                page_size?: number;
+                sort?: "created_at" | "audited_at";
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 提额申请列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["QuotaApplyList"];
+                };
+            };
+            /** @description 查询参数非法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createConsoleQuotaApply: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description 10s 去重窗口 */
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateQuotaApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description 同一 Idempotency-Key 的重放 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedQuotaApply"];
+                };
+            };
+            /** @description 已提交（PENDING） */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedQuotaApply"];
+                };
+            };
+            /** @description 字段非法 / target_quota_micro 超过当前日额度的 5 倍（invalid_request_body） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 当前套餐没有日额度上限，无需申请提额（resource_state_conflict） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    claimTrial: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrialClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description 领取成功（TRIAL 套餐 + 7,000 赠送积分，90 天有效） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrialClaimResult"];
+                };
+            };
+            /** @description fingerprint 缺失或超长（invalid_request_body） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 设备指纹 / 手机号 / IP 段 / 账号任一命中防刷规则（trial_already_claimed）。 四类因子共用一条 message，不披露命中哪一项。 */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FP_HMAC_KEY 未配置（config_unavailable） */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsoleTickets: {
+        parameters: {
+            query?: {
+                /** @description 只有 OPEN / RESPONDED / CLOSED 三态；其他值返回 400 */
+                state?: "OPEN" | "RESPONDED" | "CLOSED" | "all";
+                type?: "BILLING" | "TECH" | "CONTENT_APPEAL" | "OTHER" | "all";
+                page?: number;
+                page_size?: number;
+                sort?: "created_at";
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 工单列表；每项带 SLA 展示字段 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketList"];
+                };
+            };
+            /** @description 查询参数非法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 ticket.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createConsoleTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTicketRequest"];
+            };
+        };
+        responses: {
+            /** @description 已创建（state=OPEN，first_response_due_at = created_at + 4h） */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedTicket"];
+                };
+            };
+            /** @description 类型/标题/正文非法，或内容申诉既未传 request_id 也未传 policy_hit_id */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 ticket.write（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description request_id / policy_hit_id 不存在、不属于当前账号或超过 90 天窗口（resource_not_found）。 三种情况使用同一个码与同一段文案，不泄露存在性。 */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 内容申诉引用的命中记录不在可申诉状态或已超过 30 天（resource_state_conflict） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConsoleTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+                id: components["parameters"]["TicketID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 详情；sla.display 为「已响应（用时 xx）」/「剩余 xx」/「已超时 xx」 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ticket"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 ticket.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 工单不存在或不属于当前账号（resource_not_found；两种情况不可区分） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    closeConsoleTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+                id: components["parameters"]["TicketID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    reason?: string;
+                };
+            };
+        };
+        responses: {
+            /** @description 关闭后的详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Ticket"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 ticket.write（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 工单不存在或不属于当前账号（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 工单已是 CLOSED（resource_state_conflict） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsoleRequestIDs: {
+        parameters: {
+            query?: {
+                /** @description 按 request_id 或模型名模糊搜索 */
+                q?: string;
+                page?: number;
+                page_size?: number;
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 选择器列表；since 为 90 天窗口起点 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RequestIDList"];
+                };
+            };
+            /** @description 查询参数非法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 ticket.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listAdminAuditLogs: {
+        parameters: {
+            query?: {
+                /** @description t_admin_audit_log.operator_id；0 与负数拒绝 */
+                operator_id?: number;
+                /** @description 如 USER / CHANNEL / FUND / TICKET / REFUND / QUOTA；大小写不敏感 */
+                module?: string;
+                /** @description 如 LOGIN / CREATE / UPDATE / ORDER_PAID；可单独使用 */
+                action?: string;
+                /** @description 如 OK / REJECTED_BY_GUARD / REJECTED；可单独使用 */
+                result?: string;
+                /** @description 精确匹配 t_admin_audit_log.target_type（不转大小写，如 t_channel）；与 target_id 同传时走 idx_aal_target */
+                target_type?: string;
+                /** @description 精确匹配 target_id（字符串比较，不做数值转换）；建议与 target_type 同传 */
+                target_id?: string;
+                /** @description RFC3339 或 YYYY-MM-DD（含当日 00:00:00）；省略则取 to 前 7 天 */
+                from?: string;
+                /** @description RFC3339 或 YYYY-MM-DD（date-only 表示当日 23:59:59.999）；省略则为当前时刻 */
+                to?: string;
+                page?: number;
+                page_size?: number;
+                /** @description 只接受 desc；asc 返回 400，避免升序分页永远不前进 */
+                order?: "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 审计日志分页 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditLogListResponse"];
+                };
+            };
+            /** @description 参数不合法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 未登录或会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 audit.read */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getAdminOverview: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 运营概览 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminOverview"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 admin.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listAdminUsers: {
+        parameters: {
+            query?: {
+                email?: string;
+                phone?: string;
+                user_no?: string;
+                status?: "NORMAL" | "DISABLED" | "FROZEN_OVERDRAFT";
+                page?: number;
+                page_size?: number;
+                sort?: "created_at" | "updated_at" | "id" | "risk_score" | "user_no";
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 用户分页 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminUserList"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 admin.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listAdminChannels: {
+        parameters: {
+            query?: {
+                q?: string;
+                region?: "DOMESTIC" | "OVERSEAS";
+                enabled?: "0" | "1";
+                group_scope_mode?: "ALL" | "SELECTED";
+                page?: number;
+                page_size?: number;
+                sort?: "created_at" | "updated_at" | "name" | "weight" | "priority";
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 渠道分页 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminChannelList"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 admin.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listAdminTickets: {
+        parameters: {
+            query?: {
+                state?: "OPEN" | "RESPONDED" | "CLOSED" | "all";
+                type?: "BILLING" | "TECH" | "CONTENT_APPEAL" | "OTHER" | "all";
+                /** @description true = 仅 OPEN 且已过 first_response_due_at 的工单；false 为补集 */
+                overdue?: boolean;
+                q?: string;
+                page?: number;
+                page_size?: number;
+                sort?: "created_at" | "first_response_due_at";
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 工单队列 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTicketList"];
+                };
+            };
+            /** @description 查询参数非法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 ticket.reply（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getAdminTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+                id: components["parameters"]["TicketID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 工单详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTicketDetail"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 ticket.reply（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 工单不存在（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    replyAdminTicket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+                id: components["parameters"]["TicketID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TicketReplyRequest"];
+            };
+        };
+        responses: {
+            /** @description 回复已写入；公开回复附带更新后的工单状态 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TicketReplyResult"];
+                };
+            };
+            /** @description content 为空或超过 5,000 字（invalid_request_body） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 ticket.reply（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 工单不存在（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 工单已关闭（resource_state_conflict） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    setAdminTicketState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description t_ticket.id；他人工单与不存在同样返回 404 resource_not_found */
+                id: components["parameters"]["TicketID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TicketStateRequest"];
+            };
+        };
+        responses: {
+            /** @description 更新后的工单 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminTicket"];
+                };
+            };
+            /** @description state 不是 CLOSED（invalid_request_body） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 ticket.reply（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 工单不存在（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 工单已是 CLOSED（resource_state_conflict） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listConsoleLogs: {
+        parameters: {
+            query?: {
+                /** @description RFC3339 或 YYYY-MM-DD；默认 now-7d */
+                from?: string;
+                to?: string;
+                state?: "all" | "success" | "failed" | "partial" | "rate_limited";
+                /** @description 按 model_name_snap 精确匹配 */
+                model?: string;
+                page?: number;
+                page_size?: number;
+                sort?: "created_at";
+                order?: "asc" | "desc";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 日志列表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogListResponse"];
+                };
+            };
+            /** @description 查询参数非法或超出 365 天在线窗口（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 log.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConsoleLogDetail: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 请求详情 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogDetailResponse"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 log.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 请求不存在或不属于当前账号（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConsoleLogBody: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                request_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 正文；敏感字段已脱敏（redacted=true） */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogBodyResponse"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 log.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 正文已过 180 天保留期或未开启 full_log_enabled（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConsoleUsage: {
+        parameters: {
+            query?: {
+                /** @description RFC3339 或 YYYY-MM-DD；默认 now-7d；不得早于 now-365d */
+                from?: string;
+                to?: string;
+                dimension?: "model" | "channel" | "day";
+                model_id?: number;
+                channel_id?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 用量聚合 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageResponse"];
+                };
+            };
+            /** @description 查询参数非法或超出 365 天在线窗口（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 usage.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConsoleBill: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM（CST 自然月）；省略为当前月 */
+                month?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 月度账单 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BillResponse"];
+                };
+            };
+            /** @description month 格式非法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 usage.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConsoleUsageMetrics: {
+        parameters: {
+            query?: {
+                scope?: "user" | "channel";
+                /** @description scope=channel 时必填 */
+                channel_id?: number;
+                /** @description 历史窗口的自然日数，截止到昨天（CST） */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 实时与历史指标 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageMetricsResponse"];
+                };
+            };
+            /** @description scope/channel_id/days 非法（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 usage.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    startConsoleUsageExport: {
+        parameters: {
+            query?: {
+                from?: string;
+                to?: string;
+                dimension?: "model" | "channel" | "day";
+                model_id?: number;
+                channel_id?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 任务已受理 */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportStartResponse"];
+                };
+            };
+            /** @description 查询参数非法或超出 365 天在线窗口（invalid_query_parameter） */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 usage.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 已有导出任务进行中（resource_state_conflict） */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 未配置 EXPORT_HMAC_KEY（config_unavailable） */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getConsoleExport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 任务状态 JSON，或 CSV 字节流 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ExportStatusResponse"];
+                    "text/csv": string;
+                };
+            };
+            /** @description 会话失效 */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 角色缺少 usage.read（permission_denied） */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description 令牌无效/过期、任务不属于当前账号或文件已失效（resource_not_found） */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getPublicPlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已启用套餐，按 sort_order ASC */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicPlansResponse"];
+                };
+            };
+            /** @description 查询失败（internal_error） */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getPublicModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已上架且有生效价格的模型 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicModelsResponse"];
+                };
+            };
+            /** @description 查询失败（internal_error） */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getPublicAnnouncements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 已发布且在生效窗口内的公告 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicAnnouncementsResponse"];
+                };
+            };
+            /** @description 查询失败（internal_error） */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getPublicEndpoints: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 恒为 `{"data":[]}` 直到 T24 建表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicEndpointsResponse"];
+                };
+            };
+        };
+    };
+    getPublicIntegrationLinks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description 恒为 `{"data":[]}` 直到 T24 建表 */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicIntegrationLinksResponse"];
                 };
             };
         };

@@ -249,6 +249,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// FINANCE; PERSONAL has no route and no permission here.
 	mux.Handle("GET /api/admin/audit-logs", s.authed(mw.PermAuditRead, s.auditQ.List))
 
+	// T24 overview: one read-only aggregate. It uses admin.read, the same
+	// permission as the operator channel/model/user views.
+	mux.Handle("GET /api/admin/overview", s.authed(mw.PermAdminRead, s.ops.Overview))
+
 	// Operator channels. Reads use admin.read, not model.read: PERSONAL holds
 	// model.read for the console catalog, and these views expose base_url and
 	// key masks. Mutations need channel.write.
@@ -316,6 +320,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/console/request-ids", s.authed(mw.PermTicketRead, s.tickets.Picker))
 
 	mux.Handle("GET /api/admin/tickets", s.authed(mw.PermTicketReply, s.tickets.ListAdmin))
+	// T24 operator detail: any user's ticket, with description and replies
+	// (including internal notes). The account console Detail stays own-only.
+	mux.Handle("GET /api/admin/tickets/{id}", s.authed(mw.PermTicketReply, s.tickets.DetailAdmin))
 	mux.Handle("POST /api/admin/tickets/{id}/reply", s.authed(mw.PermTicketReply, s.tickets.Reply))
 	mux.Handle("POST /api/admin/tickets/{id}/state", s.authed(mw.PermTicketReply, s.tickets.State))
 
