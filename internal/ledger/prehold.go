@@ -104,10 +104,11 @@ func (s *Store) preholdTx(ctx context.Context, tx *sql.Tx, p PreholdParams) (Pre
 	// so InnoDB would put a gap lock on uk_ph_request, and gap locks do not
 	// conflict with each other: every concurrent prehold would hold the same
 	// trailing gap (request_id is UUIDv7, so new keys are always appended) and
-	// then deadlock on the INSERT's insert-intention lock. nightly #2 measured
-	// 80.7% 1213s on exactly that path. A plain read lets the race resolve on
-	// the unique key (1062), which isDuplicate turns into ErrPreholdExists and
-	// Prehold answers by re-reading the winner's row outside this transaction.
+	// then deadlock on the INSERT's insert-intention lock. Under a 200 QPS soak
+	// this path deadlocked on ~0.7% of requests, each one a user-visible 503.
+	// A plain read lets the race resolve on the unique key (1062), which
+	// isDuplicate turns into ErrPreholdExists and Prehold answers by
+	// re-reading the winner's row outside this transaction.
 	if existing, err := s.readHoldTx(ctx, tx, p.RequestID); err == nil {
 		return existing, nil
 	} else if !errors.Is(err, sql.ErrNoRows) {

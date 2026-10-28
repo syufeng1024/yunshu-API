@@ -42,14 +42,12 @@ const (
 	defaultDuration = 10 * time.Minute
 	// PRD §9.4: gateway-added latency P99 ≤ 200ms.
 	maxP99 = 200 * time.Millisecond
-	// §9.3's 99.5% is a monthly SLO, not a 30-second sample. nightly #2
-	// measured 80.7% 503s on this exact load, every one of them an InnoDB 1213
-	// on the prehold INSERT: the idempotency read took a FOR UPDATE gap lock
-	// on a row that did not exist yet, so concurrent preholds deadlocked
-	// instead of serialising. preholdTx now reads without the lock and withTx
-	// replays 1213/1205, so the gate stays a regression bound rather than an
-	// aspirational SLO. Raise it only with a new measurement in
-	// docs/test-matrix.md.
+	// §9.3's 99.5% is a monthly SLO, not a 30-second sample. Two defects had
+	// to be fixed before this gate meant anything: the prehold idempotency
+	// read took a FOR UPDATE gap lock on a row that did not exist yet (1213 on
+	// ~0.7% of requests), and this test never refreshed K19, so everything
+	// after the 120s TTL was a 500. The gate is a regression bound, not the
+	// SLO. Raise it only with a new measurement in docs/test-matrix.md.
 	defaultMaxErrorPct = 2.5
 )
 
@@ -111,6 +109,34 @@ func TestSoak(t *testing.T) {
 	if err := seedPrice(rdb, modelID); err != nil {
 		t.Fatalf("soak: seed K19: %v", err)
 	}
+	// K19 expires after config.PriceCacheTTL (120s); production re-publishes it
+	// from t_price_rule on controld's timer, but this test seeds it once. Without
+	// a refresher every request after the second minute fails with
+	// 500 price_not_configured — measured 48001 of 60000 (80.002%) on a
+	// 10-minute run, which reads like a capacity collapse but is the cache
+	// expiring. 30s is comfortably inside the TTL.
+	const priceRefreshEvery = 30 * time.Second
+	stopRefresh := make(chan struct{})
+	var refreshWG sync.WaitGroup
+	refreshWG.Add(1)
+	go func() {
+		defer refreshWG.Done()
+		tk := time.NewTicker(priceRefreshEvery)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stopRefresh:
+				return
+			case <-tk.C:
+				if err := seedPrice(rdb, modelID); err != nil {
+					// The load will surface the resulting 500s. Never log from
+					// here: t.Logf after the test completes panics.
+					return
+				}
+			}
+		}
+	}()
+	t.Cleanup(func() { close(stopRefresh); refreshWG.Wait() })
 
 	catalog := gw.NewStaticCatalog(&gw.RoutingSnapshot{
 		Models: []gw.ModelEntry{{

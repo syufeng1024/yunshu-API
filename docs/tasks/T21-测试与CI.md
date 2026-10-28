@@ -228,19 +228,41 @@ CI 上线后连续失败 6 次。逐个 job / step 拉出来看，是**三个互
 
 ---
 
-## 12. nightly 首跑：一个配置缺陷掩盖了一个资金链路缺陷（2026-10-28，nightly #1–#2）
+## 12. nightly 首跑：三层问题，一层盖着一层（2026-10-28，nightly #1–#4）
 
-`nightly` 的第一印象是「红了」，实际是**两层**问题：第一层挡住第二层，只修第一层会把一个真实缺陷留到上线。
+`nightly` 的第一印象是「红了」。逐层剥下去是**三个互不相干**的问题，而且前两层都会把第三层挡住：如果只修第一层，真实缺陷会被留到上线。
 
 | # | run | 现象 | 根因 | 修法 |
 | :--- | :--- | :--- | :--- | :--- |
 | 1 | #1 | soak job 在 `10m0s` 处 `panic: test timed out`，栈停在 `soak_test.go:238` 的 `<-ticker.C` | `go test` 默认 `-timeout` 是 10 分钟，而 `SOAK_DURATION` 本身就是 `10m`，且 deadline 在 seed 完 64 个账号与 API Key 之后才起算 —— 净时长必然超过默认上限，P99 与错误率门禁一次都没执行到 | soak 步骤加 `-timeout 20m`；job 加 `timeout-minutes: 25` 兜住"卡死就烧 6 小时" |
-| 2 | #2 | 修完超时后跑满 `600.88s`，但 `error rate 80.748% > 2.5%`；`p99=9.4ms` 很低 | 全部是 `Error 1213 deadlock` 打在 `ledger: insert prehold`。`preholdTx` 的幂等预读对**尚不存在的行**做 `SELECT ... FOR UPDATE`：InnoDB 会在 `uk_ph_request` 上放间隙锁，而间隙锁彼此**不互斥**；`request_id` 是 UUIDv7（时间有序），并发新行全部落在同一个尾部间隙 → 插入意向锁互撞，两两成环 | `readHoldTx` 去掉 `FOR UPDATE`（竞态交给 `uk_ph_request` 的 1062 → `ErrPreholdExists` → `getPrehold` 回读）；`withTx` 对 1213/1205 做 3 次重放兜底 |
+| 2 | #2 | 跑满 `600.88s` 后 `error rate 80.748%`；`p99=9.4ms` | 真实但**次要**：`Error 1213 deadlock` 打在 `ledger: insert prehold`。`preholdTx` 的幂等预读对**尚不存在的行**做 `SELECT ... FOR UPDATE`，InnoDB 在 `uk_ph_request` 上放间隙锁；间隙锁彼此不互斥，`request_id` 是 UUIDv7（时间有序）并发新行全落在同一个尾部间隙 → 插入意向锁互撞成环。占全部请求约 0.7%，不是 80% | `readHoldTx` 去掉 `FOR UPDATE`（竞态交给 `uk_ph_request` 的 1062 → `ErrPreholdExists` → `getPrehold` 回读）；`withTx` 对 1213/1205 做 3 次重放兜底 |
+| 3 | #2–#4 | 修完死锁仍是 `80.1%` / `80.0%`，且 `p99` 只有 10–64ms | **压测自己没续价格缓存**。K19 的 TTL 是 `config.PriceCacheTTL = 120s`，生产由 `controld` 定时从 `t_price_rule` 重发，而 `TestSoak` 只 `seedPrice` 一次 → 第 120 秒后每个请求都是 `500 price_not_configured` | `TestSoak` 加 30s 周期的 K19 刷新 goroutine（`stopRefresh` + `WaitGroup`，测试结束即停） |
 
-**为什么 P99 只有 9.4ms 反而是坏消息**：延迟没问题说明数据库和网关都健康，80.7% 的失败纯粹来自锁行为。如果只看"红了"，很容易归因为"CI 的 MySQL 太慢"而把门禁阈值调宽 —— 那等于把 4/5 的请求在 200 QPS 下返回 503 当成正常。
+### 定位过程：先证伪"容量不够"，再证伪"代码慢"
 
-**三个值得记住的教训**：
+诊断阶梯（都是 `workflow_dispatch` 传 `qps`/`duration` 两分钟一跑，见 nightly 的 `inputs`）：
+
+| 档位 | 请求 | 错误率 | P99 | 结论 |
+| :--- | ---: | ---: | ---: | :--- |
+| 50 QPS / 2m | 6000 | 0.017% | 17ms | 绿 |
+| 100 QPS / 2m | 12000 | 0.008% | 23ms | 绿 |
+| 150 QPS / 2m | 18000 | 0% | 111ms | 绿 |
+| 200 QPS / 1m | 11998 | 0% | 46ms | 绿 |
+| 200 QPS / 10m | 120000 | 80.7% | 65ms | 红 |
+| 100 QPS / 10m | 60000 | 80.0% | 10ms | 红 |
+
+结论不是"200 QPS 跑不动"：200 QPS 前 1 分钟完全健康，而**降一半到 100 QPS 跑满 10 分钟照样 80% 红**。红的是时长，不是压力。
+
+**账目对得上**：100 QPS × 120s = 12000 = 该次成功数；60000 − 12000 = 48000 = 失败数（80.002%）。200 QPS × 120s = 24000 ≈ 该次成功数 23869。两个档位的成功率都是"前 120 秒全部成功，之后全部失败"，这正是 TTL 的特征，不是容量的特征。
+
+**四个值得记住的教训**：
 
 1. **`-timeout` 必须大于测试自己声明的时长**。凡是压测/长跑用例，`-timeout` 与业务时长同值就是必红；本机按 `docs/test-matrix.md` 手跑也会撞上，所以文档命令一并补了 `-timeout 20m`。
 2. **对"还不存在的唯一键"做 `SELECT ... FOR UPDATE` 是死锁生成器**，不是串行化手段。原注释写的是"takes a gap lock that serialises a concurrent first insert"，这个假设是错的：间隙锁之间不冲突，它只负责挡住别人的插入意向锁。幂等预读用普通 `SELECT`，让唯一键去仲裁。
 3. **`1213` / `1205` 是"重发即可"的信号**，不是业务失败。MySQL 要求客户端对每个事务都做好重放准备；`internal/control/fund/service.go` 早有 `isRetryableTxError`，但资金内核 `ledger` 一直没有，导致一次锁顺序失误就直接变成用户可见的 503 `settlement_unavailable`。
+4. **百分比过于整齐，先怀疑测试环境**。`80.0%` / `80.7%` 这种数字不像资源饱和（饱和是一条曲线），更像某个固定时刻之后全部失效。压测里凡是"只种一次"的缓存、凭证、快照，都要先问它的 TTL。
+
+### 这条链带出的两个生产问题（未修，另行排期）
+
+1. **价格缓存是硬依赖**：K19 过期后网关没有 DB 回源，只能返回 `500 price_not_configured`。`controld` 停摆超过 120 秒，全站请求 500 —— 这是可用性上的单点。
+2. **`t_prehold_hold` 无人清理**：`purge_log` 清的是 body / usage / attempt / 过期幂等，没有一处删预扣行。每个请求一行，200 QPS 即每天 1700 万行，只有 `recon` 会扫它（R-06 悬空预扣）。

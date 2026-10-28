@@ -129,10 +129,11 @@ const txMaxAttempts = 3
 // what MySQL asks of every client. The replay is safe because fn writes only
 // through tx, and every failed attempt is rolled back before the next begins.
 //
-// nightly #2 showed why this is not optional: 80.7% of the 200 QPS load came
-// back as 503 settlement_unavailable, all of them 1213s on the prehold insert.
-// The gap-lock root cause is fixed in preholdTx; this is the net for the next
-// lock ordering mistake, wherever it is.
+// nightly #2 is why this is not optional: the prehold insert deadlocked (1213)
+// on roughly 0.7% of a 200 QPS load, and every one of them surfaced to the
+// caller as a 503 settlement_unavailable. The gap-lock root cause is fixed in
+// preholdTx; this is the net for the next lock ordering mistake, wherever it
+// is.
 func (s *Store) withTx(ctx context.Context, timeout time.Duration, fn func(context.Context, *sql.Tx) error) error {
 	if s.DB == nil {
 		return fmt.Errorf("%w: database is nil", ErrInvalidParam)
