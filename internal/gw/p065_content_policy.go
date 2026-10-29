@@ -55,9 +55,12 @@ func (s *ContentPolicyStage) Run(ctx context.Context, c *Ctx) error {
 	if err != nil {
 		// fail-open (T42 decision 3): a checker failure must not take the
 		// gateway down. The keyword checker has no I/O error path; this branch
-		// exists for the external adapter added in segment 2 and is covered by
-		// that segment's timeout case.
-		s.log(ctx, c, obslog.LevelWarn, "content_policy_check_failed_open: "+err.Error())
+		// is the external adapter's timeout/non-2xx/bad-response path.
+		reason := policyFailOpenReason(err)
+		if s.d.Metrics != nil {
+			s.d.Metrics.ContentPolicyFailOpen(reason)
+		}
+		s.logFailOpen(ctx, c, reason, err)
 		return nil
 	}
 	if !verdict.Blocked {
@@ -99,6 +102,25 @@ func (s *ContentPolicyStage) Run(ctx context.Context, c *Ctx) error {
 	// cannot succeed, and a non-zero value would make SDKs back off and replay.
 	e := apierr.New(apierr.CodeContentPolicyViolation).WithHint(contentPolicyHint)
 	return StageErr(StageP065, e)
+}
+
+// logFailOpen writes the one line an alert rules on. The reason field is a
+// bounded token (policyFailOpenReason), while the message keeps the concrete
+// transport/status detail for the operator. Status is left at zero: the
+// request is not refused, so a "status":403 line would misreport the outcome.
+func (s *ContentPolicyStage) logFailOpen(ctx context.Context, c *Ctx, reason string, err error) {
+	if s.d == nil || s.d.Logger == nil {
+		return
+	}
+	msg := "content_policy_check_failed_open"
+	if err != nil {
+		msg += ": " + err.Error()
+	}
+	s.d.Logger.Warn(ctx, msg, obslog.Fields{
+		Stage:     StageP065,
+		RequestID: c.RequestID,
+		Reason:    reason,
+	})
 }
 
 func (s *ContentPolicyStage) log(ctx context.Context, c *Ctx, level obslog.Level, msg string) {

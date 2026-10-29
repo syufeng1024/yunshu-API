@@ -163,6 +163,26 @@ func main() {
 	backpressure := gw.NewBackpressure(logger)
 	backpressure.Metrics = rec
 
+	// P06.5 content safety (T42). The keyword set always runs. The external
+	// adapter is built only when GW_POLICY_ENDPOINT is set; an unset endpoint
+	// leaves the keyword checker alone instead of installing an always-allow
+	// implementation. A malformed endpoint or timeout stops startup: the
+	// operator asked for an external check, and silently ignoring the typo
+	// would make the deployment look protected when it is not.
+	keywordPolicy := gw.NewKeywordChecker()
+	policyChecker := gw.PolicyChecker(keywordPolicy)
+	externalPolicy, policyErr := gw.NewHTTPPolicyCheckerFromEnv()
+	if policyErr != nil {
+		logger.Error(rootCtx, "content policy external checker misconfigured: "+policyErr.Error(),
+			obslog.Fields{Stage: "startup", Status: 1})
+		os.Exit(1)
+	}
+	if externalPolicy != nil {
+		policyChecker = gw.NewChainPolicyChecker(keywordPolicy, externalPolicy)
+		logger.Info(rootCtx, "content policy external checker enabled",
+			obslog.Fields{Stage: "startup"})
+	}
+
 	deps := &gw.Deps{
 		Config:        store,
 		Catalog:       gw.NewCatalog(store),
@@ -185,7 +205,7 @@ func main() {
 		// P06.5 content safety (T42). The keyword half is in-process and has no
 		// configuration key (D-08 freezes the set); hits are written through the
 		// same restricted gateway channel as every other gw write.
-		PolicyChecker: gw.NewKeywordChecker(),
+		PolicyChecker: policyChecker,
 		PolicyHits:    gw.ContentPolicyHitWriter{DB: gwDB},
 	}
 	if err := deps.Validate(); err != nil {

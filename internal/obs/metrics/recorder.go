@@ -51,6 +51,7 @@ type Recorder struct {
 	logBodyOpen    *Counter
 
 	configItemRejected *CounterVec
+	policyFailOpen     *CounterVec
 }
 
 // NewRecorder registers every TDS §5.3 family on reg. Registering a family
@@ -144,6 +145,10 @@ func NewRecorder(reg *Registry) *Recorder {
 		configItemRejected: reg.Counter("gw_config_item_rejected_total",
 			"Configuration rows rejected while applying a snapshot.",
 			"namespace", "reason"),
+
+		policyFailOpen: reg.Counter("gw_content_policy_fail_open_total",
+			"External content-policy checks that failed open because the service was unavailable.",
+			"reason"),
 	}
 	r.inflight = r.inflightVec.With()
 	r.logWritten = r.logWrittenVec.With()
@@ -424,6 +429,17 @@ func (r *Recorder) ConfigItemRejected(namespace, reason string) {
 	).Inc()
 }
 
+// ContentPolicyFailOpen records one P06.5 check that could not get a verdict
+// from the external service and was allowed through. reason is a bounded
+// fail-open label; an unknown value becomes "other" so a vendor error string
+// can never grow cardinality.
+func (r *Recorder) ContentPolicyFailOpen(reason string) {
+	if r == nil || r.policyFailOpen == nil {
+		return
+	}
+	r.policyFailOpen.With(enumValue(policyFailOpenReasons, reason)).Inc()
+}
+
 func modelValue(model string) string {
 	v := sanitizeLabelValue(model)
 	if v == "" {
@@ -497,5 +513,9 @@ var (
 	)
 	configRejectReasons = labelSet(
 		"unknown_key", "wrong_namespace", "invalid_value", "strategy_unregistered",
+	)
+
+	policyFailOpenReasons = labelSet(
+		"timeout", "http_status", "bad_response", "transport", "budget_exhausted", "other",
 	)
 )
