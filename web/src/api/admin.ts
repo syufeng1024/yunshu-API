@@ -829,6 +829,78 @@ export function useUpdateGroup() {
 }
 
 // ---------------------------------------------------------------------------
+// Tool integrations (internal/control/ops/integration.go, T33)
+// ---------------------------------------------------------------------------
+
+/**
+ * integrationView. There is no credential field by design: the table stores a
+ * URL template only, and the browser never receives an upstream key (F4-3).
+ */
+export interface AdminIntegration {
+  tool_key: string
+  display_name: string
+  enabled: boolean
+  /** null = no template stored yet; the site renders no deep link. */
+  deep_link_template: string | null
+}
+
+export interface IntegrationListResponse {
+  items: AdminIntegration[]
+  total: number
+}
+
+export interface IntegrationDetailResponse {
+  integration: AdminIntegration
+}
+
+/**
+ * integrationPatchRequest. Only these two fields are accepted; the five tools
+ * are fixed (D-30 Q3). Sending an empty deep_link_template clears it, and the
+ * backend refuses enabled=true while the stored template is null.
+ */
+export interface IntegrationPatchInput {
+  enabled?: boolean
+  deep_link_template?: string
+}
+
+export function fetchIntegrations(): Promise<IntegrationListResponse> {
+  return api.get<IntegrationListResponse>('/api/admin/integrations')
+}
+
+export function updateIntegration(
+  toolKey: string,
+  input: IntegrationPatchInput,
+): Promise<IntegrationDetailResponse> {
+  return api.patch<IntegrationDetailResponse>(
+    `/api/admin/integrations/${encodeURIComponent(toolKey)}`,
+    input,
+  )
+}
+
+/**
+ * Disabled until the operator opens the tab: the list is only needed there,
+ * and every other PricingPage test would otherwise fetch it.
+ */
+export function useIntegrations(enabled = true) {
+  return useQuery({
+    queryKey: ['admin', 'integrations'],
+    queryFn: fetchIntegrations,
+    enabled,
+  })
+}
+
+export function useUpdateIntegration() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ toolKey, input }: { toolKey: string; input: IntegrationPatchInput }) =>
+      updateIntegration(toolKey, input),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin', 'integrations'] })
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Announcements (internal/control/ops/announcement.go)
 // ---------------------------------------------------------------------------
 

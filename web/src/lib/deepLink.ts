@@ -4,14 +4,24 @@ import type { ImportCredentials, PublicIntegrationLink } from '@/api/public'
  * F4-3: the protocol prefix, parameter names and structure all live in the
  * backend template. This function only substitutes values into whatever
  * placeholders the template declares.
+ *
+ * Placeholder whitelist (must stay in sync with the backend T33 validation):
+ *   {base_url} -> values.base_url
+ *   {key}      -> values.api_key   (backend-canonical name)
+ *   {api_key}  -> values.api_key   (legacy alias, kept for templates already
+ *                                   saved before the whitelist was unified;
+ *                                   equivalent to {key})
+ *   {model}    -> values.model
+ * Any other `{...}` is left untouched.
  */
 export function buildDeepLink(template: string, values: ImportCredentials): string {
   const map: Record<string, string> = {
     base_url: values.base_url,
+    key: values.api_key,
     api_key: values.api_key,
     model: values.model,
   }
-  return template.replace(/\{(base_url|api_key|model)\}/g, (match, key: string) => {
+  return template.replace(/\{(base_url|api_key|key|model)\}/g, (match, key: string) => {
     const value = map[key]
     return value === undefined ? match : encodeURIComponent(value)
   })

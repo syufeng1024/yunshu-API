@@ -1,14 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ApiError, errorHint, errorMessage } from '@/api/client'
 import {
   useCreatePrice,
   useGroups,
+  useIntegrations,
   useModels,
   usePrices,
   useUpdateGroup,
+  useUpdateIntegration,
   useUpdatePrice,
 } from '@/api/admin'
 import type {
+  AdminIntegration,
   AdminPriceRule,
   GroupKeySync,
   ModelType,
@@ -16,6 +19,7 @@ import type {
   PriceGroup,
   PriceWriteInput,
 } from '@/api/admin'
+import { cn } from '@/lib/cn'
 import {
   Badge,
   Button,
@@ -440,9 +444,51 @@ function ClearToggle({
   )
 }
 
+interface IntegrationDraft {
+  enabled: boolean
+  template: string
+}
+
+/** Minimal labelled switch: no shared Switch component exists in components/. */
+function ToolSwitch({
+  checked,
+  label,
+  onChange,
+  disabled,
+}: {
+  checked: boolean
+  label: string
+  onChange: (checked: boolean) => void
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        'relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-fast focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60',
+        checked ? 'bg-primary' : 'bg-border-strong',
+      )}
+    >
+      <span
+        className={cn(
+          'inline-block h-4 w-4 rounded-full bg-surface shadow transition-transform duration-fast',
+          checked ? 'translate-x-4' : 'translate-x-0.5',
+        )}
+      />
+    </button>
+  )
+}
+
 export default function AdminPricingPage() {
   usePageTitle('倍率与定价')
   const toast = useToast()
+  // Controlled so the integrations query stays disabled until its tab opens.
+  const [activeTab, setActiveTab] = useState('prices')
 
   // -------------------------------------------------------------------------
   // price table filters
@@ -472,6 +518,113 @@ export default function AdminPricingPage() {
   const createPrice = useCreatePrice()
   const updatePrice = useUpdatePrice()
   const updateGroup = useUpdateGroup()
+
+  // -------------------------------------------------------------------------
+  // tool integrations (third tab)
+  // -------------------------------------------------------------------------
+  const integrations = useIntegrations(activeTab === 'integrations')
+  const updateIntegration = useUpdateIntegration()
+  const [integrationDrafts, setIntegrationDrafts] = useState<Record<string, IntegrationDraft>>({})
+  const [integrationErrors, setIntegrationErrors] = useState<Record<string, string>>({})
+  const [integrationConfirm, setIntegrationConfirm] = useState<AdminIntegration | null>(null)
+
+  // Seed once per tool. Re-seeding on every refetch would overwrite an unsaved
+  // edit whenever a background refetch lands.
+  useEffect(() => {
+    const items = integrations.data?.items
+    if (!items) return
+    setIntegrationDrafts((current) => {
+      let changed = false
+      const next = { ...current }
+      for (const item of items) {
+        if (next[item.tool_key]) continue
+        next[item.tool_key] = {
+          enabled: item.enabled,
+          template: item.deep_link_template ?? '',
+        }
+        changed = true
+      }
+      return changed ? next : current
+    })
+  }, [integrations.data])
+
+  const integrationDraftOf = (item: AdminIntegration): IntegrationDraft =>
+    integrationDrafts[item.tool_key] ?? {
+      enabled: item.enabled,
+      template: item.deep_link_template ?? '',
+    }
+
+  const updateIntegrationDraft = (
+    item: AdminIntegration,
+    patch: Partial<IntegrationDraft>,
+  ) => {
+    setIntegrationDrafts((current) => ({
+      ...current,
+      [item.tool_key]: {
+        ...(current[item.tool_key] ?? {
+          enabled: item.enabled,
+          template: item.deep_link_template ?? '',
+        }),
+        ...patch,
+      },
+    }))
+    setIntegrationErrors((current) => {
+      if (!current[item.tool_key]) return current
+      const next = { ...current }
+      delete next[item.tool_key]
+      return next
+    })
+  }
+
+  const requestIntegrationSave = (item: AdminIntegration) => {
+    const draft = integrationDraftOf(item)
+    // Same rule as the backend: enabling without a stored template would make
+    // the site render an empty deep link.
+    if (draft.enabled && draft.template.trim() === '') {
+      setIntegrationErrors((current) => ({
+        ...current,
+        [item.tool_key]: `开启工具 ${item.tool_key} 前必须先配置深链模板`,
+      }))
+      return
+    }
+    setIntegrationConfirm(item)
+  }
+
+  const confirmIntegrationSave = async () => {
+    const item = integrationConfirm
+    if (!item) return
+    const draft = integrationDraftOf(item)
+    setIntegrationErrors((current) => {
+      if (!current[item.tool_key]) return current
+      const next = { ...current }
+      delete next[item.tool_key]
+      return next
+    })
+    try {
+      const response = await updateIntegration.mutateAsync({
+        toolKey: item.tool_key,
+        input: {
+          enabled: draft.enabled,
+          deep_link_template: draft.template.trim(),
+        },
+      })
+      setIntegrationDrafts((current) => ({
+        ...current,
+        [item.tool_key]: {
+          enabled: response.integration.enabled,
+          template: response.integration.deep_link_template ?? '',
+        },
+      }))
+      setIntegrationConfirm(null)
+      toast.success('工具集成已更新', item.display_name)
+    } catch (error) {
+      setIntegrationConfirm(null)
+      // Render the backend message verbatim: it names the offending placeholder.
+      const message = errorMessage(error)
+      setIntegrationErrors((current) => ({ ...current, [item.tool_key]: message }))
+      toast.error('工具集成保存失败', message)
+    }
+  }
 
   const [creating, setCreating] = useState(false)
   const [editingRule, setEditingRule] = useState<AdminPriceRule | null>(null)
@@ -973,6 +1126,78 @@ export default function AdminPricingPage() {
     },
   ]
 
+  const integrationColumns: TableColumn<AdminIntegration>[] = [
+    {
+      key: 'tool',
+      header: '工具',
+      render: (item) => (
+        <div className="space-y-0.5">
+          <p className="font-medium text-ink">{item.display_name}</p>
+          <code className="text-xs text-ink-secondary">{item.tool_key}</code>
+        </div>
+      ),
+    },
+    {
+      key: 'enabled',
+      header: '启用',
+      render: (item) => {
+        const draft = integrationDraftOf(item)
+        return (
+          <ToolSwitch
+            checked={draft.enabled}
+            label={`启用 ${item.display_name}`}
+            disabled={updateIntegration.isPending}
+            onChange={(checked) => updateIntegrationDraft(item, { enabled: checked })}
+          />
+        )
+      },
+    },
+    {
+      key: 'template',
+      header: '深链模板',
+      render: (item) => {
+        const draft = integrationDraftOf(item)
+        const error = integrationErrors[item.tool_key]
+        return (
+          <div className="max-w-xl space-y-1">
+            <Input
+              aria-label={`深链模板 ${item.display_name}`}
+              value={draft.template}
+              placeholder={'https://example.com/import?key={key}&model={model}'}
+              onChange={(event) =>
+                updateIntegrationDraft(item, { template: event.target.value })
+              }
+            />
+            {error ? (
+              <p
+                role="alert"
+                data-testid={`integration-error-${item.tool_key}`}
+                className="rounded-lg border border-danger bg-danger-soft px-3 py-2 text-xs text-danger"
+              >
+                {error}
+              </p>
+            ) : null}
+          </div>
+        )
+      },
+    },
+    {
+      key: 'actions',
+      header: '操作',
+      align: 'right',
+      render: (item) => (
+        <Button
+          size="sm"
+          aria-label={`保存 ${item.display_name}`}
+          disabled={updateIntegration.isPending}
+          onClick={() => requestIntegrationSave(item)}
+        >
+          保存
+        </Button>
+      ),
+    },
+  ]
+
   const groupInternal = groupTarget?.code === 'internal'
   const savingPrice = createPrice.isPending || updatePrice.isPending
   const missingCostPreview = relevantCostFields(form.modelType).some(
@@ -992,6 +1217,8 @@ export default function AdminPricingPage() {
 
       <Tabs
         ariaLabel="定价分区"
+        value={activeTab}
+        onChange={setActiveTab}
         items={[
           {
             id: 'prices',
@@ -1181,6 +1408,37 @@ export default function AdminPricingPage() {
                     emptyDescription="后端尚未返回任何价格分组。"
                   />
                 )}
+              </div>
+            ),
+          },
+          {
+            id: 'integrations',
+            label: '工具集成',
+            content: (
+              <div className="space-y-4">
+                <p className="text-xs text-ink-secondary">
+                  5 个工具由产品固定，运营只能修改开关与深链模板；模板保存在后端，公开端点只返回已启用项。
+                </p>
+                {integrations.isError ? (
+                  <ErrorState
+                    message={errorMessage(integrations.error)}
+                    hint={errorHint(integrations.error)}
+                    onRetry={() => void integrations.refetch()}
+                  />
+                ) : (
+                  <Table
+                    ariaLabel="工具集成列表"
+                    columns={integrationColumns}
+                    rows={integrations.data?.items ?? []}
+                    rowKey={(item) => item.tool_key}
+                    loading={integrations.isLoading}
+                    emptyTitle="暂无工具"
+                    emptyDescription="后端尚未返回任何工具集成配置。"
+                  />
+                )}
+                <p className="text-xs text-ink-muted">
+                  深链模板只支持 {'{key}'} / {'{base_url}'} / {'{model}'} 三个占位符，其它占位符后端会拒绝保存；模板由后端持有，浏览器不会拿到真实 Key。开启前必须先保存非空模板。
+                </p>
               </div>
             ),
           },
@@ -1641,6 +1899,50 @@ export default function AdminPricingPage() {
           }}
           hint="例：内部压测临时关闭计费，工单 OPS-123。理由为空时无法提交。"
         />
+      </Modal>
+
+      <Modal
+        open={integrationConfirm !== null}
+        onClose={() => {
+          if (updateIntegration.isPending) return
+          setIntegrationConfirm(null)
+        }}
+        title="确认保存工具集成"
+        description="保存后立即影响站点展示，并写入审计日志。"
+        size="sm"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setIntegrationConfirm(null)}
+              disabled={updateIntegration.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={() => void confirmIntegrationSave()}
+              loading={updateIntegration.isPending}
+              aria-label="确认保存工具集成"
+            >
+              确认保存
+            </Button>
+          </>
+        }
+      >
+        {integrationConfirm ? (
+          <div className="space-y-1 text-sm text-ink-secondary">
+            <p>
+              工具：
+              <span className="font-medium text-ink">{integrationConfirm.display_name}</span>
+              （<code className="text-xs">{integrationConfirm.tool_key}</code>）
+            </p>
+            <p>开关：{integrationDraftOf(integrationConfirm).enabled ? '开启' : '关闭'}</p>
+            <p className="break-all text-xs text-ink-muted">
+              模板：
+              {integrationDraftOf(integrationConfirm).template.trim() || '（空，保存后清除）'}
+            </p>
+          </div>
+        ) : null}
       </Modal>
 
       <AuditTrail

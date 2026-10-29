@@ -2,7 +2,7 @@ import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api, ApiError } from '@/api/client'
-import type { AdminPriceRule, PriceGroup } from '@/api/admin'
+import type { AdminIntegration, AdminPriceRule, PriceGroup } from '@/api/admin'
 import { earliestEffectiveAt, toLocalDateTimeValue } from '@/components/admin'
 import { renderWithProviders } from '@/test/renderConsole'
 import AdminPricingPage from './PricingPage'
@@ -96,6 +96,19 @@ const models = [
   },
 ]
 
+const integrations: AdminIntegration[] = [
+  {
+    tool_key: 'cursor',
+    display_name: 'Cursor',
+    enabled: true,
+    deep_link_template: 'cursor://anysphere.cursor-deeplink/mcp/install?name=yunshu&config={key}',
+  },
+  { tool_key: 'claude-code', display_name: 'Claude Code', enabled: false, deep_link_template: null },
+  { tool_key: 'cherry-studio', display_name: 'Cherry Studio', enabled: false, deep_link_template: null },
+  { tool_key: 'nextchat', display_name: 'NextChat', enabled: false, deep_link_template: null },
+  { tool_key: 'openai-sdk', display_name: 'OpenAI SDK', enabled: false, deep_link_template: null },
+]
+
 const emptyAudit = {
   items: [],
   page: 1,
@@ -124,6 +137,9 @@ function installMock(rules: AdminPriceRule[] = [active]) {
       })
     }
     if (path === '/api/admin/groups') return Promise.resolve({ items: groups, total: groups.length })
+    if (path === '/api/admin/integrations') {
+      return Promise.resolve({ items: integrations, total: integrations.length })
+    }
     if (path.startsWith('/api/admin/models?')) {
       return Promise.resolve({ items: models, page: 1, page_size: 100, total: models.length })
     }
@@ -339,5 +355,86 @@ describe('PricingPage', () => {
     expect(alert).toHaveTextContent('差额 8667')
     expect(alert).toHaveTextContent('涉及模型：qwen-max')
     expect(screen.queryByTestId('group-warning-confirm')).not.toBeInTheDocument()
+  })
+
+  async function openIntegrations() {
+    const user = userEvent.setup()
+    renderWithProviders(<AdminPricingPage />)
+    await screen.findByText('qwen-max')
+    await user.click(screen.getByRole('tab', { name: '工具集成' }))
+    await screen.findByText('Cursor')
+    return user
+  }
+
+  it('PricingPage：工具集成 5 行渲染且开关反映 enabled', async () => {
+    installMock()
+    await openIntegrations()
+
+    const switches = screen.getAllByRole('switch')
+    expect(switches).toHaveLength(5)
+    expect(switches.map((node) => node.getAttribute('aria-checked'))).toEqual([
+      'true',
+      'false',
+      'false',
+      'false',
+      'false',
+    ])
+    for (const name of ['Cursor', 'Claude Code', 'Cherry Studio', 'NextChat', 'OpenAI SDK']) {
+      expect(screen.getByText(name)).toBeInTheDocument()
+    }
+    expect(screen.getByText(/只支持 \{key\} \/ \{base_url\} \/ \{model\}/)).toBeInTheDocument()
+  })
+
+  it('PricingPage：开启但模板为空时前端拦下且不发请求', async () => {
+    installMock()
+    const user = await openIntegrations()
+
+    const row = screen.getByText('Claude Code').closest('tr')
+    if (!row) throw new Error('未找到 Claude Code 行')
+    const toggle = within(row).getByRole('switch', { name: '启用 Claude Code' })
+    expect(toggle).toHaveAttribute('aria-checked', 'false')
+    await user.click(toggle)
+    expect(toggle).toHaveAttribute('aria-checked', 'true')
+
+    await user.click(within(row).getByRole('button', { name: '保存 Claude Code' }))
+
+    const alert = await screen.findByTestId('integration-error-claude-code')
+    expect(alert).toHaveTextContent('开启工具 claude-code 前必须先配置深链模板')
+    expect(screen.queryByRole('dialog', { name: '确认保存工具集成' })).not.toBeInTheDocument()
+    expect(mockedPatch).not.toHaveBeenCalled()
+  })
+
+  it('PricingPage：后端 400 原样展示（含被点名的 {token}）', async () => {
+    installMock()
+    const message = '深链模板包含未允许的占位符 {token}；只支持 {key} / {base_url} / {model}'
+    mockedPatch.mockRejectedValueOnce(
+      new ApiError({
+        status: 400,
+        code: 'invalid_request_body',
+        type: 'invalid_request_body',
+        message,
+        hint: '',
+      }),
+    )
+    const user = await openIntegrations()
+
+    const row = screen.getByText('Cursor').closest('tr')
+    if (!row) throw new Error('未找到 Cursor 行')
+    const input = within(row).getByLabelText('深链模板 Cursor')
+    await user.clear(input)
+    // userEvent treats `{` as a key descriptor; `{{` types a literal brace.
+    await user.type(input, 'cursor://x?key={{token}')
+    await user.click(within(row).getByRole('button', { name: '保存 Cursor' }))
+
+    const dialog = await screen.findByRole('dialog', { name: '确认保存工具集成' })
+    await user.click(within(dialog).getByRole('button', { name: '确认保存工具集成' }))
+
+    const alert = await screen.findByTestId('integration-error-cursor')
+    expect(alert).toHaveTextContent(message)
+    expect(alert).toHaveTextContent('{token}')
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1))
+    const sent = (mockedPatch.mock.calls.at(-1)?.[1] ?? {}) as Record<string, unknown>
+    expect(sent.deep_link_template).toBe('cursor://x?key={token}')
   })
 })
