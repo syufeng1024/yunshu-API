@@ -386,8 +386,11 @@ var keyTable = []KeyMeta{
 
 	// FEATURE: idem.* (3) — errata E-08 assigns feature switches here.
 	{
+		// 0 is a legal value: it switches automatic de-duplication off for
+		// requests without an Idempotency-Key, which P08 expresses as
+		// window <= 0. The default stays 10s.
 		Key: KeyIdemDuplicateWindowSeconds, Type: TypeInt, Default: `10`,
-		Namespace: NsFeature, Int: intRange(1, 3600),
+		Namespace: NsFeature, Int: intRange(0, 3600),
 	},
 	{
 		Key: KeyIdemLeaseTTLSeconds, Type: TypeInt, Default: `15`,
