@@ -36,3 +36,6 @@ bin/
 web/test-results/
 web/playwright-report/
 web/blob-report/
+
+# 备份产物（scripts/backup.sh）：含用户行与密钥哈希，只留本机
+backups/
