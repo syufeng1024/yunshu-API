@@ -120,7 +120,7 @@ UPDATE t_reconcile_diff
 
 | 现象 | 判据 | 动作 |
 | --- | --- | --- |
-| 当日 `t_upstream_bill` 无行 | `runExternal` 对 0 账单日直接返回，不产生 `MISSING_UPSTREAM` | 无需处置；确认账单适配器是否漏拉，漏拉按 T08 渠道告警处理 |
+| 当日 `t_upstream_bill` 无行 | `runExternal` 对 0 账单日直接返回，不产生 `MISSING_UPSTREAM` | 无需处置；**先确认当日账单已导入，否则 external 段无意义**——用 `POST /api/admin/upstream-bills/import`（`bill_adapter='MANUAL_UPLOAD'`）手工导入，未导入按 T08 渠道告警处理 |
 | R-05 偏差 100~10,000 微积分 | 容忍带内（Redis 补偿失败、跨日结算写旧桶），HIGH 不告警 | 以 DB 为准重建当日计数：`SET rl:dq:{user_id}:{yyyymmdd} <db_value>`，次日重跑归零后关闭 |
 | R-07 计数超阈值但删除任务已跑 | `t_idempotency_record` 中 `expires_at < NOW()` 的行确实在下降 | 关闭；若连续两日不降，按 `purge_log` 失败处理 |
 | 同一差异在 `CLOSED` 后原样重复 | `delta_micro` 未变，状态仍是 `CLOSED` | 不是告警，忽略 |
