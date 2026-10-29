@@ -3,7 +3,8 @@
 // Envelope format: "v1:" + base64.StdEncoding(nonce || ciphertext || tag).
 // The KEK comes from CHANNEL_KEY_KEK (base64 of exactly 32 bytes). There is no
 // plaintext fallback anywhere: a missing KEK or a malformed envelope is an
-// error the caller must turn into 503 config_unavailable.
+// error the caller must turn into 503 upstream_key_unavailable (PRD E.1.9:
+// "all candidate keys failed to decrypt").
 //
 // The plaintext exists only in the caller's local variable between Open and the
 // HTTP request write. It must never be put in a Ctx, a log line, an attempt

@@ -36,6 +36,9 @@
 | D-28 | 65 码断言：`client_aborted` 须有自动化触发用例。见 `matrix-codes.md` client_aborted | 生产者 `internal/dispatch/dispatch.go` 存在，无 `Test*` 用例 | 客户端断连路径未构造 | 499 分流回归不可发现 | 否（属测试缺口） |
 | D-29 | 65 码断言：`convert_failed` 须有自动化触发用例。见 `matrix-codes.md` convert_failed | 生产者 `internal/dispatch/dispatch.go` 存在，无 `Test*` 用例 | 协议转换失败分支未构造 | 500 映射回归不可发现 | 否（属测试缺口） |
 | D-30 | 65 码断言：`auth_unavailable` 须有自动化触发用例。见 `matrix-codes.md` auth_unavailable | 生产者 `internal/control/auth/login.go` 存在，无 `Test*` 用例 | 会话/密钥后端不可用分支未构造 | 503 映射回归不可发现 | 否（属测试缺口） |
+| D-31 | E.1.1：注销后 7 天冷静期内调用暂停，返回 403 `account_frozen`（PRD `:1231`） | 注销即置 `DISABLED`（`internal/control/auth/cancel.go:20`）；`t_user.status` 只有 `NORMAL / DISABLED / FROZEN_OVERDRAFT`（`0001_account_credential.sql:14`），无冷静期状态 | 冷静期功能未实现；补生产者等于补一整套冷静期（新状态 + 到期 job + 撤销端点 + 冷静期内余额冻结语义） | `account_frozen` 无合法生产者，客户端收不到该码 | 否（码表保留登记；是否补功能由需求方定） |
+| D-32 | E.1.6：`X-Request-Id` 被复用时返回 409 `duplicate_request_id`（PRD `:1898`） | `t_idempotency_record` 唯一键是 `uk_idem (scope, idem_key)`（`0003_fund_usage_ops.sql:135`），`request_id` 无唯一约束；服务端把 `request_id` 当追踪标识（`internal/gw/server.go:76-82`、`apierr.ResolveRequestID`） | 给 `request_id` 加唯一约束会破坏同键重放、同一 trace-id 跨多个子请求、幂等记录租约接管三件既有语义 | `duplicate_request_id` 无检测面 | 否（登记不实现） |
+| D-33 | E.1.9：按 key（+ 作用域）读配置，读不到时区分全局缺失与作用域未覆盖（PRD `:1942`） | 管理端只有 `GET /api/admin/config`（恒返回全量 45 键，缺行用 `DEFAULT` 兜底）与 `PUT`（`internal/control/ops/config.go:52`），没有按 key 读单项的端点 | 不存在「按 key 查不到」的分支 | `config_item_not_found` 无合法生产者 | 否（将来新增 `GET /api/admin/config/{key}` 再启用） |
 
 ## 与 Go/No-Go 门槛的关系
 

@@ -196,7 +196,7 @@ func attribution(out outcome) (stage, owner string) {
 	case apierr.CodeSettlementUnavailable:
 		return "SETTLE", "PLATFORM"
 	case apierr.CodeNoAvailableUpstream, apierr.CodeNoAvailableUpstreamForGroup,
-		apierr.CodeConfigUnavailable:
+		apierr.CodeConfigUnavailable, apierr.CodeUpstreamKeyUnavailable:
 		return "ROUTE", "PLATFORM"
 	case apierr.CodeConvertFailed:
 		return "CONVERT", "PLATFORM"

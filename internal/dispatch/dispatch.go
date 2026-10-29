@@ -58,7 +58,8 @@ type StreamUsageModeWriter interface {
 }
 
 // Options assembles the dispatcher. The KEK is optional: without it every
-// request is rejected with 503 config_unavailable, never served with plaintext.
+// request is rejected with 503 upstream_key_unavailable (the credential, not the
+// routing table, is what is missing), never served with plaintext.
 type Options struct {
 	Catalog *gw.Catalog
 	Tokens  billing.InputCounter
@@ -430,7 +431,7 @@ func (d *Dispatcher) try(ctx context.Context, w http.ResponseWriter, c *gw.Ctx, 
 			d.opts.Logger.Error(ctx, fmt.Sprintf("channel_key_decrypt_failed channel=%d: %s", t.ch.ID, err),
 				obslog.Fields{Stage: "P15", RequestID: c.RequestID, Status: 503})
 		}
-		out.apiErr = apierr.New(apierr.CodeConfigUnavailable)
+		out.apiErr = apierr.New(apierr.CodeUpstreamKeyUnavailable)
 		out.attempt.ErrorClass = ClassNone
 		out.attempt.Phase = "P14"
 		out.attempt.UpstreamMsg = "channel key unavailable"

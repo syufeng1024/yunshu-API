@@ -1757,7 +1757,7 @@ V2.0 的详细需求另行编制。
 
 **本附录的效力。** 它是**对外承诺的唯一来源**：错误码、幂等语义、重试行为、流式错误帧四件事，客户端、SDK、文档站、控制台都以此为准。技术架构文档 §6.2 是本附录的技术落地形态，两者冲突时以本附录为准并由研发回填；文档站第 6 章只做展示，不得另写一份码表。
 
-**计数口径。** E.1 共 **65 条** = 技术架构文档全集 63 条 + 本版新增 **2 条**（`idempotency_key_reused`，见 E.2；`content_policy_violation`，见 E.1.11 / §10.1）。研发须在 `apierr` registry 补这两个码，并加断言：**枚举表实际行数 == 本文声明数 == 65**——本轮之前已经出现过「表 54 行、头部写 58 条、代码 47 个」三处不一致，靠人工核对是拦不住的。
+**计数口径。** E.1 共 **65 条** = 技术架构文档全集 63 条 + 本版新增 **2 条**（`idempotency_key_reused`，见 E.2；`content_policy_violation`，见 E.1.11 / §10.1）。研发须在 `apierr` registry 补这两个码，并加断言：**枚举表实际行数 == 本文声明数 == 65**——本轮之前已经出现过「表 54 行、头部写 58 条、代码 47 个」三处不一致，靠人工核对是拦不住的。实现期新增的 11 码见 **E.1.12**；计数断言按「PRD 基线 65 + 实现期新增 11 == 76」执行（勘误 ERR-05，2026-10-29）。
 
 [^free]: **默认档按代码实际值写（D-4 裁定）。** 代码常量 `internal/config/ratelimit.go:71-75` 为 `DefaultRPM = 60`、`DefaultTPM = 60000`、`DefaultConcurrency = 5`，`EmptyRateLimit()` 未设 `DailyQuotaMicro`（无账户日额度上限）。三点：① 本档**不适用** `TPM = RPM × 2,100`——60 × 2,100 = 126,000 与本档 60,000 不符，取「42 次/分钟 @1,400 token」独立口径；② 与体验版仅在 RPM 上同值（均 60），其余三维不同（TPM 126,000 vs 60,000、并发 22 vs 5、日额度 1,000 vs 无上限），把两档分开的**唯一机制是「体验期结束后回落」**，该任务不补就只剩数值差异；③ 默认档无日额度上限意味着未购套餐账户不受日消耗约束，属已知风控缺口，收敛见 §7 第 32 项（后续版本）。
 
@@ -1970,7 +1970,25 @@ V2.0 的详细需求另行编制。
 | **可重试 = 否 的行，`retry_after_seconds` 恒为 0**（E-1 总则，逐行断言）                 | 是（`no_available_upstream_for_group` / `upstream_dns_failure` / `upstream_tls_failure` / `upstream_empty_response` / `upstream_auth_failed` / `upstream_model_not_found` / `price_not_configured` / `internal_error` / `convert_failed` 等全部覆盖） |
 | **可重试 = 是 且无确定恢复时刻的行，`retry_after_seconds` = 30 且 `message` 含恢复/重试说明** | 是（`model_not_available` / `no_available_upstream` / `upstream_timeout` / `upstream_all_failed`）                                                                                                                                               |
 | 平台侧码的 `hint` 不含「升级套餐」「申请提额」                                            | 是（`price_not_configured` / `rate_limiter_unavailable` / `auth_unavailable` / `settlement_unavailable` / `config_unavailable` / `internal_error` / `convert_failed` / `backpressure_*` 逐条断言）                                                   |
-| `apierr.Codes()` 长度 == 本文声明数 == 表格行数                                   | 三者相等                                                                                                                                                                                                                                          |
+| `apierr.Codes()` 长度 == 本文声明数（65）+ E.1.12 实现期新增（11）== 76         | 三者自洽（ERR-05，2026-10-29）：PRD 表 65 行不变，`apierr` 76 常量 / 76 spec                                                                                                                                                                    |
+
+### E.1.12 实现期新增错误码（勘误 ERR-05，2026-10-29）
+
+E.1 基线 65 条保持不变。实现期因控制台会话、注册冲突、查询参数、免费档 Key 上限、运营后台状态迁移等条件新增 11 条，代码侧 `internal/apierr/codes.go` 共 76 常量 / 76 spec：
+
+- `session_expired` — 401 — 控制台会话过期 — E-21 / T11
+- `invalid_credentials` — 401 — 登录凭证错误 — E-21
+- `account_exists` — 409 — 注册冲突 — E-21
+- `invalid_query_parameter` — 400 — 分页/排序参数非法 — E-21
+- `key_limit_reached` — 409 — 免费档活跃 Key 达上限 — T12
+- `login_locked` — 429 — 密码失败预算耗尽 — T11
+- `resource_not_found` — 404 — 运营后台目标行不存在 — T15
+- `resource_state_conflict` — 409 — 订单/退款/提额非法状态迁移 — T15
+- `trial_already_claimed` — 409 — 设备/手机号/IP 段/账号已领取体验 — T15
+- `invoice_already_issued` — 409 — 订单已开票 — T15
+- `price_conflict` — 409 — 同一模型存在多价源 — T15
+
+因此计数断言调整为：**PRD 基线 65 + 实现期新增 11 == 76**；不得反向删码凑 65（`session_expired`、`key_limit_reached` 等已有生产消费者）。
 
 ### E.2 `Idempotency-Key` 语义
 

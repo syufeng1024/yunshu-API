@@ -8,7 +8,7 @@
 | 实现常量数 | 76（`internal/apierr/codes.go`） |
 | 差异 | PRD E.1 65 码 + 实现期新增 11 码 = 76；新增码见文末附录，不计入本表 65 行 |
 
-触发用例名均先在仓库中 `grep` 确认存在；无自动化用例但存在生产者的码，给 `METHOD /path` 并记 `⚠️`；既无生产者又无用例的码写 `无` 并记 `❌`。`account_rpm_exceeded` 按 PRD E.1.10「登记但不实现」处理，同样记 `❌`。
+触发用例名均先在仓库中 `grep` 确认存在；无自动化用例但存在生产者的码，给 `METHOD /path` 并记 `⚠️`。结论列三态：`✅` 有自动化触发用例；`⬛` 登记不实现（编号指向 `deviations.md`）；`🟨` 功能缺口待立项（本卡不写代码）。
 
 | 码 | HTTP | 触发用例 | 结论 |
 | :--- | :--- | :--- | :--- |
@@ -16,7 +16,7 @@
 | key_expired | 401 | `TestInvalidAPIKeyAndKeyExpiredAreDistinct` | ✅ |
 | key_disabled | 403 | `POST /v1/chat/completions`（`internal/gw/p05_auth.go`，无自动化用例） | ⚠️ |
 | account_disabled | 403 | `TestDisableReasonIsOperatorOnly` | ✅ |
-| account_frozen | 403 | 无 | ❌ |
+| account_frozen | 403 | 无 | ⬛ 登记不实现（D-31） |
 | ip_not_allowed | 403 | `TestInternalPipelineUsesInjectedKeyIDForP06` | ✅ |
 | conflicting_auth_headers | 400 | `TestA6ConflictingAuthHeadersIs400` | ✅ |
 | model_not_found | 400 | `TestA4A5ModelStageOrderAndCodes` | ✅ |
@@ -45,8 +45,8 @@
 | request_in_flight | 409 | `TestA10ReplayWaitAndReuse` | ✅ |
 | idempotency_key_reused | 409 | `TestMySQLKeyReusedForDifferentBody` | ✅ |
 | idempotent_replay_unsupported | 409 | `POST /v1/chat/completions`（`internal/gw/server.go`，幂等重放正文 >64KB，无自动化用例） | ⚠️ |
-| duplicate_request_in_flight | 409 | 无 | ❌ |
-| duplicate_request_id | 409 | 无 | ❌ |
+| duplicate_request_in_flight | 409 | 无 | 🟨 待 T41（功能未接线：idem.duplicate_window_seconds 无读取点） |
+| duplicate_request_id | 409 | 无 | ⬛ 登记不实现（D-32） |
 | no_available_upstream | 503 | `TestPipelineShortCircuitsAndNamesFailStage` | ✅ |
 | no_available_upstream_for_group | 503 | `TestRouterGroupEmptyUsesDistinctCode` | ✅ |
 | upstream_capacity_exceeded | 503 | `TestA3Upstream429Becomes503WithoutRetry` | ✅ |
@@ -58,7 +58,7 @@
 | upstream_invalid_request | 400 | `TestUpstream400MapsTo400InvalidRequest` | ✅ |
 | upstream_invalid_response | 502 | `TestMalformedBodyIs502WithoutRetry` | ✅ |
 | upstream_empty_response | 502 | `TestEmptyChoicesIs502AndNotBilled` | ✅ |
-| upstream_key_unavailable | 503 | 无 | ❌ |
+| upstream_key_unavailable | 503 | `TestUpstreamKeyUndecryptableIs503UpstreamKeyUnavailable` | ✅ |
 | upstream_all_failed | 502 | `TestPlaygroundGatewayUnreachableIs502` | ✅ |
 | client_aborted | 499 | `POST /v1/chat/completions`（`internal/dispatch/dispatch.go`，客户端断开映射，无自动化用例） | ⚠️ |
 | convert_failed | 500 | `POST /v1/chat/completions`（`internal/dispatch/dispatch.go`，协议转换失败，无自动化用例） | ⚠️ |
@@ -73,10 +73,12 @@
 | permission_denied | 403 | `TestPersonalAccountGets403OnEveryAdminRoute` | ✅ |
 | channel_not_found | 404 | `TestAdminDetailUses404Codes` | ✅ |
 | channel_in_use | 409 | `TestChannelDeleteChecksRoutesAndSoftDelete` | ✅ |
-| config_item_not_found | 404 | 无 | ❌ |
+| config_item_not_found | 404 | 无 | ⬛ 登记不实现（D-33） |
 | config_value_invalid | 400 | `TestConfigWhitelist` | ✅ |
-| account_rpm_exceeded | 429 | 无（PRD E.1.10 登记但不实现） | ❌ |
-| content_policy_violation | 403 | 无 | ❌ |
+| account_rpm_exceeded | 429 | 无（PRD E.1.10 登记但不实现） | ⬛ 登记不实现（PRD E.1.10 已裁定） |
+| content_policy_violation | 403 | 无 | 🟨 待 T42 / OI-03（需先定规则源） |
+
+结论统计：`✅ 50` + `⚠️ 9` + `⬛ 4` + `🟨 2` = **65 行**。`✅` 含 T39 补上生产者的 `upstream_key_unavailable`；`⬛` 为 `account_frozen` / `duplicate_request_id` / `config_item_not_found` / `account_rpm_exceeded`；`🟨` 为 `duplicate_request_in_flight` / `content_policy_violation`。
 
 ## 附录：实现期新增、不在 PRD E.1 的 11 码
 
@@ -105,4 +107,4 @@ $ grep -cE '^\s+Code: Code[A-Za-z0-9]+,' internal/apierr/codes.go
 76
 ```
 
-断言结论：PRD E.1 枚举行数 == 65；`apierr` 常量数 == 76；差值 11 已在附录逐条列明。T23 §3 第 4 项写「65 码」与 T23 A4 写「与 `apierr` 常量数一致」在实现期新增 11 码后无法同时成立，本表按「PRD 65 行 + 附录 11 码」拆分呈现，偏差留待 `deviations.md` 登记。
+断言结论：PRD E.1 枚举行数 == 65；`apierr` 常量数 == 76；差值 11 已在附录逐条列明。T23 A4 已按 ERR-05 改写为「65 行（PRD E.1 基线）+ 附录 11 码（实现期新增）== `apierr` 76 常量 / 76 spec」。结论分布：`✅ 50 + ⚠️ 9 + ⬛ 4 + 🟨 2 = 65`；`⬛` 三条对应 `deviations.md` D-31 / D-32 / D-33，`account_rpm_exceeded` 无偏差登记（PRD E.1.10 已裁定），`🟨` 两条分别待 T41 / T42。

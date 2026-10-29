@@ -491,8 +491,73 @@ func TestMissingKEKIs503NotPlaintext(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)
 	}
-	if errorCode(t, rec)["code"] != apierr.CodeConfigUnavailable {
+	if errorCode(t, rec)["code"] != apierr.CodeUpstreamKeyUnavailable {
 		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+// T39: a channel whose upstream_key_enc exists (valid v1 envelope) but cannot
+// be opened by the configured KEK must surface upstream_key_unavailable, and the
+// usage row must attribute it to the platform's routing stage.
+func TestUpstreamKeyUndecryptableIs503UpstreamKeyUnavailable(t *testing.T) {
+	_, envelope := testBox(t) // sealed with the standard test KEK
+	cat := testCatalog(t, "http://127.0.0.1:1/v1", envelope, nil)
+	otherKEK := make([]byte, 32)
+	for i := range otherKEK {
+		otherKEK[i] = byte(i + 99)
+	}
+	box, err := cryptobox.New(otherKEK)
+	if err != nil {
+		t.Fatalf("cryptobox: %v", err)
+	}
+	usage := &usageRecorder{}
+	d := New(Options{
+		Catalog: cat,
+		Tokens:  counterFunc(func(string) int64 { return 1 }),
+		Ledger:  &fakeLedger{},
+		KEK:     box,
+	})
+	d.opts.UsageSink = usage.add
+
+	rec := serve(t, d, testCtx(false))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := errorCode(t, rec)["code"]; got != apierr.CodeUpstreamKeyUnavailable {
+		t.Fatalf("code = %v, want %s (body %s)", got, apierr.CodeUpstreamKeyUnavailable, rec.Body.String())
+	}
+	rows := usage.all()
+	if len(rows) != 1 {
+		t.Fatalf("usage rows = %d, want exactly 1", len(rows))
+	}
+	row := rows[0]
+	if row.HTTPStatus != http.StatusServiceUnavailable || row.BizCode != apierr.CodeUpstreamKeyUnavailable {
+		t.Fatalf("usage status/code = %d/%q", row.HTTPStatus, row.BizCode)
+	}
+	if row.FailStage != "ROUTE" || row.FailOwner != "PLATFORM" {
+		t.Fatalf("usage attribution = %q/%q, want ROUTE/PLATFORM", row.FailStage, row.FailOwner)
+	}
+}
+
+// T39 reverse: a routing/config problem must keep config_unavailable; the key
+// change above must not have widened this path.
+func TestMissingBaseURLStillConfigUnavailable(t *testing.T) {
+	_, envelope := testBox(t)
+	cat := testCatalog(t, "", envelope, nil)
+	usage := &usageRecorder{}
+	d := newDispatcher(t, cat, &fakeLedger{}, &attemptRecorder{}, &fakeIdem{})
+	d.opts.UsageSink = usage.add
+
+	rec := serve(t, d, testCtx(false))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
+	}
+	if got := errorCode(t, rec)["code"]; got != apierr.CodeConfigUnavailable {
+		t.Fatalf("code = %v, want %s (body %s)", got, apierr.CodeConfigUnavailable, rec.Body.String())
+	}
+	rows := usage.all()
+	if len(rows) != 1 || rows[0].BizCode != apierr.CodeConfigUnavailable {
+		t.Fatalf("usage rows = %+v", rows)
 	}
 }
 
