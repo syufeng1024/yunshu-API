@@ -87,36 +87,55 @@ func TestSecondSegmentDiagramsMentionEveryState(t *testing.T) {
 		heading string
 		states  []string
 	}{
+		{"## 1. 订单状态机", orderStates},
 		{"## 5. 退款状态机", refundStates},
 		{"## 6. 发票状态机", invoiceStates},
 		{"## 7. 提额状态机", quotaStates},
 	}
 	for _, sec := range sections {
-		idx := strings.Index(doc, sec.heading)
-		if idx < 0 {
+		body := sectionOf(doc, sec.heading)
+		if body == "" {
 			t.Errorf("docs/fund-flow.md has no %q section", sec.heading)
 			continue
 		}
 		for _, state := range sec.states {
-			if !strings.Contains(doc[idx:], state) {
+			if !strings.Contains(body, state) {
 				t.Errorf("%s never mentions the state %q", sec.heading, state)
 			}
 		}
 	}
 }
 
+// sectionOf returns the body under one "## " heading, stopping at the next
+// "## " heading. Scoping the search matters: a state named only in a later
+// section must not satisfy this diagram's check.
+func sectionOf(doc, heading string) string {
+	idx := strings.Index(doc, heading)
+	if idx < 0 {
+		return ""
+	}
+	rest := doc[idx+len(heading):]
+	if next := strings.Index(rest, "\n## "); next >= 0 {
+		return rest[:next]
+	}
+	return rest
+}
+
 // The document must also draw the order diagram, and the diagram must mention
 // every state: a state nobody can reach is a dead enum, one missing from the
 // picture is a documentation gap.
 func TestOrderDiagramCoversEveryState(t *testing.T) {
-	doc := readFundFlow(t)
+	body := sectionOf(readFundFlow(t), "## 1. 订单状态机")
+	if body == "" {
+		t.Fatal("docs/fund-flow.md has no '## 1. 订单状态机' section")
+	}
 	for _, state := range orderStates {
-		if !strings.Contains(doc, state) {
-			t.Errorf("docs/fund-flow.md never mentions the state %q", state)
+		if !strings.Contains(body, state) {
+			t.Errorf("docs/fund-flow.md order diagram never mentions the state %q", state)
 		}
 	}
-	if !strings.Contains(doc, "stateDiagram-v2") {
-		t.Error("docs/fund-flow.md has no mermaid state diagram")
+	if !strings.Contains(body, "stateDiagram-v2") {
+		t.Error("docs/fund-flow.md order section has no mermaid state diagram")
 	}
 }
 
