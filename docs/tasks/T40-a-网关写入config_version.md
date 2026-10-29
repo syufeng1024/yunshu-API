@@ -7,7 +7,7 @@
 | 优先级 | **P0**（OI-16；门槛 4 第 8 条「种子数据假绿」的直接原因） |
 | 依赖 | 无（`cfg:ver` 发布链路已由 T30 打通） |
 | 交付根 | `internal/gw/`、`internal/dispatch/` |
-| 状态 | ✅ 代码级验收通过（`f5d168d`；真机举证见 §8 遗留） |
+| 状态 | ✅ 全部收口（`f5d168d` 代码 / 真机举证 2026-10-29 16:29，见 §8） |
 | 分段 | **单段**（预计 ≤ 15 分钟；不做 段 2） |
 
 ## 1. 事实（已核，勿重复调查）
@@ -149,7 +149,9 @@ MSYS_NO_PATHCONV=1 docker run --rm -v yunshu-gomod:/go/pkg/mod -v /d/codes/yunsh
 
 ## 8. 遗留（本卡未做，需单独立项或另派）
 
-1. **真机举证未做**：门槛 4 / OI-16 的原始验收口径是「重跑 `recondrill` 后 R09 仍 0 差异，且 `t_usage_record` 里**新请求** `config_version > 0`」。当前栈跑的是旧 `gatewayd` 镜像，需重建镜像 → 重启 `gatewayd` → 打真实请求 → `bash scripts/recondrill.sh` 复跑，才能把 OI-16 从「代码已修」改成「已举证」。**在此之前 OI-16 不得关闭，门槛 4 仍为 ❌。**
-2. `internal/obs/log/record.go:72` 的 `ConfigVersion` 同样无生产者（P30 请求日志缺口），本卡按要求未改，需另记 BACKLOG。
+1. ~~**真机举证未做**~~ → **2026-10-29 16:29 已完成**（`dr-drill-2026-10-29.md` §8）：重建 `yunshu-app:local` → 只重启 `gatewayd` → 控制台新建探针 Key（`t_api_key.id=4`）→ `POST /v1/chat/completions` 落 `config_version=103`（当时 `cfg:ver=103`，`t_config_publish` 有该版本）→ 备份 + 恢复到 `yunshu_drill` → `recondrill` 退出 0、`total_diffs=0`，R09 有 1 条**非种子**样本；把该行改成 `9999` 后 R09 检出 1 条 HIGH、`result=FAIL`。**OI-16 关闭，门槛 4 的阻塞项收窄为 OI-15。**
+2. `internal/obs/log/record.go:72` 的 `ConfigVersion` 同样无生产者（P30 请求日志缺口），本卡按要求未改，已登记 `BACKLOG.md` **G15**。
 3. `t_user_daily_quota` / `t_upstream_bill` 生产者缺口（OI-15）未动，属 T40-b / T40-c。
+4. 举证过程中顺带修掉 `scripts/recondrill.sh` 的退出码假失败（`trap cleanup` 的 `rm -rf` 被宿主文件系统中间层拒绝时会把 PASS 改写成 exit 1，现改为保留原退出码）。
+5. 观察项（未开卡）：P01–P14 的失败请求**不落** `t_usage_record`（P28 只在终端执行）。如产品要求「每个请求都有用量行」，需另立卡；当前不是任何门槛的验收项。
 

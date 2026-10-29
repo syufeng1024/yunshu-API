@@ -90,7 +90,15 @@ PW=$(env_get MYSQL_ROOT_PASSWORD)
 [ -n "$PW" ] || die "$ENV_FILE 里没有 MYSQL_ROOT_PASSWORD"
 
 WORK=$(mktemp -d)
-cleanup() { rm -rf -- "$WORK"; }
+# 退出码属于 recondrill 的判定，不属于清理。宿主侧的文件系统中间层（Windows
+# 下 Git Bash 的 /tmp 映射）可能拒绝删除带盘符前缀的临时目录，那会把 0 差异
+# 的 PASS 变成 exit 1——2026-10-29 实测踩到 `SAFE_DELETE_INVALID_PATH`。因此
+# 先取回原退出码，再清理，并且清理失败只降级为提示。
+cleanup() {
+  local rc=$?
+  rm -rf -- "$WORK" 2>/dev/null || printf '[recondrill] WARN 临时目录未清理：%s\n' "$WORK" >&2
+  return $rc
+}
 trap cleanup EXIT
 
 BIN="$WORK/recondrill"
