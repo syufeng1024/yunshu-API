@@ -6,7 +6,7 @@
 
 | # | 门槛 | 判定 | 依据 |
 | :--- | :--- | :--- | :--- |
-| 1 | 82 项中 `❌ == 0`，`⚠️ ≤ 8` 且均已登记 | ❌ | `matrix-82.md`：`✅66 / ⚠️14 / ❌2`。`❌` 为 F4-3（一键导入后端未实现）、F14-6（回落无日志计数），门槛要求 0；`⚠️` 14 > 8。14 条 `⚠️` 已在 `deviations.md` D-01–D-04、D-07、D-10、D-13–D-20 登记，但「已登记」不能抵消数量超限 |
+| 1 | 82 项中 `❌ == 0`，`⚠️ ≤ 8` 且均已登记 | ❌ | `matrix-82.md`：`✅67 / ⚠️14 / ❌1`（F14-6 于 2026-10-29 由 T32 转 ✅）。剩余 `❌` 为 F4-3（一键导入后端未实现，需新增表与端点）；`⚠️` 14 > 8。`⚠️` 已在 `deviations.md` D-01–D-04、D-07、D-10、D-13–D-20 登记，但「已登记」不能抵消数量超限 |
 | 2 | G-01–G-12 全 `✅` | ❌ | `matrix-gwt.md`：`✅6 / ⚠️6`（G-06 于 2026-10-29 由 T31 转 ✅）。`⚠️` 为 G-02（`est=7920` vs 7,200）、G-03（`PAID` vs `SUCCESS`）、G-05（单行版本化 vs 独立旧版行）、G-07（`APPLIED` vs `PENDING`）、G-09（无 24h 延迟）、G-12（`/pricing` DOM 未验）。12/12 用例 PASS 不等于 12/12 断言与 PRD 一致 |
 | 3 | 65 码断言通过且枚举行数一致 | ❌ | `matrix-codes.md`：PRD 65 行，`✅49 / ⚠️9 / ❌7`；`internal/apierr/codes.go` 常量 **76**。`❌` 为 `account_frozen`、`duplicate_request_in_flight`、`duplicate_request_id`、`upstream_key_unavailable`、`config_item_not_found`、`account_rpm_exceeded`、`content_policy_violation`。枚举行数与常量数不一致（65 vs 76），口径见 `errata.md` ERR-05 |
 | 4 | 8 条对账断言在演练中 0 差异 | ❌ | 仓库内只有 `internal/recon` 的单测与新库回归记录，**无全量恢复后的对账演练报告**；T22 段 4（`scripts/backup.sh` / `restore.sh` / `docs/dr-plan.md`）未开始。`open-issues.md` OI-09 |

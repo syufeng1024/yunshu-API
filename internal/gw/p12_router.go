@@ -3,6 +3,8 @@ package gw
 import (
 	"context"
 	"math/rand/v2"
+	"strconv"
+	"strings"
 
 	"yunshu.dev/core/internal/apierr"
 	"yunshu.dev/core/internal/breaker"
@@ -60,39 +62,66 @@ func (s *RouterStage) Run(ctx context.Context, c *Ctx) error {
 	var (
 		candidates []RouteCandidate
 		groupCut   bool
+
+		// Dedicated-channel bookkeeping (T32 / PRD F14-6 edge 4). A channel is
+		// dedicated to this user iff DedicatedScopeMode == SELECTED and the user
+		// is on its list. When every such channel is excluded, the shared pool
+		// may only take over if all of them allow fallback; otherwise the
+		// candidate set is emptied and the existing degradation code applies.
+		dedicatedSeen     bool
+		dedicatedUsable   bool
+		fallbackAllowed   = true
+		excludedDedicated []int64
+		excludeReasons    []string
 	)
 	for _, route := range snap.RoutesFor(c.Model.ID) {
 		ch, ok := snap.Channel(route.ChannelID)
 		if !ok {
 			continue
 		}
-		if !bool(route.Enabled) || !bool(ch.Enabled) {
-			continue
-		}
-		if route.Region != RegionDomestic || ch.Region != RegionDomestic {
+		dedicated := ch.DedicatedScopeMode == ScopeSelected && snap.IsDedicated(ch.ID, c.Auth.UserID)
+		exclude := ""
+		switch {
+		case !bool(route.Enabled) || !bool(ch.Enabled):
+			exclude = "disabled"
+		case route.Region != RegionDomestic || ch.Region != RegionDomestic:
 			// The region filter is a hard exclusion (PRD §3.4). An overseas row
 			// that reached this loop is a misconfiguration: P0 in TDS §5.3.
 			if s.d.Metrics != nil {
 				s.d.Metrics.RegionGuardViolation(ch.ID)
 			}
-			continue
-		}
-		if c.Stream && (!bool(route.StreamSupported) || !bool(ch.StreamSupported)) {
-			continue
-		}
-		if !group.HasChannel(ch.ID) {
+			exclude = "region"
+		case c.Stream && (!bool(route.StreamSupported) || !bool(ch.StreamSupported)):
+			exclude = "stream"
+		case !group.HasChannel(ch.ID):
 			groupCut = true
-			continue
-		}
-		if ch.DedicatedScopeMode == ScopeSelected && !snap.IsDedicated(ch.ID, c.Auth.UserID) {
+			exclude = "group"
+		case ch.DedicatedScopeMode == ScopeSelected && !snap.IsDedicated(ch.ID, c.Auth.UserID):
 			// A dedicated channel the user is not listed on is invisible. If
 			// that empties the candidate set the result is the capacity code,
 			// not the group code: the group is fine, the user simply has no
-			// dedicated entitlement.
+			// dedicated entitlement. It is not this user's dedicated channel,
+			// so it is never fallback evidence.
+			continue
+		case s.breakerOpen(ctx, ch.ID, nowMS):
+			exclude = "breaker"
+		}
+		if exclude != "" {
+			if dedicated {
+				dedicatedSeen = true
+				if !containsID(excludedDedicated, ch.ID) {
+					excludedDedicated = append(excludedDedicated, ch.ID)
+				}
+				excludeReasons = appendUnique(excludeReasons, exclude)
+				if !bool(ch.FallbackAllowed) {
+					fallbackAllowed = false
+				}
+			}
 			continue
 		}
-		if s.breakerOpen(ctx, ch.ID, nowMS) {
-			continue
+		if dedicated {
+			dedicatedSeen = true
+			dedicatedUsable = true
 		}
 		candidates = append(candidates, RouteCandidate{
 			RouteID:           route.ID,
@@ -104,6 +133,18 @@ func (s *RouterStage) Run(ctx context.Context, c *Ctx) error {
 			MaxTokensCeiling:  route.MaxTokensCeiling,
 			StreamSupported:   bool(route.StreamSupported),
 		})
+	}
+
+	if dedicatedSeen && !dedicatedUsable {
+		if !fallbackAllowed {
+			// Default-deny: at least one of the user's dedicated channels
+			// forbids fallback, so a shared channel must not impersonate the
+			// dedicated entitlement. Emptying the set reuses the existing
+			// degradation code below; no new code is introduced.
+			candidates = nil
+		} else if len(candidates) > 0 {
+			s.recordDedicatedFallback(ctx, c, excludedDedicated, strings.Join(excludeReasons, ","))
+		}
 	}
 
 	if len(candidates) == 0 {
@@ -139,6 +180,57 @@ func (s *RouterStage) Run(ctx context.Context, c *Ctx) error {
 	c.Routes = ordered
 	c.Route = &c.Routes[0]
 	return nil
+}
+
+// recordDedicatedFallback leaves the evidence PRD F14-6 edge 4 requires for a
+// monthly reconciliation: exactly one structured line and one counter
+// increment per request, no matter how many dedicated channels were excluded
+// or how many shared candidates remain. The line carries ids and a bounded
+// reason token only; no upstream key, credential or request body.
+func (s *RouterStage) recordDedicatedFallback(ctx context.Context, c *Ctx, excluded []int64, reason string) {
+	if s.d.Metrics != nil {
+		s.d.Metrics.DedicatedFallback()
+	}
+	if s.d.Logger == nil {
+		return
+	}
+	ids := make([]string, len(excluded))
+	for i, id := range excluded {
+		ids[i] = strconv.FormatInt(id, 10)
+	}
+	s.d.Logger.Warn(ctx, "dedicated_fallback: all dedicated channels unavailable, serving from shared pool",
+		obslog.Fields{
+			RequestID:          c.RequestID,
+			UID:                strconv.FormatInt(c.Auth.UserID, 10),
+			KID:                strconv.FormatInt(c.Auth.KeyID, 10),
+			Model:              c.Model.ModelName,
+			Stage:              "P12",
+			Reason:             reason,
+			ExcludedChannelIDs: strings.Join(ids, ","),
+		})
+}
+
+// containsID reports whether id is already in ids. A channel can own several
+// routes for one model (one per protocol); the evidence list counts channels,
+// not routes.
+func containsID(ids []int64, id int64) bool {
+	for _, existing := range ids {
+		if existing == id {
+			return true
+		}
+	}
+	return false
+}
+
+// appendUnique appends v unless it is already present. The caller-side list is
+// tiny (one entry per excluded channel, at most a handful).
+func appendUnique(list []string, v string) []string {
+	for _, existing := range list {
+		if existing == v {
+			return list
+		}
+	}
+	return append(list, v)
 }
 
 // breakerOpen reports whether the channel's K16 state is OPEN and its backoff

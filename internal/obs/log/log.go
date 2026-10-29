@@ -57,6 +57,11 @@ type Fields struct {
 	Stage     string
 	LatencyMS int64
 	Status    int
+	// Reason and ExcludedChannelIDs are the bounded evidence fields for
+	// routing decisions (T32 / PRD F14-6 edge 4). Reason is a fixed enum-like
+	// token; ExcludedChannelIDs is a comma-separated id list, never a key.
+	Reason             string
+	ExcludedChannelIDs string
 }
 
 // Logger writes a fixed-schema JSON line per call.
@@ -118,7 +123,11 @@ type record struct {
 	Stage     string `json:"stage"`
 	LatencyMS int64  `json:"latency_ms"`
 	Status    int    `json:"status"`
-	Msg       string `json:"msg"`
+
+	Reason             string `json:"reason"`
+	ExcludedChannelIDs string `json:"excluded_channel_ids"`
+
+	Msg string `json:"msg"`
 }
 
 func (l *Logger) write(ctx context.Context, level Level, msg string, f Fields) {
@@ -144,7 +153,11 @@ func (l *Logger) write(ctx context.Context, level Level, msg string, f Fields) {
 		Stage:     sanitizeText(f.Stage, 64),
 		LatencyMS: f.LatencyMS,
 		Status:    f.Status,
-		Msg:       sanitizeText(msg, 2048),
+
+		Reason:             sanitizeText(f.Reason, 64),
+		ExcludedChannelIDs: sanitizeText(f.ExcludedChannelIDs, 512),
+
+		Msg: sanitizeText(msg, 2048),
 	}
 
 	line, err := jsonx.Marshal(rec)
@@ -153,7 +166,8 @@ func (l *Logger) write(ctx context.Context, level Level, msg string, f Fields) {
 		// schema and the single-line guarantee even if that assumption breaks.
 		line = []byte(`{"ts":"` + rec.TS + `","level":"error","svc":"","env":"","pid":0,` +
 			`"trace_id":"","request_id":"","uid":"","kid":"","model":"","stage":"",` +
-			`"latency_ms":0,"status":0,"msg":"log marshal failed"}`)
+			`"latency_ms":0,"status":0,"reason":"","excluded_channel_ids":"",` +
+			`"msg":"log marshal failed"}`)
 	}
 
 	l.mu.Lock()

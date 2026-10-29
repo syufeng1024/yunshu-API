@@ -38,6 +38,7 @@ type Recorder struct {
 	regionGuard         *CounterVec
 	backpressure        *CounterVec
 	upstreamMalformed   *CounterVec
+	dedicatedFallback   *CounterVec
 
 	logWrittenVec *CounterVec
 	logWritten    *Counter
@@ -121,6 +122,8 @@ func NewRecorder(reg *Registry) *Recorder {
 		upstreamMalformed: reg.Counter("gw_upstream_frame_malformed_total",
 			"Malformed upstream stream frames.",
 			"channel_id"),
+		dedicatedFallback: reg.Counter("gw_dedicated_fallback_total",
+			"Requests served from the shared pool after every dedicated channel was unavailable and fallback was allowed."),
 
 		logWrittenVec: reg.Counter("gw_log_written_total",
 			"Request-log entries written to the Redis stream."),
@@ -339,6 +342,17 @@ func (r *Recorder) UpstreamFrameMalformed(channelID int64) {
 		return
 	}
 	r.upstreamMalformed.With(channelValue(channelID)).Inc()
+}
+
+// DedicatedFallback records one request whose dedicated channels were all
+// unavailable and whose configuration allowed the shared pool to serve it
+// (PRD F14-6 edge 4). It is label-less and called at most once per request:
+// the monthly reconciliation needs a request count, not a per-channel count.
+func (r *Recorder) DedicatedFallback() {
+	if r == nil || r.dedicatedFallback == nil {
+		return
+	}
+	r.dedicatedFallback.With().Inc()
 }
 
 // LogWritten records one request-log entry appended to the Redis stream.

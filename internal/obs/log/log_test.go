@@ -18,12 +18,14 @@ func TestLoggerWritesFixedSchemaInUTC(t *testing.T) {
 
 	ctx := WithMeta(t.Context(), Meta{TraceID: "0123456789abcdef0123456789abcdef", RequestID: "req-1"})
 	l.Info(ctx, "hello\nworld", Fields{
-		UID:       "u-1",
-		KID:       "k-1",
-		Model:     "qwen-max",
-		Stage:     "auth",
-		LatencyMS: 12,
-		Status:    200,
+		UID:                "u-1",
+		KID:                "k-1",
+		Model:              "qwen-max",
+		Stage:              "auth",
+		LatencyMS:          12,
+		Status:             200,
+		Reason:             "breaker",
+		ExcludedChannelIDs: "3,4",
 	})
 
 	line := strings.TrimSuffix(buf.String(), "\n")
@@ -38,7 +40,8 @@ func TestLoggerWritesFixedSchemaInUTC(t *testing.T) {
 
 	wantKeys := []string{
 		"ts", "level", "svc", "env", "pid", "trace_id", "request_id",
-		"uid", "kid", "model", "stage", "latency_ms", "status", "msg",
+		"uid", "kid", "model", "stage", "latency_ms", "status",
+		"reason", "excluded_channel_ids", "msg",
 	}
 	if len(got) != len(wantKeys) {
 		t.Fatalf("want exactly %d keys, got %d: %v", len(wantKeys), len(got), got)
@@ -64,6 +67,9 @@ func TestLoggerWritesFixedSchemaInUTC(t *testing.T) {
 	if got["latency_ms"] != float64(12) || got["status"] != float64(200) {
 		t.Errorf("numeric fields wrong: %v", got)
 	}
+	if got["reason"] != "breaker" || got["excluded_channel_ids"] != "3,4" {
+		t.Errorf("routing evidence fields wrong: %v", got)
+	}
 	if got["msg"] != "hello world" {
 		t.Errorf("msg = %q, want newline sanitized", got["msg"])
 	}
@@ -78,7 +84,7 @@ func TestLoggerKeepsUnsetKeys(t *testing.T) {
 	if err := jsonx.Unmarshal(bytes.TrimSpace(buf.Bytes()), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	for _, k := range []string{"trace_id", "request_id", "uid", "kid", "model", "stage"} {
+	for _, k := range []string{"trace_id", "request_id", "uid", "kid", "model", "stage", "reason", "excluded_channel_ids"} {
 		v, ok := got[k]
 		if !ok {
 			t.Fatalf("key %q omitted", k)
