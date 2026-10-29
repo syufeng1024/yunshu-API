@@ -53,7 +53,7 @@
 | `gw.stream_total_ms` | UPSTREAM | `600000` | 否 | 网关 P16 流式响应总时长上限 | 473 |
 | `gw.settle_reserve_ms` | UPSTREAM | `15000` | 否 | P30 结算预留窗口 | 474 |
 | `gw.retry_threshold_ms` | UPSTREAM | `{"unary":65000,"stream":45000}` | 否 | P16/P17 上游重试门槛，按请求流式与否取 `unary` / `stream`；JSON 双值 | 475 |
-| `idem.duplicate_window_seconds` | FEATURE | `10` | 否 | P11 同键重复请求去重窗口（`t_idempotency_record`） | 479 |
+| `idem.duplicate_window_seconds` | FEATURE | `10` | 否 | 去重窗口，取值 `[0,3600]`（T41）。**两处消费、语义不同**：网关 P08 对**未带** `Idempotency-Key` 的请求按 `floor(now/window)` 自动去重，配 `0` 即**关闭自动去重**；fund 控制面写操作的幂等窗口在配 `0` 时**回落 10 秒**（不关闭）。带 `Idempotency-Key` 的请求不受本键影响 | 479 |
 | `idem.lease_ttl_seconds` | FEATURE | `15` | 否 | P11 幂等租约 TTL | 480 |
 | `idem.lease_renew_seconds` | FEATURE | `5` | 否 | P11 幂等租约心跳续约间隔 | 481 |
 | `quota.free_max_active_keys` | RATELIMIT | `3` | 否 | 密钥创建校验 F6-7：`FREE_DEFAULT` 账户活跃 Key 上限 | 482 |
