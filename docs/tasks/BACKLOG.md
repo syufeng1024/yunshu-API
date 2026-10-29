@@ -18,9 +18,10 @@
 | G8 | 枚举归一口径：`usage_source` 输出 `UPSTREAM_API`、`protocol_in/out` 输出 `OPENAI_COMPAT`，而 TDS §5.1 要求小写 `upstream` / `openai` | T22 段2 遗留 #3 | 一致性 | 二选一：改日志产出侧，或在消费端做映射。必须定一处为准，否则按 TDS 聚合会落空 | ⬜ |
 | G9 | 未配 `VITE_API_BASE_URL` 时，调试台代码生成用 `window.location.origin` | T28 §8（原盘点结论修正） | 部署提醒 · **上线前必办** | **非代码缺陷**：`PlaygroundPage.tsx:174` 的 `apiBaseUrl()` 优先读环境变量，回退 origin 属正常设计。**上线清单必须加一条「配 `VITE_API_BASE_URL`」**，否则生成的示例代码域名会是错的。收口方式：在 `docs/ops-runbook.md` 上线检查清单固化该条，并在 `deploy/.env.stack` / `.env.example` 标注必填（2026-10-29 需求方确认：统一在「上线前」批量处理，不单独派卡） | ⬜ 上线前必办 |
 | G10 | SPA 路由切换不复位滚动：从已滚动的控制台页点侧栏进入 `/console/playground`，`scrollY` 会保留（实测 444），新页从中间开始显示 | T28 §9 遗留 #2 | 交互缺陷（非 P0） | ✅ T29 修复：`ScrollRestorer`（数据路由原生 `<ScrollRestoration />`，D-26）挂到三套 layout；生产包实测 `scrollY` 400→0，`goBack()` 恢复 400 | ✅ |
-| G11 | T13/A6 的「配置版本生效」只验证到 fund 层 hook 调用（测试自带 stub 做 `INCR cfg:ver`），真实 `boot.RouteSnapshot.Publish` 链路未独立验证 | T13 §12（G4 回执 A6） | 测试缺口 | 在 acceptance / T21 集成层补一条真实发布断言：改策略 → `SET cfg:snap:ROUTING` → `INCR cfg:ver` → `PUBLISH` 全链路可观测。**不是源码缺陷**，现有 hook 行为正确 | ⬜ |
-| G12 | 购买套餐会静默取消「次日生效」的提额：`plan_grant.go:186-191` 的 `UPDATE t_rate_limit_policy SET effective_to=now` 未限定 `effective_from <= now`，会把尚未生效的 `QUOTA_APPLY` 行直接关掉 | T13 §12（G4 回执遗留 #3） | **待产品确认** | 先确认是否符合预期：若用户当天提额、当天买套餐，提额是否应保留？确认后二选一：① SQL 加 `AND effective_from <= UTC_TIMESTAMP(3)`；② 明确写入 PRD 为预期行为。**确认前不动代码** | ⏸ |
+| G11 | T13/A6 的「配置版本生效」只验证到 fund 层 hook 调用（测试自带 stub 做 `INCR cfg:ver`），真实 `boot.RouteSnapshot.Publish` 链路未独立验证 | T13 §12（G4 回执 A6） | 测试缺口 | ✅ 2026-10-29 T30 段2（`a5dd6e9`）：`internal/acceptance/g11_publish_test.go` 走真链路，断言 `cfg:ver` N→N+1、快照含新渠道、`cfg:invalidate` 消息；测试侧无 `Incr` | ✅ |
+| G12 | 购买套餐会静默取消「次日生效」的提额：`plan_grant.go` 的 `UPDATE ... SET effective_to=now` 未限定 `effective_from <= now`，会把尚未生效的 `QUOTA_APPLY` 行直接关掉 | T13 §12（G4 回执遗留 #3） | **已确认的逻辑缺陷** | ✅ 2026-10-29 T30 段1（`239a233`）：关闭条件加 `effective_from <= now`（未来行一字不动）；在效提额改为「截断原行 + plan+1ms 续接行」，额度保留、三档升级；T1–T4 用例 + 反证验证 | ✅ |
 | G13 | **A 项（P0 布局空白带）四次测量均未复现**：PageDown 后上方约 500px 全白；`/pricing` 标题与卡片间约 90px 空白 | T28 §9 / T29 §8 | **待外部信息** | 四次独立测量（T28 ×2、T29 ×2，含生产包、1408×672 与 1408×585 两档）空白带均 ≤24px；已排除 G10 滚动残留这条解释。**等用户提供**：Chrome 版本、页面缩放是否 100%、是否从已滚动页面点进来、可否录屏。信息到位再开卡，禁止无证据加 padding | ⏸ |
+| G14 | `plan_grant.go` 捕获在效提额行时把 `daily_quota_micro` 直接 `Scan` 进 `int64`，历史数据若该列为 NULL 会 500 | T30 §8 遗留 #1 | 健壮性（低风险） | 改 `sql.NullInt64` 兜底 + 一条 NULL 用例；`EffectiveQuotaApply` 要求 approved 非空，实际触发概率极低 | ⬜ |
 
 ## 状态图例
 
