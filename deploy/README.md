@@ -153,6 +153,7 @@ project name 是 `yunshu-stack`，与开发用的 `yunshu` 不同，两套可以
 | `deploy/docker-compose.stack.debug.yml` | 排障覆盖：把 MySQL / Redis 绑到宿主回环 |
 | `deploy/.env.stack.example` | 环境模板，复制成 `deploy/.env.stack` 使用（后者已 gitignore） |
 | `scripts/stack.sh` | 一键入口（本机没有 GNU make，与 Makefile 的 `stack-*` 等价） |
+| `scripts/smoke.sh` | 部署后冒烟自检：容器/迁移/探针/前端路由/内网门逐条断言，失败非 0 退出 |
 | `.dockerignore` | 构建上下文排除 `.git` / `node_modules` / 密钥文件 |
 
 ## 起停
@@ -160,7 +161,7 @@ project name 是 `yunshu-stack`，与开发用的 `yunshu` 不同，两套可以
 ```bash
 scripts/stack.sh env      # 生成 deploy/.env.stack：随机密钥 + 自动挑空闲端口
 scripts/stack.sh up       # 构建镜像并启动，等全部 healthcheck 通过
-scripts/stack.sh smoke    # 冒烟：迁移版本 / 表数量 / 探针 / 站点
+scripts/stack.sh smoke    # 冒烟：迁移版本 / 表数量 / 探针 / 站点（转发 scripts/smoke.sh）
 scripts/stack.sh logs gatewayd
 scripts/stack.sh down     # 停服务，保留数据卷
 scripts/stack.sh reset    # 连数据卷一起删（需输入 yes 确认，不可恢复）

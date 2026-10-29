@@ -12,7 +12,7 @@
 #   scripts/stack.sh down           停止（保留数据卷）
 #   scripts/stack.sh ps             查看状态
 #   scripts/stack.sh logs [服务名]   跟踪日志
-#   scripts/stack.sh smoke          冒烟：迁移版本 / 表数量 / 探针 / 站点
+#   scripts/stack.sh smoke          冒烟：转发给 scripts/smoke.sh（有断言与退出码）
 #   scripts/stack.sh reset          停服务并删除数据卷（不可恢复，需二次确认）
 #
 # 端口：宿主 3306/6379 常被本机 MySQL/Redis 占用，所以存储层在本编排里
@@ -143,35 +143,9 @@ write_env() {
 }
 
 smoke() {
-  require_env
-  local pwd_ web gw ctl
-  pwd_="$(env_get MYSQL_ROOT_PASSWORD root)"
-  web="$(env_get WEB_PORT "$WEB_PORT_DEFAULT")"
-  gw="$(env_get GATEWAY_PORT "$GATEWAY_PORT_DEFAULT")"
-  ctl="$(env_get CONTROL_PORT "$CONTROL_PORT_DEFAULT")"
-
-  echo "--- 容器状态 ---"
-  compose ps
-
-  echo "--- 已应用迁移（最近 5 个）---"
-  docker exec yunshu-stack-mysql \
-    mysql -uroot -p"$pwd_" -N -e \
-    "SELECT version FROM yunshu.schema_migrations ORDER BY version DESC LIMIT 5" 2>/dev/null \
-    || echo "（查不到 schema_migrations，迁移可能未执行）"
-
-  echo "--- yunshu 表数量 ---"
-  docker exec yunshu-stack-mysql \
-    mysql -uroot -p"$pwd_" -N -e \
-    "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='yunshu'" 2>/dev/null \
-    || echo "（查询失败）"
-
-  echo "--- 探针 ---"
-  curl -s -o /dev/null -w "gatewayd /healthz %{http_code}\n" "http://127.0.0.1:${gw}/healthz" || true
-  curl -s -o /dev/null -w "gatewayd /readyz  %{http_code}\n" "http://127.0.0.1:${gw}/readyz"  || true
-  curl -s -o /dev/null -w "controld /healthz %{http_code}\n" "http://127.0.0.1:${ctl}/healthz" || true
-  curl -s -o /dev/null -w "controld /readyz  %{http_code}\n" "http://127.0.0.1:${ctl}/readyz"  || true
-  curl -s -o /dev/null -w "web      /          %{http_code}\n" "http://127.0.0.1:${web}/"        || true
-  curl -s -o /dev/null -w "web      /healthz   %{http_code}\n" "http://127.0.0.1:${web}/healthz" || true
+  # 断言与退出码统一放在 scripts/smoke.sh：它是可以挂进 CI 的版本，
+  # 这里只做转发，避免两套判据各自漂移。
+  exec bash "$ROOT/scripts/smoke.sh"
 }
 
 cmd="${1:-help}"

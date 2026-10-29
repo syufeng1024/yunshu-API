@@ -15,3 +15,11 @@ internal/platform/migrate/checksums.golden text eol=lf
 # CI-built image from the same commit. This is hardening, not correctness:
 # scripts/check-eol.sh deliberately leaves Lua out of its mandatory list.
 *.lua text eol=lf
+
+# Shell scripts must survive a Windows checkout. With core.autocrlf=true the
+# working tree gets CRLF, which turns the shebang into `#!/usr/bin/env bash\r`
+# and makes strict shells refuse to exec the file at all; scripts that happen
+# to run anyway still carry stray \r into every string comparison. The scripts
+# under scripts/ are the documented entry points (stack.sh / smoke.sh /
+# deploy.sh), so they are pinned rather than left to the local Git config.
+*.sh text eol=lf

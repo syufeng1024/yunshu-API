@@ -68,19 +68,11 @@ stack-ps:
 stack-logs:
 	$(STACK) logs -f --tail=100
 
-# 冒烟：迁移是否落库、三进程是否 ready、站点是否能吐出首页。
+# 冒烟：迁移是否落库、三进程是否 ready、站点是否出首页、内网门是否拦得住。
+# 断言与退出码都在 scripts/smoke.sh 里，这里只是对没有 bash 时的一层薄封装；
+# 两边共用同一份实现，避免 Makefile 与脚本各写一套判据。
 stack-smoke:
-	@echo "--- 迁移版本 ---"
-	@docker exec yunshu-stack-mysql mysql -uroot -p"$$(grep -E '^MYSQL_ROOT_PASSWORD=' deploy/.env.stack | cut -d= -f2)" -N \
-	  -e "SELECT version FROM yunshu.schema_migrations ORDER BY version DESC LIMIT 5" 2>/dev/null || echo "（迁移表查询失败）"
-	@echo "--- 表数量 ---"
-	@docker exec yunshu-stack-mysql mysql -uroot -p"$$(grep -E '^MYSQL_ROOT_PASSWORD=' deploy/.env.stack | cut -d= -f2)" -N \
-	  -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='yunshu'" 2>/dev/null
-	@echo "--- 就绪探针 ---"
-	@curl -s -o /dev/null -w "gatewayd /readyz %{http_code}\n" http://127.0.0.1:18080/readyz
-	@curl -s -o /dev/null -w "controld /readyz %{http_code}\n" http://127.0.0.1:18081/readyz
-	@curl -s -o /dev/null -w "web      /          %{http_code}\n" http://127.0.0.1:8088/
-	@curl -s -o /dev/null -w "web      /healthz   %{http_code}\n" http://127.0.0.1:8088/healthz
+	@bash scripts/smoke.sh
 
 ci: check
 	@bash scripts/lint.sh
