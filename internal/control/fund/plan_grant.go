@@ -155,18 +155,54 @@ func (s *Service) applyPlanTx(ctx context.Context, tx *sql.Tx, userID, planID in
 		return planGrant{}, apierr.New(apierr.CodeInternalError)
 	}
 
-	// Close the running row. It is history, not a delete: an auditor must be
-	// able to see which specs were in force before this purchase.
+	// A running QUOTA_APPLY row carries an entitlement the plan tier does not:
+	// the approved daily quota. Closing it with the other rows would silently
+	// drop that increase (G12), so capture its daily value and window first and
+	// reopen a continuation row below (D-27 #3). Only rows already in force are
+	// matched: a future row stays untouched and simply wins once its window
+	// begins (D-27 #1).
+	var (
+		quotaDaily int64
+		quotaTo    time.Time
+	)
+	hasQuota := false
+	err = tx.QueryRowContext(ctx, `
+		SELECT daily_quota_micro, effective_to
+		  FROM t_rate_limit_policy
+		 WHERE scope_type = 'USER' AND scope_id = ?
+		   AND source = 'QUOTA_APPLY'
+		   AND effective_from <= ?
+		   AND effective_to > ?
+		 ORDER BY effective_from DESC, id DESC
+		 LIMIT 1
+		 FOR UPDATE`, userID, now, now).
+		Scan(&quotaDaily, &quotaTo)
+	switch {
+	case err == nil:
+		hasQuota = true
+	case errors.Is(err, sql.ErrNoRows):
+	default:
+		s.logError(ctx, "fund_plan_grant_read_quota_failed: "+err.Error())
+		return planGrant{}, apierr.New(apierr.CodeInternalError)
+	}
+
+	// Close the running rows. It is history, not a delete: an auditor must be
+	// able to see which specs were in force before this purchase. The
+	// effective_from guard keeps future rows out of the close: without it a
+	// next-day QUOTA_APPLY row got effective_to = now < effective_from, a
+	// negative window that erased the approved increase.
 	if _, err := tx.ExecContext(ctx,
 		`UPDATE t_rate_limit_policy SET effective_to = ?, updated_at = ?
 		  WHERE scope_type = 'USER' AND scope_id = ?
+		    AND effective_from <= ?
 		    AND (effective_to IS NULL OR effective_to > ?)`,
-		now, now, userID, now); err != nil {
+		now, now, userID, now, now); err != nil {
 		s.logError(ctx, "fund_plan_grant_close_policy_failed: "+err.Error())
 		return planGrant{}, apierr.New(apierr.CodeInternalError)
 	}
 
 	inserted := false
+	var planFrom time.Time
 	var lastErr error
 	for attempt := 0; attempt < 5 && !inserted; attempt++ {
 		// uk_rlp_scope_active is (scope_type, scope_id, effective_from): two
@@ -182,6 +218,7 @@ func (s *Service) applyPlanTx(ctx context.Context, tx *sql.Tx, userID, planID in
 			dailyValue(grant.DailyQuotaMicro), from, effectiveTo, now, now)
 		if lastErr == nil {
 			inserted = true
+			planFrom = from
 			break
 		}
 		if !isDuplicateKey(lastErr) {
@@ -191,6 +228,43 @@ func (s *Service) applyPlanTx(ctx context.Context, tx *sql.Tx, userID, planID in
 	if !inserted {
 		s.logError(ctx, "fund_plan_grant_insert_policy_failed: "+errString(lastErr))
 		return planGrant{}, apierr.New(apierr.CodeInternalError)
+	}
+
+	// Reopen the approved quota window one millisecond after the plan row so
+	// the runtime's "latest active row wins" lookup keeps the daily quota while
+	// serving the newly purchased specs. The old row was closed at now above
+	// and stays visible as history; this row carries the same window end.
+	if hasQuota {
+		continued := false
+		var contErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			from := planFrom.Add(time.Duration(attempt+1) * time.Millisecond)
+			if !quotaTo.After(from) {
+				// The approved window ends inside the retry span; there is no
+				// room for a continuation and the plan row takes over.
+				continued = true
+				break
+			}
+			_, contErr = tx.ExecContext(ctx, `
+				INSERT INTO t_rate_limit_policy
+					(scope_type, scope_id, source, rpm, tpm, concurrency_quota,
+					 daily_quota_micro, effective_from, effective_to,
+					 fallback_policy_id, created_at, updated_at)
+				VALUES ('USER', ?, 'QUOTA_APPLY', ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+				userID, grant.RPM, grant.TPM, grant.Concurrency, quotaDaily,
+				from, quotaTo, now, now)
+			if contErr == nil {
+				continued = true
+				break
+			}
+			if !isDuplicateKey(contErr) {
+				break
+			}
+		}
+		if !continued {
+			s.logError(ctx, "fund_plan_grant_continue_quota_failed: "+errString(contErr))
+			return planGrant{}, apierr.New(apierr.CodeInternalError)
+		}
 	}
 	return grant, nil
 }
