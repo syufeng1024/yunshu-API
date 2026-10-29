@@ -45,7 +45,7 @@
 | request_in_flight | 409 | `TestA10ReplayWaitAndReuse` | ✅ |
 | idempotency_key_reused | 409 | `TestMySQLKeyReusedForDifferentBody` | ✅ |
 | idempotent_replay_unsupported | 409 | `TestIdempotentReplayWithoutStoredBodyIs409`（>64KB 截断见 `TestLargeUnaryResponseIsNotStoredForReplay`） | ✅ |
-| duplicate_request_in_flight | 409 | 无 | 🟨 待 T41（功能未接线：idem.duplicate_window_seconds 无读取点） |
+| duplicate_request_in_flight | 409 | `TestAutoDedupStreamHitIs409`、`TestAutoDedupInFlightDuplicateIs409` | ✅ T41 补齐（P08 对未带 `Idempotency-Key` 的请求自动去重，流式命中/在途重复均返回本码） |
 | duplicate_request_id | 409 | 无 | ⬛ 登记不实现（D-32） |
 | no_available_upstream | 503 | `TestPipelineShortCircuitsAndNamesFailStage` | ✅ |
 | no_available_upstream_for_group | 503 | `TestRouterGroupEmptyUsesDistinctCode` | ✅ |
@@ -76,9 +76,9 @@
 | config_item_not_found | 404 | 无 | ⬛ 登记不实现（D-33） |
 | config_value_invalid | 400 | `TestConfigWhitelist` | ✅ |
 | account_rpm_exceeded | 429 | 无（PRD E.1.10 登记但不实现） | ⬛ 登记不实现（PRD E.1.10 已裁定） |
-| content_policy_violation | 403 | 无 | 🟨 待 T42 / OI-03（需先定规则源） |
+| content_policy_violation | 403 | `TestContentPolicyHitIs403WithEvidenceAndNoMoney`、`TestT42Segment2ExternalBlockIsRecorded` | ✅ T42 补齐（P06.5 关键词库 + 可配置外部适配器，命中写 `t_content_policy_hit` 并 403） |
 
-结论统计：`✅ 59` + `⬛ 4` + `🟨 2` = **65 行**（`⚠️ 0`）。`✅` 含 T39 段 1 补上生产者的 `upstream_key_unavailable` 与段 2 补齐触发用例的 9 个码；`⬛` 为 `account_frozen` / `duplicate_request_id` / `config_item_not_found` / `account_rpm_exceeded`；`🟨` 为 `duplicate_request_in_flight` / `content_policy_violation`。
+结论统计：`✅ 61` + `⬛ 4` + `🟨 0` = **65 行**（`⚠️ 0`）。`✅` 含 T39 段 1 补上生产者的 `upstream_key_unavailable`、段 2 补齐触发用例的 9 个码，以及 T41（`duplicate_request_in_flight`）、T42（`content_policy_violation`）补上生产者的 2 个码；`⬛` 为 `account_frozen` / `duplicate_request_id` / `config_item_not_found` / `account_rpm_exceeded`；`🟨` 已清零。口径仍为 65（PRD E.1）+ 11（实现期新增）= 76，见文末附录。
 
 ## 附录：实现期新增、不在 PRD E.1 的 11 码
 

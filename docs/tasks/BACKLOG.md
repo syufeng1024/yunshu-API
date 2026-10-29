@@ -48,5 +48,12 @@
 
 | # | 项 | 验收方式 | 状态 |
 | :--- | :--- | :--- | :--- |
-| G9 | 生产构建注入 `VITE_API_BASE_URL`（否则调试台生成的示例代码域名回退成 `window.location.origin`） | 生产包 grep 构建产物中存在该域名；打开调试台「查看代码」核对 base_url | ⬜ |
+| **RB-1** | 生产构建注入 `VITE_API_BASE_URL`（否则调试台生成的示例代码域名回退成 `window.location.origin`） | ① 在 `deploy/.env.stack` 或 CI 构建参数注入生产 API 域名；② 生产包 grep 构建产物中存在该域名 | ⬜ 未做（OI-12 / G9） |
+| **RB-2** | **用生产构建产物验证调试台「查看代码」** | 打开 `/console/playground` →「查看代码」，确认示例代码的 base_url 是生产 API 域名，**不是** `window.location.origin` | ⬜ 未做（OI-12） |
+| **RB-3** | 内容安全外部适配器的数据处理协议（仅启用 `GW_POLICY_ENDPOINT` 时需要） | 确认允许把用户请求文本发往该供应商，并在隐私政策写明；未启用则跳过（关键词库仍生效） | ⬜ 待定 |
+| **RB-4** | `GW_POLICY_ENDPOINT` / `GW_POLICY_TOKEN` / `GW_POLICY_TIMEOUT_MS` | 未启用留空（网关不构造适配器）；启用则注入，token 不得进日志 | ⬜ 待定 |
+| **RB-5** | `CHANNEL_KEY_KEK` 与 DB / Redis 凭据 | 由部署环境注入，不落仓库、不进 argv | ⬜ 待定 |
+| **RB-6** | 迁移与行尾校验 | `migrate status` 到 0026、`checksums.golden` 与仓库一致、`bash scripts/check-eol.sh` 退出 0 | ⬜ 待定 |
+
+> **RB-1 / RB-2 是门槛 6 的唯一阻塞项（OI-12）**：两者都打勾后八条门槛齐备，方可将 Go/No-Go 改为 Go。逐条视图同步在 `docs/tasks/delivery/go-live.md` §四。
 
