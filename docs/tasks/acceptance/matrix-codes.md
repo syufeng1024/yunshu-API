@@ -14,7 +14,7 @@
 | :--- | :--- | :--- | :--- |
 | invalid_api_key | 401 | `TestInvalidAPIKeyAndKeyExpiredAreDistinct` | ✅ |
 | key_expired | 401 | `TestInvalidAPIKeyAndKeyExpiredAreDistinct` | ✅ |
-| key_disabled | 403 | `POST /v1/chat/completions`（`internal/gw/p05_auth.go`，无自动化用例） | ⚠️ |
+| key_disabled | 403 | `TestKeyDisabledIs403AndDistinctFromInvalidAndExpired` | ✅ |
 | account_disabled | 403 | `TestDisableReasonIsOperatorOnly` | ✅ |
 | account_frozen | 403 | 无 | ⬛ 登记不实现（D-31） |
 | ip_not_allowed | 403 | `TestInternalPipelineUsesInjectedKeyIDForP06` | ✅ |
@@ -35,7 +35,7 @@
 | request_read_timeout | 408 | `TestA12BodyReadTimeoutIs408` | ✅ |
 | unknown_endpoint | 404 | `TestP03UnknownPathAndWrongMethod` | ✅ |
 | insufficient_credits | 402 | `TestGWT_G02_AdmissionUsesRawEstimate` | ✅ |
-| account_frozen_due_to_overdraft | 402 | `POST /v1/chat/completions`（`internal/apierr/quota402.go`，无自动化用例） | ⚠️ |
+| account_frozen_due_to_overdraft | 402 | `TestLoginFrozenDueToOverdraftIs402` | ✅ |
 | price_not_configured | 500 | `TestP09RejectsEndpointModelTypeMismatch` | ✅ |
 | rpm_limit_exceeded | 429 | `TestGWT_G10_429Contract` | ✅ |
 | tpm_limit_exceeded | 429 | `TestA2FourDimensionsIndividually` | ✅ |
@@ -44,7 +44,7 @@
 | rate_limiter_unavailable | 503 | `TestServerRateLimiterUnavailableIs503` | ✅ |
 | request_in_flight | 409 | `TestA10ReplayWaitAndReuse` | ✅ |
 | idempotency_key_reused | 409 | `TestMySQLKeyReusedForDifferentBody` | ✅ |
-| idempotent_replay_unsupported | 409 | `POST /v1/chat/completions`（`internal/gw/server.go`，幂等重放正文 >64KB，无自动化用例） | ⚠️ |
+| idempotent_replay_unsupported | 409 | `TestIdempotentReplayWithoutStoredBodyIs409`（>64KB 截断见 `TestLargeUnaryResponseIsNotStoredForReplay`） | ✅ |
 | duplicate_request_in_flight | 409 | 无 | 🟨 待 T41（功能未接线：idem.duplicate_window_seconds 无读取点） |
 | duplicate_request_id | 409 | 无 | ⬛ 登记不实现（D-32） |
 | no_available_upstream | 503 | `TestPipelineShortCircuitsAndNamesFailStage` | ✅ |
@@ -52,21 +52,21 @@
 | upstream_capacity_exceeded | 503 | `TestA3Upstream429Becomes503WithoutRetry` | ✅ |
 | upstream_timeout | 504 | `TestA6BudgetBelowThresholdDoesNotRetry` | ✅ |
 | upstream_dns_failure | 502 | `TestA5DNSFailureIsNotRetried` | ✅ |
-| upstream_tls_failure | 502 | `POST /v1/chat/completions`（`internal/dispatch/dispatch.go`，上游 TLS 失败映射，无自动化用例） | ⚠️ |
-| upstream_auth_failed | 502 | `POST /v1/chat/completions`（`internal/dispatch/dispatch.go`，上游鉴权失败映射，无自动化用例） | ⚠️ |
-| upstream_model_not_found | 502 | `POST /v1/chat/completions`（`internal/dispatch/dispatch.go`，上游模型不存在映射，无自动化用例） | ⚠️ |
+| upstream_tls_failure | 502 | `TestUpstreamTLSFailureIs502WithoutRetry` | ✅ |
+| upstream_auth_failed | 502 | `TestUpstreamAuthFailedMaps401And403To502` | ✅ |
+| upstream_model_not_found | 502 | `TestUpstreamModelNotFoundMaps404To502` | ✅ |
 | upstream_invalid_request | 400 | `TestUpstream400MapsTo400InvalidRequest` | ✅ |
 | upstream_invalid_response | 502 | `TestMalformedBodyIs502WithoutRetry` | ✅ |
 | upstream_empty_response | 502 | `TestEmptyChoicesIs502AndNotBilled` | ✅ |
 | upstream_key_unavailable | 503 | `TestUpstreamKeyUndecryptableIs503UpstreamKeyUnavailable` | ✅ |
 | upstream_all_failed | 502 | `TestPlaygroundGatewayUnreachableIs502` | ✅ |
-| client_aborted | 499 | `POST /v1/chat/completions`（`internal/dispatch/dispatch.go`，客户端断开映射，无自动化用例） | ⚠️ |
-| convert_failed | 500 | `POST /v1/chat/completions`（`internal/dispatch/dispatch.go`，协议转换失败，无自动化用例） | ⚠️ |
+| client_aborted | 499 | `TestClientAbortedMarksUsageRowAndSettle` | ✅ |
+| convert_failed | 500 | `TestConvertFailedWhenBaseURLSchemeIsUnsupported` / `TestConvertFailedWhenResponseHasNoClientRepresentation` | ✅ |
 | settlement_unavailable | 503 | `TestSettlementFailureAnswers503` | ✅ |
 | backpressure_stream_rejected | 503 | `TestA9BackpressureThresholds` | ✅ |
 | backpressure_rejected | 503 | `TestA6GatewayRejectsNewRequestOnRealBacklog` | ✅ |
 | config_unavailable | 503 | `TestMissingChannelPayloadIs503ConfigUnavailable` | ✅ |
-| auth_unavailable | 503 | `POST /api/v1/auth/login`（`internal/control/auth/login.go`，会话/密钥后端不可用，无自动化用例） | ⚠️ |
+| auth_unavailable | 503 | `TestLoginAuthUnavailableWhenDependenciesFail` | ✅ |
 | internal_error | 500 | `TestRecoverWritesInternalErrorWithoutStack` | ✅ |
 | key_not_found | 404 | `TestForeignKeyIsNotFound` | ✅ |
 | account_not_verified | 403 | `TestGWT_G07_InvoiceFlow` | ✅ |
@@ -78,7 +78,7 @@
 | account_rpm_exceeded | 429 | 无（PRD E.1.10 登记但不实现） | ⬛ 登记不实现（PRD E.1.10 已裁定） |
 | content_policy_violation | 403 | 无 | 🟨 待 T42 / OI-03（需先定规则源） |
 
-结论统计：`✅ 50` + `⚠️ 9` + `⬛ 4` + `🟨 2` = **65 行**。`✅` 含 T39 补上生产者的 `upstream_key_unavailable`；`⬛` 为 `account_frozen` / `duplicate_request_id` / `config_item_not_found` / `account_rpm_exceeded`；`🟨` 为 `duplicate_request_in_flight` / `content_policy_violation`。
+结论统计：`✅ 59` + `⬛ 4` + `🟨 2` = **65 行**（`⚠️ 0`）。`✅` 含 T39 段 1 补上生产者的 `upstream_key_unavailable` 与段 2 补齐触发用例的 9 个码；`⬛` 为 `account_frozen` / `duplicate_request_id` / `config_item_not_found` / `account_rpm_exceeded`；`🟨` 为 `duplicate_request_in_flight` / `content_policy_violation`。
 
 ## 附录：实现期新增、不在 PRD E.1 的 11 码
 
@@ -107,4 +107,4 @@ $ grep -cE '^\s+Code: Code[A-Za-z0-9]+,' internal/apierr/codes.go
 76
 ```
 
-断言结论：PRD E.1 枚举行数 == 65；`apierr` 常量数 == 76；差值 11 已在附录逐条列明。T23 A4 已按 ERR-05 改写为「65 行（PRD E.1 基线）+ 附录 11 码（实现期新增）== `apierr` 76 常量 / 76 spec」。结论分布：`✅ 50 + ⚠️ 9 + ⬛ 4 + 🟨 2 = 65`；`⬛` 三条对应 `deviations.md` D-31 / D-32 / D-33，`account_rpm_exceeded` 无偏差登记（PRD E.1.10 已裁定），`🟨` 两条分别待 T41 / T42。
+断言结论：PRD E.1 枚举行数 == 65；`apierr` 常量数 == 76；差值 11 已在附录逐条列明。T23 A4 已按 ERR-05 改写为「65 行（PRD E.1 基线）+ 附录 11 码（实现期新增）== `apierr` 76 常量 / 76 spec」。结论分布：`✅ 59 + ⬛ 4 + 🟨 2 = 65`（`⚠️ 0`）；`⬛` 三条对应 `deviations.md` D-31 / D-32 / D-33，`account_rpm_exceeded` 无偏差登记（PRD E.1.10 已裁定），`🟨` 两条分别待 T41 / T42。

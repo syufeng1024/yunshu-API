@@ -413,6 +413,7 @@ func (d *Dispatcher) try(ctx context.Context, w http.ResponseWriter, c *gw.Ctx, 
 	start := time.Now()
 	protoName, _ := protocolName(t.ch.ProtocolID)
 	out := outcome{attempt: Attempt{
+		AttemptIndex:    attemptNo,
 		RequestID:       c.RequestID,
 		UserID:          c.Auth.UserID,
 		ModelID:         c.Model.ID,
@@ -473,7 +474,7 @@ func (d *Dispatcher) try(ctx context.Context, w http.ResponseWriter, c *gw.Ctx, 
 			out.attempt.ErrorClass = ClassClientAbort
 			return out
 		}
-		out.class, out.apiErr = classifyTransportError(err)
+		out.class, out.apiErr = classifyTransportError(err, attemptNo)
 		out.attempt.ErrorClass = out.class
 		out.attempt.Phase = "P15"
 		out.attempt.UpstreamMsg = sanitizeUpstreamMsg(err.Error(), plain)
@@ -750,7 +751,13 @@ func (t *traceTimes) trace() *httptrace.ClientTrace {
 	}
 }
 
-func classifyTransportError(err error) (string, *apierr.APIError) {
+// classifyTransportError maps a transport failure to its class and outward code.
+//
+// attemptNo is required, not cosmetic: both upstream_timeout and
+// upstream_all_failed carry "%d 次" in their message template (apierr spec
+// E-09). Building them with New instead of Newf leaves a literal "%d" in the
+// user-facing body — observed 2026-10-29 in a T39 counter-proof.
+func classifyTransportError(err error, attemptNo int) (string, *apierr.APIError) {
 	var dnsErr *net.DNSError
 	if errors.As(err, &dnsErr) {
 		return ClassDNS, apierr.New(apierr.CodeUpstreamDNSFailure)
@@ -760,15 +767,15 @@ func classifyTransportError(err error) (string, *apierr.APIError) {
 	}
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
-		return ClassTimeout, apierr.New(apierr.CodeUpstreamTimeout)
+		return ClassTimeout, apierr.Newf(apierr.CodeUpstreamTimeout, attemptNo)
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return ClassTimeout, apierr.New(apierr.CodeUpstreamTimeout)
+		return ClassTimeout, apierr.Newf(apierr.CodeUpstreamTimeout, attemptNo)
 	}
 	if errors.Is(err, context.Canceled) {
 		return ClassClientAbort, apierr.New(apierr.CodeClientAborted)
 	}
-	return ClassConnectRefused, apierr.New(apierr.CodeUpstreamAllFailed)
+	return ClassConnectRefused, apierr.Newf(apierr.CodeUpstreamAllFailed, attemptNo)
 }
 
 func upstreamStatusError(status, attempts int) *apierr.APIError {
@@ -823,7 +830,7 @@ func (d *Dispatcher) unaryAttempt(ctx context.Context, w http.ResponseWriter, c 
 	out.attempt.BytesOut = int64(len(body))
 	out.attempt.TotalMS = time.Since(start).Milliseconds()
 	if err != nil {
-		out.class, out.apiErr = classifyTransportError(err)
+		out.class, out.apiErr = classifyTransportError(err, out.attempt.AttemptIndex)
 		out.attempt.ErrorClass = out.class
 		return out
 	}
