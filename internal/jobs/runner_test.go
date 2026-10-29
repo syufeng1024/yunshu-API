@@ -10,6 +10,7 @@ import (
 )
 
 var wantTasks = []string{
+	"daily_quota",
 	"daily_reconcile",
 	"expire_batch",
 	"prehold_release",
@@ -44,12 +45,14 @@ func TestTaskTableWiring(t *testing.T) {
 			t.Fatalf("task %s must set exactly one of Period/Cron", name)
 		}
 	}
-	// Daily tasks are CST-local: 03:00 reconcile, 03:10 purge, 00:05 expire, 00:20 rollup.
+	// Daily tasks are CST-local: 03:00 reconcile, 03:10 purge, 00:05 expire,
+	// 00:20 rollup, 00:30 daily quota (after rollup, before reconcile's R-05).
 	for name, want := range map[string]string{
 		"daily_reconcile": "0 0 3 * * *",
 		"purge_log":       "0 10 3 * * *",
 		"expire_batch":    "0 5 0 * * *",
 		"rollup":          "0 20 0 * * *",
+		"daily_quota":     "0 30 0 * * *",
 	} {
 		task, _ := reg.Lookup(name)
 		if task.Cron != want {

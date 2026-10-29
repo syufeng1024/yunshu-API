@@ -1,8 +1,9 @@
 // Command jobsd is the background-task process.
 //
 // It exposes no HTTP port. It runs the T09 task table: hanging-prehold
-// recovery, daily reconciliation, BONUS expiry, log retention and metric
-// rollup. Every task has a side effect and therefore runs only while this
+// recovery, daily reconciliation, BONUS expiry, log retention, metric
+// rollup and the daily quota snapshot. Every task has a side effect and
+// therefore runs only while this
 // process holds its t_job_lock lease. The settlement consumer remains on every
 // replica (D-18): FOR UPDATE SKIP LOCKED plus request_id idempotency makes that
 // safe and keeps settlement available when the leader is down.
@@ -177,6 +178,8 @@ func main() {
 	purge := jobs.NewPurgeLog(mainDB, logger, clock.Real{})
 	rollup := jobs.NewRollup(mainDB, logger, clock.Real{})
 	rollup.Location = cst
+	dailyQuota := jobs.NewDailyQuota(mainDB, logger, clock.Real{})
+	dailyQuota.Location = cst
 
 	runner := &jobs.Runner{
 		Registry: registry,
@@ -222,6 +225,13 @@ func main() {
 			},
 			"rollup": func(ctx context.Context, scheduled time.Time) error {
 				_, err := rollup.Run(ctx, previousDay(scheduled))
+				return err
+			},
+			// RunRecent always rebuilds yesterday and repairs up to
+			// DefaultQuotaBackfillDays earlier days with missing rows. A single
+			// date can be repaired by calling DailyQuota.Run with that day.
+			"daily_quota": func(ctx context.Context, _ time.Time) error {
+				_, err := dailyQuota.RunRecent(ctx)
 				return err
 			},
 		},

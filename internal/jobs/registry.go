@@ -146,7 +146,8 @@ func (r *Registry) Len() int {
 //
 // Cron fields are second minute hour day-of-month month day-of-week, evaluated
 // in UTC+8. purge_log is offset from daily_reconcile so the two heavy scans do
-// not overlap.
+// not overlap. daily_quota runs after rollup and before daily_reconcile: R-05
+// reads the rows it writes, so it must be done by 03:00.
 func TaskTable() []Task {
 	return []Task{
 		{Name: "prehold_release", Period: 60 * time.Second, RequiresLeader: true, Timeout: 5 * time.Minute},
@@ -154,5 +155,6 @@ func TaskTable() []Task {
 		{Name: "expire_batch", Cron: "0 5 0 * * *", RequiresLeader: true, Timeout: 10 * time.Minute},
 		{Name: "purge_log", Cron: "0 10 3 * * *", RequiresLeader: true, Timeout: 60 * time.Minute},
 		{Name: "rollup", Cron: "0 20 0 * * *", RequiresLeader: true, Timeout: 30 * time.Minute},
+		{Name: "daily_quota", Cron: "0 30 0 * * *", RequiresLeader: true, Timeout: 30 * time.Minute},
 	}
 }
