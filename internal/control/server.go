@@ -310,6 +310,12 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/channels/{id}/disable", s.authed(mw.PermChannelWrite, s.ops.DisableChannel))
 	mux.Handle("DELETE /api/admin/channels/{id}", s.authed(mw.PermChannelWrite, s.ops.DeleteChannel))
 
+	// T40-c: manual upstream bill import (OI-15, MANUAL_UPLOAD). channel.write is
+	// the narrowest existing capability that covers writing a channel's billing
+	// data; FINANCE holds audit.read but not channel.write, and no read-only
+	// permission would be enough for a write.
+	mux.Handle("POST /api/admin/upstream-bills/import", s.authed(mw.PermChannelWrite, s.ops.ImportUpstreamBills))
+
 	// Operator model master data. Reads use admin.read because this view
 	// includes upstream cost prices; model.read stays the console catalog's
 	// permission.
