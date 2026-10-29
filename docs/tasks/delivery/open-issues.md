@@ -1,0 +1,31 @@
+# 未解决项（open issues）
+
+判定依据只有两条：**是否影响资金正确性**、**是否影响上线必选路径**（T23 §5.6 的八条门槛）。两条都不命中的，记「否」并保留跟踪；「未验证」不折算为通过。
+
+| 编号 | 描述 | 影响 | 建议 | 责任方 | 是否阻塞上线 |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| OI-01 | F4-3 一键导入无后端：`POST /api/v1/integrations/import-credentials` 未实现（F4-2 用例断言 404），`/api/public/integration-links` 恒返空，后台无深链模板存储与运营配置面。见 `matrix-82.md` F4-3、F4-2 | 登录用户点一键导入无法闭环；后台改参数名无法执行；F4-3 判 `❌`，构成 82 项门槛的 2 个 `❌` 之一 | 先定「一次一密临时 Key」或「粘贴已有 Key」的产品方案，再补模板存储、运营配置与导入端点；在此之前 PRD D.3 标注 V1.0 不实现 | 后端实现方 + 需求方（产品方案） | **是**（上线必选路径：82 项 `❌ == 0` 不成立） |
+| OI-02 | F14-6 专属渠道停用后 U1 回落 public，但 `fallback_allowed` 仅落库并进快照，路由与派发均不读取；回落无日志计数，也无对应断言。见 `matrix-82.md` F14-6 | 「未见静默回落」无法证明；`❌` 构成 82 项门槛的另一个 `❌` | 在 P12 回落分支写结构化日志（`fallback_from` / `fallback_to` / `reason`）并计数，补一条断言「停用专属渠道后至少 1 条回落日志」 | 网关后端 | **是**（上线必选路径：82 项 `❌ == 0` 不成立；降级不可观测） |
+| OI-03 | `content_policy_violation` 无生产者：`apierr` 有 spec（403），网关 P04/§8.4 的入口拦截钩子未接线；F19-3 的用例靠测试预置 `t_content_policy_hit` 通过。见 `matrix-codes.md` content_policy_violation | PRD E.1 承诺的内容安全拦截在运行时不会触发；F19-3 的申诉入口在生产无真实来源 | 按 PRD §10.1 在网关入口接内容安全钩子，命中写 `t_content_policy_hit` 并返回 403；补 `TestCI` 级用例 | 网关 + 风控后端 | **是**（上线必选路径：65 码断言不通过；F19-3 无真实数据源） |
+| OI-04 | F16-5 / G-06 分组倍率保存不做毛利地板校验：地板只在价格写入 `pricing.go:838` 执行，`group.go:119` 只校验倍率语法；§6.4 的 `plan_min_margin_bp` / `max_bonus_ratio_bp` 四步公式无实现与后台入口；`internal` 分组改倍率无二次确认。见 `matrix-82.md` F16-5、`matrix-gwt.md` G-06 | 已配价模型可被事后调低分组倍率绕过地板，成交价低于成本，直接产生负毛利 | 在分组写入路径复用同一整数交叉相乘地板校验；返回差额与模型清单；补 `internal` 分组二次确认；套餐分支单独立项 | 定价后端 | **是**（资金正确性：可配置出负毛利） |
+| OI-05 | F20-4 提额通过不写站内通知（仅驳回写 `QUOTA_AUDIT`）；发票 / 退款邮件通道是 nil Mailer 占位，仓库无 SMTP 客户端，实际不发邮件。见 `matrix-82.md` F20-4 | 用户不知道提额已通过；发票开具、退款成功/失败无邮件触达，客服量上升 | 先补提额通过的站内通知（不依赖供应商）；邮件通道待需求方定供应商后接 SMTP/API | 资金后端 + 需求方（邮件供应商） | **是**（上线必选路径：PRD F20-4 明确要求通知；非资金错误） |
+| OI-06 | 6 个错误码无生产者（另 1 个 `content_policy_violation` 见 OI-03）：`account_frozen`、`duplicate_request_in_flight`、`duplicate_request_id`、`upstream_key_unavailable`、`config_item_not_found`、`account_rpm_exceeded`。见 `matrix-codes.md` | 65 码断言的 `❌` 共 7 个；其中 `account_rpm_exceeded` 已由 PRD E.1.10 裁定「登记但不实现」，其余 6 个是契约承诺但无触发路径 | 逐码裁定：能实现的补生产者（账号冻结、幂等冲突族、渠道 Key 不可用、配置项不存在）；`account_rpm_exceeded` 按「登记不实现」从 65 码通过断言中单列，不补假生产者 | 后端实现方 + 交付总监（逐码裁定） | **是**（上线必选路径：65 码断言不通过） |
+| OI-07 | 9 个码有生产者但无自动化触发用例：`key_disabled`、`account_frozen_due_to_overdraft`、`idempotent_replay_unsupported`、`upstream_tls_failure`、`upstream_auth_failed`、`upstream_model_not_found`、`client_aborted`、`convert_failed`、`auth_unavailable`。见 `matrix-codes.md` | 这些码的 403/402/409/502/499/500/503 映射回归不可发现；`⚠️` 计数无法清零 | 用假上游（`internal/fakeupstream`）构造 TLS / 401 / 模型不存在 / 断连四类；用可控依赖故障构造 `auth_unavailable`；其余补表驱动用例 | 测试 + 后端 | **是**（验收门槛：65 码 `⚠️` 未清零） |
+| OI-08 | 错误码口径未回写：PRD E.1 = 65，TDS §6.2 计数段 = 47，实现 = 76。见 `errata.md` ERR-05 | T23 A4「65 行 == `apierr` 常量数」在 76 码下无法成立；按任一方核对都会得到「不一致」 | 按 ERR-05 裁决回写：PRD E.1 保留 65 基线 + 11 码附录；TDS §6.2 的 47 计数段作废；T23 A4 改为「PRD 基线 65 + 已登记新增 11 == 76」 | 交付总监 + 文档 | **是**（验收门槛：枚举行数一致） |
+| OI-09 | 对账与备份恢复演练未做：`scripts/backup.sh` / `restore.sh` 与 `docs/dr-plan.md` 不存在（T22 段 4 未开始）；8 条对账断言只在单测 / 新库上通过，无「全量恢复后 0 差异」演练记录。见 T22 §A7、T23 §5.6 第 4/7 条 | 门槛 4、7 无证据；RPO ≤ 5 分钟 / RTO ≤ 1 小时未验证 | 完成 T22 段 4：备份 / 恢复脚本、DR 计划、8 断言恢复后校验；在预发环境跑一次全量恢复并回填报告 | 运维 + 后端 | **是**（验收门槛：对账演练与备份恢复演练均未通过） |
+| OI-10 | CI 全绿无本轮证据：`.github/workflows/ci.yml` 有 static / unit / migrations / coverage / e2e / acceptance 六个 job；本轮 `source scripts/test-env.sh && go test ./internal/acceptance -run TestCI_` 在迁移 `0022_request_body` 处失败（`Table 't_request_body' already exists`），原因是共享测试库 `yunshu_test` 有表无 `schema_migrations` 行，不是代码断言失败。见 T23 §5.6 第 5 条 | 门槛 5 无法判绿；共享库漂移会让本地与 CI 结论分叉 | 在干净库上重建并复跑 14 条 CI；CI 使用独立 service（现配置已如此），把本次运行链接/日志回填 `go-live.md` | 测试 / CI 维护 | **是**（验收门槛：14 条 CI 未取得全绿证据） |
+| OI-11 | G-13：A 项布局空白带四次测量未复现（PageDown 后上方约 500px 全白；`/pricing` 标题与卡片间约 90px）。见 `BACKLOG.md` G13、T28 §9、T29 §8 | 无法定位根因，无法判断是否为环境 / 缩放 / 浏览器版本相关 | 等需求方提供 Chrome 版本、页面缩放、进入路径、录屏；信息到位前禁止加 padding 盲改 | 需求方（环境信息） | **否**（无证据、非资金；但不得当作已修复） |
+| OI-12 | G9 生产构建未注入 `VITE_API_BASE_URL` 时，调试台「查看代码」的 base_url 回退到 `window.location.origin`。见 `BACKLOG.md` G9、``PlaygroundPage.tsx:174`` | 生成的示例代码域名错误，用户复制后调不通 | 上线前在 `deploy/.env.stack` / CI 构建参数注入生产 API 域名，并在上线检查清单打勾 | 运维 / 发布 | **是**（上线必选路径：发布配置项，非代码缺陷） |
+
+## 与 Go/No-Go 门槛的对应
+
+| 门槛 | 未解决项 |
+| :--- | :--- |
+| 82 项 `❌ == 0`、`⚠️ ≤ 8` | OI-01、OI-02；`⚠️` 14 条见 `deviations.md` |
+| G-01–G-12 全 `✅` | `deviations.md` D-05、D-06、D-08、D-09、D-11、D-12、D-21 |
+| 65 码断言通过且枚举行数一致 | OI-03、OI-06、OI-07、OI-08 |
+| 8 条对账断言演练 0 差异 | OI-09 |
+| 14 条 CI 门禁全绿 | OI-10 |
+| 无 P0 级开放问题 | OI-01、OI-02、OI-04（资金）、OI-05 |
+| 备份恢复演练通过 | OI-09 |
+| 内部 SLO 未出现在对外页面 | 无（本轮 grep 无命中，门槛通过） |

@@ -160,7 +160,7 @@
 | [T29](T29-SPA路由滚动复位.md) | SPA 路由滚动复位与 A 项布局收口（G10） | T28 | `web/src/router.tsx`、`layouts/`、`components/` | ✅ 通过（G10 修复；A 非同根因，转 G13） |
 | [T30](T30-提额衔接与配置版本断言.md) | G12 提额衔接修复 + G11 配置版本集成断言 | T13 | `internal/control/fund/`、`internal/acceptance/` | ✅ 通过（`239a233` / `a5dd6e9`） |
 | [T22](T22-部署与可观测.md) | 部署·可观测·灰度回滚 | T09,T21 | `deploy/`、`internal/obs/` | 🟨 段 1–3 ✅（指标 / 日志+trace / 容器化+灰度）；段 4 未开始 |
-| [T23](T23-验收对照与交付.md) | 验收对照与交付（82 项功能点） | 全部 | `docs/tasks/acceptance/` | ⬜ |
+| [T23](T23-验收对照与交付.md) | 验收对照与交付（82 项功能点） | 全部 | `docs/tasks/acceptance/`、`docs/tasks/delivery/` | ❌ **No-Go**（2026-10-29，八条门槛 1/8 通过） |
 
 ---
 
@@ -261,6 +261,7 @@ flowchart LR
 | T28 | 2026-10-29 | 2026-10-29 | 🟨 **有条件通过** | 4 项（A 未复现待环境信息） | 实测缺陷 5 项：B（首页 `--`/筹备中，D-24）、C（`copyHeaders` 单值头改 Set，curl 各 1 条）、D（`04-channel.sql` + keytool 加密，库内 `v1:`/107B，错误前移到 P15 502）、E（region DOMESTIC + schema 说明）全部通过；**A 布局空白带在 1408×672 下未复现**（Playwright 复测 `elementFromPoint=TEXTAREA`、pricing 区块间距全 0），按硬约束未盲改源码 |
 | T29 | 2026-10-29 | 2026-10-29 | ✅ **通过** | 1 项（A 项转 G13） | G10：三套 layout 挂 `<ScrollRestorer />`（数据路由原生 `ScrollRestoration`，D-26），生产包实测「滚 400 → 点导航 → `scrollY=0`，`goBack()` → 400」；A 项结论：**与 G10 非同根因**，8 组「残留 scrollY + PageDown」空白 0–13px，四次测量均未复现 |
 | T30 | 2026-10-29 | 2026-10-29 | ✅ **通过**（两段一次过） | 2 项（NULL daily 兜底 → G14） | G12：关闭条件补 `effective_from <= now`，未来提额行不再被抹平；在效提额以「plan+1ms 续接行」保留额度并升级规格（我为 T1/T3 做了反证，放开守卫即红）。G11：新增 acceptance 集成断言，真 `Publish` → `cfg:ver` N→N+1、快照含新渠道、`cfg:invalidate` 收消息 |
+| T23 | 2026-10-29 | 2026-10-29 | ❌ **No-Go** | 12 项（8 项阻塞，见 `delivery/open-issues.md`） | 82 项 `✅66 / ⚠️14 / ❌2`；GWT `✅5 / ⚠️7`；65 码 `✅49 / ⚠️9 / ❌7`（实现 76）；八条门槛 1/8；产出 5 份交付文档 + 8 条勘误，TDS §8.6 / §3.1 / §3.3 / §6.2 已回写 |
 
 **T15 全卡验收结论（交付总监复核）**
 
