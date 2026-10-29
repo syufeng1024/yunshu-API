@@ -8,7 +8,7 @@
 | 依赖 | T11、T04、**T10**（错误码与写出口） |
 | 可并行 | 与 T12 / T14 / T15 并行 |
 | 交付根 | `internal/control/fund/` |
-| 状态 | 🟨 有条件通过（2026-10-27）· 两段均已交付，**缺 QA 独立验证**（429 中断，见台账） |
+| 状态 | ✅ 通过（2026-10-29 补 QA 独立验证，G4 关闭；两项非阻塞缺口转 G11/G12） |
 
 ## 1. 目标
 
@@ -156,3 +156,24 @@ E-23（`max_bonus_ratio_bp` 分母不明且必有一档越界）、E-24（卡面
 4. `Mailer` 只有接口，仓库无 SMTP 实现；未注入时只写站内信 + WARN。
 5. G-09 的 24 小时发放延迟与运营抽检未实现（A7 只要求防刷与重复领取拒绝）。
 6. `t_recharge_order.refundable_micro` 不在消费时递减（T04 内核现状），退款申请事务内用报价刷新。
+
+---
+
+## 12. G4 独立验证补记（2026-10-29，交付总监回填）
+
+原卡为「有条件通过」（QA 首轮 429 中断）。本轮由独立 QA 重做，结论 **PASS-WITH-GAPS**，提交 `eafddb1`。
+
+| 项 | 结果 |
+| :--- | :--- |
+| A1 `-race` | 通过。**注意**：卡面 §6 的 `golang:1.27-alpine` 不带 gcc，`-race` 需 `CGO_ENABLED=1` + Debian 版 `golang:1.27`，否则直接报 `-race requires cgo` |
+| A2 G-03 并发幂等 | 通过。10×200、`credit=99000000/20000000`、`batches=2`、`entries=2`；幂等三层（`uk_ro_pay_txn` → 状态 CAS `RowsAffected()==1` → `uk_le_idem`）无「先查后写」空窗 |
+| A3 PENDING 不入账 | **原测无效**（只证明金额不符被拒，未触状态守卫）→ 已补 `TestA3NonPaidOrderNeverCredits`：PENDING+FAILED、CLOSED+合法 SUCCESS 均不入账 |
+| A4 可退基数 | **原测缺默认路径** → 已补 `TestA4RefundableDefaultPath8900`：可退 8,900 → `refund_fen=8010`、`fee_fen=890`；PRD 7,900 路径 `7110/790` 原有断言有效 |
+| A5/A7/A8/A9/A10/A11/A13 | 有效（逐条指到断言行，见回执） |
+| A6 提额生效 | fund 层契约有效；**`cfg:ver` 子断言是自证**（测试自己的 stub 做 `Incr`），真实 `boot.RouteSnapshot.Publish` 未在本包验证 → **G11** |
+| A12 无浮点 | 通过（`grep` 仅命中一处英文注释） |
+| A14 状态机集合相等 | **原测可蒙混**（`doc[idx:]` 扫到文末）→ 已改为 `sectionOf` 按 `##` 切片，订单图纳入作用域 |
+| 覆盖率 | 65.2% → **65.5%**；测试函数 33 → 35；`EXIT=0` |
+| 反证实验 | A2 流水条数、A4 `refund_fen`、A13 守卫行数三处故意改错均变红，实验后原样还原（`git diff` 为空） |
+
+**遗留（非阻塞，已转 BACKLOG）**：A6 集成缺口 → G11；`plan_grant.go:186-191` 购买套餐会把「次日生效的提额行」的 `effective_to` 改成今天（静默取消提额）→ G12（待产品确认）。

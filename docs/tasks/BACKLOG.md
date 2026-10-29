@@ -11,13 +11,15 @@
 | G1 | 镜像内 embed SQL 的 checksum 未校验 | T26 §10.4 | 工程守卫 | CI 构建镜像后跑一次 `go test ./internal/platform/migrate/`，防跨平台漂移（本地与 CI 构建出的镜像目前可能 checksum 不同） | ⬜ |
 | G2 | `meta_only` 切回时历史正文不删（TDS 4318 / B-67「用户关闭即删」） | T25 §11.5 | 功能缺口 | 单独立项，涉及批量删除与审计；注意与 180 天保留期的清理逻辑不要互相干扰 | ⬜ |
 | G3 | 正文 KEK 轮换后旧密文如何续读 | T25 §11.5 | 设计缺口 | 需先定 `body_key_id` 多版本方案，再改 `logq.sqlBodyStore` 的选 key 逻辑 | ⬜ |
-| G4 | T13 缺 QA 独立验证 | 台账 | 流程欠账 | 补一轮独立回归（该卡当时为「有条件通过」） | ⬜ |
+| G4 | T13 缺 QA 独立验证 | 台账 | 流程欠账 | ✅ 2026-10-29 独立回归完成（`eafddb1`）：A1–A14 逐条对账，补 A3 状态守门与 A4 默认路径，A14 收紧 section 作用域；`-race` 全绿、覆盖率 65.2%→65.5%、测试函数 33→35，3 条反证实验确认断言真会红 | ✅ |
 | G5 | T23 82 项功能点验收对照 | T23 卡 | 出文档 | 依赖 G2/G3 定稿后再做更准；产出 `docs/tasks/acceptance/` 七份矩阵 | ⬜ |
 | G6 | T22 段 4 运维件（告警规则 / 备份脚本 / DR / 降级矩阵） | T22 卡 | 运维 | 需求方已明确「上线配置先不管」，暂缓 | ⏸ |
 | G7 | 邮件短信通知 / 一键导入 | T24 §11 | **需产品决策** | 等需求方定供应商与范围 | ⏸ |
 | G8 | 枚举归一口径：`usage_source` 输出 `UPSTREAM_API`、`protocol_in/out` 输出 `OPENAI_COMPAT`，而 TDS §5.1 要求小写 `upstream` / `openai` | T22 段2 遗留 #3 | 一致性 | 二选一：改日志产出侧，或在消费端做映射。必须定一处为准，否则按 TDS 聚合会落空 | ⬜ |
-| G9 | 未配 `VITE_API_BASE_URL` 时，调试台代码生成用 `window.location.origin` | T28 §8（原盘点结论修正） | 部署提醒 | **非代码缺陷**：`PlaygroundPage.tsx:174` 的 `apiBaseUrl()` 优先读环境变量，回退 origin 属正常设计。上线清单必须加一条「配 `VITE_API_BASE_URL`」，否则生成的示例代码域名会是错的 | ⬜ |
+| G9 | 未配 `VITE_API_BASE_URL` 时，调试台代码生成用 `window.location.origin` | T28 §8（原盘点结论修正） | 部署提醒 · **上线前必办** | **非代码缺陷**：`PlaygroundPage.tsx:174` 的 `apiBaseUrl()` 优先读环境变量，回退 origin 属正常设计。**上线清单必须加一条「配 `VITE_API_BASE_URL`」**，否则生成的示例代码域名会是错的。收口方式：在 `docs/ops-runbook.md` 上线检查清单固化该条，并在 `deploy/.env.stack` / `.env.example` 标注必填（2026-10-29 需求方确认：统一在「上线前」批量处理，不单独派卡） | ⬜ 上线前必办 |
 | G10 | SPA 路由切换不复位滚动：从已滚动的控制台页点侧栏进入 `/console/playground`，`scrollY` 会保留（实测 444），新页从中间开始显示 | T28 §9 遗留 #2 | 交互缺陷（非 P0） | 修复点在路由层（`web/src/App.tsx`/布局），T28 文件域外未动。需先确认是否就是用户报告的「上方空白」现象（A 项在本机未复现） | ⬜ |
+| G11 | T13/A6 的「配置版本生效」只验证到 fund 层 hook 调用（测试自带 stub 做 `INCR cfg:ver`），真实 `boot.RouteSnapshot.Publish` 链路未独立验证 | T13 §12（G4 回执 A6） | 测试缺口 | 在 acceptance / T21 集成层补一条真实发布断言：改策略 → `SET cfg:snap:ROUTING` → `INCR cfg:ver` → `PUBLISH` 全链路可观测。**不是源码缺陷**，现有 hook 行为正确 | ⬜ |
+| G12 | 购买套餐会静默取消「次日生效」的提额：`plan_grant.go:186-191` 的 `UPDATE t_rate_limit_policy SET effective_to=now` 未限定 `effective_from <= now`，会把尚未生效的 `QUOTA_APPLY` 行直接关掉 | T13 §12（G4 回执遗留 #3） | **待产品确认** | 先确认是否符合预期：若用户当天提额、当天买套餐，提额是否应保留？确认后二选一：① SQL 加 `AND effective_from <= UTC_TIMESTAMP(3)`；② 明确写入 PRD 为预期行为。**确认前不动代码** | ⏸ |
 
 ## 状态图例
 
@@ -36,3 +38,12 @@
 | 本文件 | **跨卡的**、需要另行派卡的、卡外才能解决的 |
 
 判据很简单：**如果关掉那张卡就再也找不到的事，写这里。**
+
+## 上线前必办（Release Blocker 清单）
+
+> 需求方 2026-10-29 确认：下列项**不单独派卡**，统一在「上线前」批量处理；上线前逐条打勾，未勾不得发版。
+
+| # | 项 | 验收方式 | 状态 |
+| :--- | :--- | :--- | :--- |
+| G9 | 生产构建注入 `VITE_API_BASE_URL`（否则调试台生成的示例代码域名回退成 `window.location.origin`） | 生产包 grep 构建产物中存在该域名；打开调试台「查看代码」核对 base_url | ⬜ |
+
