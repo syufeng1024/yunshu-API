@@ -2,6 +2,7 @@ package gw
 
 import (
 	"context"
+	"time"
 
 	"yunshu.dev/core/internal/billing"
 	"yunshu.dev/core/internal/breaker"
@@ -51,6 +52,10 @@ type (
 	IdemStore interface {
 		Begin(ctx context.Context, in idemstore.BeginInput) (idemstore.BeginResult, error)
 		Complete(ctx context.Context, rec idemstore.Record, state idemstore.State, body []byte) error
+		// DuplicateWindow is idem.duplicate_window_seconds (T41). Zero or
+		// negative turns automatic de-duplication off for requests that carry no
+		// Idempotency-Key.
+		DuplicateWindow() time.Duration
 	}
 
 	// BreakerReader is the read-only K16 surface used by P12. It never records

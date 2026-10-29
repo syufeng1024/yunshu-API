@@ -144,6 +144,11 @@ func New(client *redisx.Client, clock *redisx.Clock, db DB, opts Options, logger
 	return &Store{client: client, clock: clock, db: db, opts: opts, logger: logger}
 }
 
+// DuplicateWindow returns idem.duplicate_window_seconds. P08 reads it to
+// decide whether a request without an Idempotency-Key takes part in automatic
+// de-duplication; zero or negative disables the feature.
+func (s *Store) DuplicateWindow() time.Duration { return s.opts.DuplicateWindow }
+
 // Begin decides NEW / REPLAY / WAIT / RETRY_PREV_FAILED / STALE_LOCK /
 // KEY_REUSED. A Redis failure never turns into a request failure: the DB path
 // runs and the cache is refreshed best-effort.
@@ -312,6 +317,11 @@ type ReplayDecision struct {
 	Body       []byte
 	RequestID  string
 	RetryAfter time.Duration
+	// AutoDedup marks a decision produced by the synthetic P08 key used for
+	// requests without an Idempotency-Key. Only this path puts
+	// X-Idempotent-Replay on the wire; a client-supplied key already knows the
+	// response is a replay and must not see the header.
+	AutoDedup bool
 }
 
 // DecideReplay implements T06 hard constraint 18.

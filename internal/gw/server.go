@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"time"
 
@@ -257,6 +258,11 @@ type modelList struct {
 
 func (h *Handler) writeReplay(w http.ResponseWriter, ctx context.Context, c *Ctx) {
 	decision := c.Replay
+	// The header belongs to the automatic-dedup path only: a client that sent
+	// its own Idempotency-Key already knows the response is a replay.
+	if decision.AutoDedup {
+		w.Header().Set("X-Idempotent-Replay", "true")
+	}
 	if decision.Status == http.StatusOK && len(decision.Body) > 0 {
 		rid := decision.RequestID
 		if rid == "" {
@@ -275,18 +281,37 @@ func (h *Handler) writeReplay(w http.ResponseWriter, ctx context.Context, c *Ctx
 		code = apierr.CodeIdempotencyKeyReused
 	case "request_in_flight":
 		code = apierr.CodeRequestInFlight
+	case "duplicate_request_in_flight":
+		code = apierr.CodeDuplicateRequestInFlight
 	case "stream_response_not_replayable", "response_not_replayable":
 		code = apierr.CodeIdempotentReplayUnsupported
 	}
 	e := apierr.New(code)
-	if code == apierr.CodeRequestInFlight {
+	switch code {
+	case apierr.CodeRequestInFlight:
 		e.WithRetryAfter(2)
 		// apierr.Write emits Retry-After for 402/429/503 only. TDS §4.5
 		// requires it on the in-flight 409 as well, so the header is set here;
 		// the body field is set through the error so the two cannot drift.
 		w.Header().Set("Retry-After", "2")
+	case apierr.CodeDuplicateRequestInFlight:
+		// The remaining duplicate window, at least one second. Same reason as
+		// above: the 409 branch of apierr.Write does not set the header.
+		secs := retryAfterSeconds(decision.RetryAfter)
+		e.WithRetryAfter(secs)
+		w.Header().Set("Retry-After", strconv.Itoa(secs))
 	}
 	h.writeError(w, ctx, c, e)
+}
+
+// retryAfterSeconds rounds a duplicate-window remainder up to whole seconds,
+// clamped to the documented minimum of 1.
+func retryAfterSeconds(d time.Duration) int {
+	secs := int((d + time.Second - 1) / time.Second)
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
 }
 
 // releaseRequest is the single exit path for every resource the request may

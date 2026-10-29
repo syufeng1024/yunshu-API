@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"yunshu.dev/core/internal/breaker"
 	"yunshu.dev/core/internal/idemstore"
@@ -18,7 +19,12 @@ type fakeIdem struct {
 	result    idemstore.BeginResult
 	begins    int
 	completes []idemstore.State
+	// window is idem.duplicate_window_seconds. The zero value disables the T41
+	// auto-dedup path, so tests that exercise explicit keys are unaffected.
+	window time.Duration
 }
+
+func (f *fakeIdem) DuplicateWindow() time.Duration { return f.window }
 
 func (f *fakeIdem) Begin(context.Context, idemstore.BeginInput) (idemstore.BeginResult, error) {
 	f.mu.Lock()
