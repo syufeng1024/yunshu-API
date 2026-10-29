@@ -739,9 +739,10 @@ func TestGWT_G06_GroupRatioFloor(t *testing.T) {
 	}
 
 	ops := newUser(t, userOpts{role: "OPS"})
-	modelID := newModel(t, modelName(), "LISTED")
-	// The implemented enforcement point is the price write: a sell price that
-	// falls under the contract group's floor is refused with the shortfall.
+	name := modelName()
+	modelID := newModel(t, name, "LISTED")
+	// The price write is one enforcement point: a sell price that falls under
+	// the contract group's floor is refused with the shortfall.
 	rec := call(t, ops, http.MethodPost, "/api/admin/prices", map[string]any{
 		"model_id":              modelID,
 		"in_price_micro_per_k":  30000,
@@ -754,9 +755,48 @@ func TestGWT_G06_GroupRatioFloor(t *testing.T) {
 	if !strings.Contains(body.Error.Message, "差额") || !strings.Contains(body.Error.Message, "contract") {
 		t.Fatalf("G-06: refusal does not name the group and the shortfall: %q", body.Error.Message)
 	}
-	// PATCH /api/admin/groups validates the value but does not run the floor;
-	// the refusal lives on the price write instead. Recorded, not hidden.
-	t.Logf("G-06 DEVIATION: the group endpoint has no margin-floor check; the floor is enforced on price create/update")
+	// T31 D-28: PATCH /api/admin/groups/{id} runs the same floor as the price
+	// write. The fixture price 30,000 with cost 15,000 clears 0.9 (27,000 ≥
+	// 20,000) but not 0.6 (18,000 < 20,000), so the two saves differ only by
+	// ratio. addPrice is a DB fixture: the API refuses to create this row at
+	// ratio 0.6, which is exactly the price-side assertion above.
+	addPrice(t, modelID, 30000, 60000, 15000)
+	contractID, origRatio := groupByCode(t, "contract")
+	t.Cleanup(func() {
+		_, _ = testDB.ExecContext(context.Background(),
+			`UPDATE t_price_group SET ratio_bp = ? WHERE id = ?`, origRatio, contractID)
+	})
+
+	low := call(t, ops, http.MethodPatch, fmt.Sprintf("/api/admin/groups/%d", contractID),
+		map[string]any{"ratio_bp": 6000})
+	lowBody := requireCode(t, "G-06 group floor", low, http.StatusBadRequest, "invalid_request_body")
+	if !strings.Contains(lowBody.Error.Message, "差额") || !strings.Contains(lowBody.Error.Message, name) {
+		t.Fatalf("G-06: group refusal does not name the shortfall and %q: %q body=%s",
+			name, lowBody.Error.Message, low.Body.String())
+	}
+
+	// confirm=true covers the shared test database's local seed models that
+	// carry no cost price; the floor still runs, and any model that does have
+	// a cost is refused above regardless of confirm.
+	high := call(t, ops, http.MethodPatch, fmt.Sprintf("/api/admin/groups/%d", contractID),
+		map[string]any{"ratio_bp": 9000, "confirm": true})
+	if high.Code != http.StatusOK {
+		t.Fatalf("G-06: ratio 9000 status=%d body=%s, want 200", high.Code, high.Body.String())
+	}
+	var storedRatio int64
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT ratio_bp FROM t_price_group WHERE id = ?`, contractID).Scan(&storedRatio); err != nil {
+		t.Fatalf("G-06: read stored group ratio: %v", err)
+	}
+	if storedRatio != 9000 {
+		t.Fatalf("G-06: stored ratio_bp=%d, want 9000", storedRatio)
+	}
+
+	internalID, _ := groupByCode(t, "internal")
+	noConfirm := call(t, ops, http.MethodPatch, fmt.Sprintf("/api/admin/groups/%d", internalID),
+		map[string]any{"self_service": false})
+	requireCode(t, "G-06 internal without confirm", noConfirm,
+		http.StatusBadRequest, "invalid_request_body")
 }
 
 // G-07 — invoicing: real-name gate, payable ceiling, PENDING -> ISSUED.
@@ -1327,6 +1367,17 @@ func policyCount(t *testing.T, uid int64) int {
 		t.Fatalf("count policies: %v", err)
 	}
 	return n
+}
+
+// groupByCode returns the seeded group's id and current ratio_bp.
+func groupByCode(t *testing.T, code string) (int64, int64) {
+	t.Helper()
+	var id, ratio int64
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT id, ratio_bp FROM t_price_group WHERE code = ?`, code).Scan(&id, &ratio); err != nil {
+		t.Fatalf("read price group %s: %v", code, err)
+	}
+	return id, ratio
 }
 
 func mustParseRFC3339(t *testing.T, raw string) time.Time {
