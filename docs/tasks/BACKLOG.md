@@ -22,6 +22,7 @@
 | G12 | 购买套餐会静默取消「次日生效」的提额：`plan_grant.go` 的 `UPDATE ... SET effective_to=now` 未限定 `effective_from <= now`，会把尚未生效的 `QUOTA_APPLY` 行直接关掉 | T13 §12（G4 回执遗留 #3） | **已确认的逻辑缺陷** | ✅ 2026-10-29 T30 段1（`239a233`）：关闭条件加 `effective_from <= now`（未来行一字不动）；在效提额改为「截断原行 + plan+1ms 续接行」，额度保留、三档升级；T1–T4 用例 + 反证验证 | ✅ |
 | G13 | **A 项（P0 布局空白带）四次测量均未复现**：PageDown 后上方约 500px 全白；`/pricing` 标题与卡片间约 90px 空白 | T28 §9 / T29 §8 | **待外部信息** | 四次独立测量（T28 ×2、T29 ×2，含生产包、1408×672 与 1408×585 两档）空白带均 ≤24px；已排除 G10 滚动残留这条解释。**等用户提供**：Chrome 版本、页面缩放是否 100%、是否从已滚动页面点进来、可否录屏。信息到位再开卡，禁止无证据加 padding | ⏸ |
 | G14 | `plan_grant.go` 捕获在效提额行时把 `daily_quota_micro` 直接 `Scan` 进 `int64`，历史数据若该列为 NULL 会 500 | T30 §8 遗留 #1 | 健壮性（低风险） | 改 `sql.NullInt64` 兜底 + 一条 NULL 用例；`EffectiveQuotaApply` 要求 approved 非空，实际触发概率极低 | ⬜ |
+| G15 | 请求日志 `obslog.Record.ConfigVersion`（`internal/obs/log/record.go:72`）同样无生产者：全仓无 `obslog.Record{` 构造点，P30 日志行的该字段恒为 0 | T40-a §8 遗留 #2 | 可观测缺口（非资金，非门槛） | 与 P30 请求日志落地一并处理：构造 `obslog.Record` 时复用 `gw.Ctx.ConfigVersion`（T40-a 已在两个入口盖章，取现成值即可）。**不要另起一条 Redis 读取路径** | ⬜ |
 
 ## 状态图例
 
