@@ -94,6 +94,73 @@ describe('ModelsPage', () => {
     expect(screen.queryByText(/缓存/)).not.toBeInTheDocument()
   })
 
+  it('F8-1: the context column formats the backend context_length (32768 → 32,768 tokens)', async () => {
+    installMock({ catalogFor: () => catalog([model({ context_length: 32_768 })]) })
+    renderWithProviders(<ModelsPage />)
+
+    expect(await screen.findByText('32,768 tokens')).toBeInTheDocument()
+  })
+
+  it('F8-3: stream and tool_call badges follow the capability flags exactly', async () => {
+    installMock({
+      catalogFor: () =>
+        catalog([
+          model({
+            id: 1,
+            model_name: 'stream-only',
+            display_name: '仅流式',
+            capabilities: { stream: true, tool_call: false, vision: null, json_mode: null },
+          }),
+          model({
+            id: 2,
+            model_name: 'tool-only',
+            display_name: '仅工具',
+            capabilities: { stream: false, tool_call: true, vision: null, json_mode: null },
+          }),
+          model({
+            id: 3,
+            model_name: 'both-caps',
+            display_name: '双能力',
+            capabilities: { stream: true, tool_call: true, vision: null, json_mode: null },
+          }),
+          model({
+            id: 4,
+            model_name: 'no-caps',
+            display_name: '无能力',
+            capabilities: { stream: false, tool_call: false, vision: null, json_mode: null },
+          }),
+        ]),
+    })
+    renderWithProviders(<ModelsPage />)
+
+    const table = await screen.findByRole('table', { name: '模型广场列表' })
+    await screen.findByText('仅流式')
+    const rowFor = (name: string) => within(table).getByText(name).closest('tr') as HTMLElement
+
+    const onlyStream = rowFor('仅流式')
+    expect(within(onlyStream).getByText('流式')).toHaveClass('bg-success-soft')
+    expect(within(onlyStream).getByText('工具调用：不支持')).toHaveClass('bg-surface-muted')
+    expect(within(onlyStream).queryByText('工具调用')).not.toBeInTheDocument()
+
+    const onlyTool = rowFor('仅工具')
+    expect(within(onlyTool).getByText('工具调用')).toHaveClass('bg-success-soft')
+    expect(within(onlyTool).getByText('流式：不支持')).toHaveClass('bg-surface-muted')
+    expect(within(onlyTool).queryByText('流式')).not.toBeInTheDocument()
+
+    const both = rowFor('双能力')
+    expect(within(both).getByText('流式')).toHaveClass('bg-success-soft')
+    expect(within(both).getByText('工具调用')).toHaveClass('bg-success-soft')
+    expect(within(both).queryByText(/不支持/)).not.toBeInTheDocument()
+
+    const neither = rowFor('无能力')
+    expect(within(neither).getByText('流式：不支持')).toHaveClass('bg-surface-muted')
+    expect(within(neither).getByText('工具调用：不支持')).toHaveClass('bg-surface-muted')
+    expect(within(neither).queryByText('流式')).not.toBeInTheDocument()
+
+    expect(screen.getAllByText('流式')).toHaveLength(2)
+    expect(screen.getAllByText('工具调用')).toHaveLength(2)
+  })
+
   it('F8-1 / F8-4: type and protocol filters go to the API and the response order is preserved', async () => {
     const beta = model({ id: 2, model_name: 'beta', display_name: 'Beta', recommend_weight: 1 })
     const alpha = model({ id: 1, model_name: 'alpha', display_name: 'Alpha', recommend_weight: 99 })

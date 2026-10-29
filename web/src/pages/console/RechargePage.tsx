@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { errorHint, errorMessage } from '@/api/client'
 import {
   useInvoices,
@@ -153,12 +154,38 @@ export default function RechargePage() {
   const plans = usePlans()
   const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null)
   const [payTarget, setPayTarget] = useState<PayTarget | null>(null)
+  // Deep links from /pricing carry the target tier in ?plan=<t_plan.code>.
+  const [searchParams] = useSearchParams()
+  const requestedPlanParam = searchParams.get('plan') ?? ''
+  const [planNotice, setPlanNotice] = useState<string | null>(null)
 
   useEffect(() => {
     if (selectedPlanId !== null) return
-    const first = plans.data?.items.find((plan) => plan.purchasable)
-    if (first) setSelectedPlanId(first.id)
-  }, [plans.data, selectedPlanId])
+    const items = plans.data?.items
+    if (!items) return
+
+    const requestedCode = requestedPlanParam.trim().toLowerCase()
+    if (!requestedCode) {
+      const first = items.find((plan) => plan.purchasable)
+      if (first) setSelectedPlanId(first.id)
+      return
+    }
+
+    // Match against the codes the API returned; no tier name is hardcoded here.
+    const requested = items.find((plan) => plan.code.toLowerCase() === requestedCode)
+    if (requested?.purchasable) {
+      setSelectedPlanId(requested.id)
+      return
+    }
+
+    const fallback = items.find((plan) => plan.purchasable)
+    if (fallback) setSelectedPlanId(fallback.id)
+    setPlanNotice(
+      requested
+        ? `目标档位 ${requested.code} 不可直接购买，已为你选择第一个可购买档位。`
+        : `未找到目标档位「${requestedPlanParam.trim()}」，已为你选择第一个可购买档位。`,
+    )
+  }, [plans.data, requestedPlanParam, selectedPlanId])
 
   const selectedPlan = useMemo(
     () => plans.data?.items.find((plan) => plan.id === selectedPlanId && plan.purchasable) ?? null,
@@ -468,6 +495,16 @@ export default function RechargePage() {
           <p className="text-sm text-ink-secondary">正在加载套餐…</p>
         ) : (
           <>
+            {planNotice ? (
+              <p
+                role="status"
+                data-testid="plan-notice"
+                className="rounded-lg border border-warning bg-warning-soft px-4 py-2 text-xs text-warning"
+              >
+                {planNotice}
+              </p>
+            ) : null}
+
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
               {(plans.data?.items ?? []).map((plan) => (
                 <PlanCard

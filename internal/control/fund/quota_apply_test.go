@@ -3,6 +3,7 @@ package fund
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -207,6 +208,68 @@ func TestQuotaRejectSelfAuditAndNotification(t *testing.T) {
 	if n := countNotifications(t, uid, "QUOTA_AUDIT"); n != 1 {
 		t.Fatalf("QUOTA_AUDIT notifications = %d, want 1", n)
 	}
+	title, body := latestQuotaNotification(t, uid)
+	if !strings.Contains(title, "未通过") || !strings.Contains(body, "当前额度足够") {
+		t.Fatalf("reject notification title=%q body=%q, want the rejection reason", title, body)
+	}
+}
+
+// F20-4: an approved upgrade notifies the applicant once, naming the new
+// quota and the effective/expiry dates. Re-approving keeps the count at one.
+func TestQuotaApproveNotification(t *testing.T) {
+	svc, _ := newTestService(t)
+	uid := newTestUser(t, nil)
+	payPlanOrder(t, svc, uid, "STANDARD")
+	current, _, _ := svc.currentDailyQuota(context.Background(), uid)
+	target := current * 2
+	rec := call(t, svc.CreateQuotaApply, http.MethodPost, "/api/console/quota-applies", map[string]any{
+		"target_quota_micro": target,
+		"apply_reason":       "活动期间需要提高日额度",
+	}, uid)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("quota apply status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var created createQuotaResponse
+	decodeBody(t, rec, &created)
+
+	approved, err := svc.ApproveQuotaApply(context.Background(), created.Apply.ID, 900023)
+	if err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if n := countNotifications(t, uid, "QUOTA_AUDIT"); n != 1 {
+		t.Fatalf("QUOTA_AUDIT notifications after approval = %d, want 1", n)
+	}
+	title, body := latestQuotaNotification(t, uid)
+	if !strings.Contains(title, "已通过") {
+		t.Fatalf("title = %q, want the approved wording", title)
+	}
+	if want := fmt.Sprintf("%d 积分", target/MicroPerCredit); !strings.Contains(body, want) {
+		t.Fatalf("body = %q, want the approved quota %q", body, want)
+	}
+	wantFrom := approved.EffectiveFrom.In(utc8).Format("2006-01-02")
+	wantTo := approved.EffectiveTo.In(utc8).Format("2006-01-02")
+	if !strings.Contains(body, "生效时间 "+wantFrom) || !strings.Contains(body, "到期时间 "+wantTo) {
+		t.Fatalf("body = %q, want effective_from %s and effective_to %s", body, wantFrom, wantTo)
+	}
+
+	// A repeat approval hits the PENDING guard before any write or notify.
+	if _, err := svc.ApproveQuotaApply(context.Background(), created.Apply.ID, 900023); !errors.Is(err, ErrQuotaState) {
+		t.Fatalf("repeat approve error = %v, want ErrQuotaState", err)
+	}
+	if n := countNotifications(t, uid, "QUOTA_AUDIT"); n != 1 {
+		t.Fatalf("QUOTA_AUDIT notifications after repeat approve = %d, want 1", n)
+	}
+}
+
+func latestQuotaNotification(t *testing.T, uid int64) (title, body string) {
+	t.Helper()
+	if err := testDB.QueryRowContext(context.Background(), `
+		SELECT title, body FROM t_notification
+		 WHERE user_id = ? AND event_code = 'QUOTA_AUDIT'
+		 ORDER BY id DESC LIMIT 1`, uid).Scan(&title, &body); err != nil {
+		t.Fatalf("read QUOTA_AUDIT notification: %v", err)
+	}
+	return title, body
 }
 
 func quotaStateOf(t *testing.T, id int64) string {

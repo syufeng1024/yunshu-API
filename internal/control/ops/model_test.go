@@ -393,3 +393,50 @@ func assertListingAudit(t *testing.T, modelID int64, reason string) {
 		t.Fatalf("reason=%v, want %q", gotReason, reason)
 	}
 }
+
+// F22-6: saving the recommendation weight writes the before/after values and
+// the operator to t_admin_audit_log.
+func TestRecommendWeightWritesAudit(t *testing.T) {
+	svc := newTestService(t)
+	uid := newTestUser(t, "OPS")
+	m := newPricingModel(t, svc, uid, "TEXT")
+	createTestPrice(t, svc, uid, m.ID, 1000, 3000, 600)
+	opts := testCallOptions{uid: uid, role: "OPS",
+		pathVal: map[string]string{"id": itoa(m.ID)}}
+
+	rec := call(t, svc.SetListingState, http.MethodPost,
+		"/api/admin/models/1/listing-state",
+		map[string]any{"listing_state": "LISTED", "reason": "测试上架"}, opts)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list model status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = call(t, svc.SetRecommendWeight, http.MethodPost,
+		"/api/admin/models/1/recommend-weight",
+		map[string]any{"recommend_weight": 10}, opts)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set weight status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var (
+		before, after string
+		operatorID    int64
+	)
+	if err := testDB.QueryRowContext(context.Background(), `
+		SELECT before_json, after_json, operator_id FROM t_admin_audit_log
+		 WHERE module = 'MODEL' AND action = 'UPDATE' AND target_type = 't_model'
+		   AND target_id = ?
+		 ORDER BY id DESC LIMIT 1`, itoa(m.ID)).Scan(&before, &after, &operatorID); err != nil {
+		t.Fatalf("load recommend-weight audit: %v", err)
+	}
+	if operatorID != uid {
+		t.Fatalf("audit operator_id = %d, want %d", operatorID, uid)
+	}
+	// MySQL normalises JSON columns with a space after the colon.
+	if !strings.Contains(before, `"recommend_weight": 0`) {
+		t.Fatalf("before_json=%s, want recommend_weight 0", before)
+	}
+	if !strings.Contains(after, `"recommend_weight": 10`) {
+		t.Fatalf("after_json=%s, want recommend_weight 10", after)
+	}
+}

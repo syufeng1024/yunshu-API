@@ -449,7 +449,13 @@ func nextDayUTC8(now time.Time) time.Time {
 // The applicant cannot be the auditor (A13); the attempt is recorded with
 // result REJECTED.
 func (s *Service) ApproveQuotaApply(ctx context.Context, applyID, auditorID int64) (quotaApplyView, error) {
-	denied := false
+	var (
+		denied        bool
+		notifyUID     int64
+		approvedMicro int64
+		effectiveFrom time.Time
+		effectiveTo   time.Time
+	)
 	err := s.withQuotaTx(ctx, func(ctx context.Context, tx *sql.Tx) error {
 		var (
 			userID int64
@@ -479,6 +485,13 @@ func (s *Service) ApproveQuotaApply(ctx context.Context, applyID, auditorID int6
 		}
 		from := nextDayUTC8(now)
 		to := from.AddDate(0, 0, quotaDefaultDays)
+		// Captured for the post-commit notification: the inbox row is written
+		// outside this transaction so a delivery failure cannot roll back the
+		// approval (hard constraint 14).
+		notifyUID = userID
+		approvedMicro = target
+		effectiveFrom = from
+		effectiveTo = to
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE t_quota_apply
 			   SET state = 'APPROVED', approved_quota_micro = ?,
@@ -503,6 +516,16 @@ func (s *Service) ApproveQuotaApply(ctx context.Context, applyID, auditorID int6
 	}
 	if err := s.EffectiveQuotaApply(ctx, applyID); err != nil {
 		return quotaApplyView{}, fmt.Errorf("approved but not effective: %w", err)
+	}
+	// F20-4: the applicant learns the outcome. notify is WARN-only and runs
+	// after the effect transaction commits; a repeat call never reaches here
+	// because the state is no longer PENDING.
+	if notifyUID > 0 {
+		s.notify(ctx, notifyUID, "QUOTA_AUDIT", "提额申请已通过", fmt.Sprintf(
+			"日额度已调整为 %d 积分，生效时间 %s，到期时间 %s。",
+			approvedMicro/MicroPerCredit,
+			effectiveFrom.In(utc8).Format("2006-01-02"),
+			effectiveTo.In(utc8).Format("2006-01-02")))
 	}
 	return s.quotaApplyByIDAdmin(ctx, applyID)
 }

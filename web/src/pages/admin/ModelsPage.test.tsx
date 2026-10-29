@@ -1,4 +1,4 @@
-import { cleanup, screen, within } from '@testing-library/react'
+import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/api/client'
@@ -104,6 +104,13 @@ function installGet(items: AdminModel[]) {
   })
 }
 
+function lastModelsQuery(): URLSearchParams {
+  const calls = mockedGet.mock.calls
+    .map((call) => call[0] as string)
+    .filter((path) => path.startsWith('/api/admin/models?'))
+  return new URL(calls.at(-1) ?? '', 'http://localhost').searchParams
+}
+
 beforeEach(() => {
   mockedGet.mockReset()
   mockedPost.mockReset()
@@ -148,6 +155,42 @@ describe('ModelsPage', () => {
     expect(await screen.findByText('上架状态已更新')).toBeInTheDocument()
     expect(screen.getByText('该状态转换不生成公告草稿。')).toBeInTheDocument()
     expect(screen.queryAllByText('已生成待发布公告（草稿）').length).toBeLessThanOrEqual(1)
+  })
+
+  it('F22-4: 来源地 / 类型 / 上架状态各自把对应 query 发给列表接口', async () => {
+    installGet([listedModel, catalogPriced, delistedPriced])
+    const user = userEvent.setup()
+    renderWithProviders(<AdminModelsPage />)
+    await screen.findByText('已上架模型')
+
+    await user.selectOptions(screen.getByLabelText('来源地'), 'OVERSEAS')
+    await waitFor(() => expect(lastModelsQuery().get('region')).toBe('OVERSEAS'))
+    expect(lastModelsQuery().get('page')).toBe('1')
+
+    await user.selectOptions(screen.getByLabelText('类型'), 'IMAGE')
+    await waitFor(() => expect(lastModelsQuery().get('model_type')).toBe('IMAGE'))
+    expect(lastModelsQuery().get('region')).toBe('OVERSEAS')
+
+    await user.selectOptions(screen.getByLabelText('上架状态'), 'CATALOG_ONLY')
+    await waitFor(() => expect(lastModelsQuery().get('listing_state')).toBe('CATALOG_ONLY'))
+    expect(lastModelsQuery().get('model_type')).toBe('IMAGE')
+    expect(lastModelsQuery().get('region')).toBe('OVERSEAS')
+  })
+
+  it('F22-4: 仅目录可见 行使用独立的上架状态标识', async () => {
+    installGet([catalogPriced, listedModel, delistedPriced])
+    renderWithProviders(<AdminModelsPage />)
+    await screen.findByText('待上架模型')
+
+    const table = screen.getByRole('table', { name: '模型主数据列表' })
+    const catalogRow = within(table).getByText('待上架模型').closest('tr') as HTMLElement
+    const listedRow = within(table).getByText('已上架模型').closest('tr') as HTMLElement
+    const delistedRow = within(table).getByText('已下架模型').closest('tr') as HTMLElement
+
+    expect(within(catalogRow).getByText('仅目录可见')).toHaveClass('bg-warning-soft')
+    expect(within(listedRow).getByText('已上架')).toHaveClass('bg-success-soft')
+    expect(within(delistedRow).getByText('已下架')).toHaveClass('bg-surface-muted')
+    expect(within(listedRow).queryByText('仅目录可见')).not.toBeInTheDocument()
   })
 
   it('ModelsPage：推荐权重负数或超上限在字段上拦截', async () => {

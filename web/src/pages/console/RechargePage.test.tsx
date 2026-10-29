@@ -137,6 +137,47 @@ describe('RechargePage', () => {
     expect(screen.getByRole('button', { name: '选择套餐 默认档' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '选择套餐 体验版' })).toBeDisabled()
     expect(screen.getAllByText('不可购买')).toHaveLength(2)
+    // No ?plan= means no deep-link notice either.
+    expect(screen.queryByTestId('plan-notice')).not.toBeInTheDocument()
+  })
+
+  it('F2-1: ?plan=Pro pre-selects the matching tier case-insensitively', async () => {
+    installMock()
+    renderWithProviders(<RechargePage />, { route: '/console/recharge?plan=Pro' })
+
+    const pro = await screen.findByRole('button', { name: '选择套餐 专业版' })
+    expect(pro).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: '选择套餐 标准版' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+    expect(screen.queryByTestId('plan-notice')).not.toBeInTheDocument()
+  })
+
+  it('F2-1: an unknown ?plan= falls back to the first purchasable tier and says so', async () => {
+    installMock()
+    renderWithProviders(<RechargePage />, { route: '/console/recharge?plan=nope' })
+
+    const standard = await screen.findByRole('button', { name: '选择套餐 标准版' })
+    expect(standard).toHaveAttribute('aria-pressed', 'true')
+    expect(await screen.findByTestId('plan-notice')).toHaveTextContent(
+      '未找到目标档位「nope」，已为你选择第一个可购买档位。',
+    )
+  })
+
+  it('F2-1: a non-purchasable ?plan= is never pre-selected and reports why', async () => {
+    installMock()
+    renderWithProviders(<RechargePage />, { route: '/console/recharge?plan=free_default' })
+
+    const standard = await screen.findByRole('button', { name: '选择套餐 标准版' })
+    expect(standard).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('button', { name: '选择套餐 默认档' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    )
+    expect(await screen.findByTestId('plan-notice')).toHaveTextContent(
+      '目标档位 FREE_DEFAULT 不可直接购买，已为你选择第一个可购买档位。',
+    )
   })
 
   it('F10-4: order status and order-number search are sent together as an intersection', async () => {
