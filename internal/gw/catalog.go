@@ -42,6 +42,11 @@ const (
 // namespace is a bag of members; the control-plane route/price loader writes
 // them and this decoder is the only reader (TDS §1.4 / TA-1.1).
 type RoutingSnapshot struct {
+	// Version is the cfg:ver of the snapshot this routing table was decoded
+	// from. decodeRouting stamps it; it is not a payload member, so it is
+	// excluded from JSON rather than decoded from one.
+	Version int64 `json:"-"`
+
 	Models         []ModelEntry
 	Aliases        map[string]string
 	Routes         []RouteEntry
@@ -242,6 +247,28 @@ func (c *Catalog) Current() (*RoutingSnapshot, error) {
 	c.last = snap
 	c.decoded = decoded
 	return decoded, nil
+}
+
+// Version returns the cfg:ver of the ROUTING snapshot currently served. It is
+// the per-request read: store.Snapshot is an atomic pointer load and nothing is
+// decoded, unlike Current which takes the catalog mutex. A nil catalog, an
+// absent store or a missing snapshot reports 0 — the historical "unknown
+// version" value, never a fabricated one.
+func (c *Catalog) Version() int64 {
+	if c == nil {
+		return 0
+	}
+	if c.static != nil {
+		return c.static.Version
+	}
+	if c.store == nil {
+		return 0
+	}
+	snap := c.store.Snapshot(config.NsRouting)
+	if snap == nil {
+		return 0
+	}
+	return snap.Version()
 }
 
 // prepare builds the lookup indexes and defaults.
@@ -465,6 +492,9 @@ func (s *RoutingSnapshot) ListableModels(keyID int64, groupCode string) []ModelE
 // routing table would silently drop models or channels.
 func decodeRouting(snap *config.Snapshot) (*RoutingSnapshot, error) {
 	rs := &RoutingSnapshot{}
+	// The version travels with the decoded table so a Ctx built from Current()
+	// reports the same cfg:ver as Catalog.Version().
+	rs.Version = snap.Version()
 	decode := func(name string, dst any) error {
 		raw, ok := snap.Extra(name)
 		if !ok || len(raw) == 0 {

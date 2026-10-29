@@ -87,6 +87,7 @@ func (h *InternalHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ClientIP:  clientIP(r.RemoteAddr),
 		Header:    r.Header,
 	}
+	c.ConfigVersion = h.h.d.Catalog.Version()
 	w.Header().Set("X-Request-Id", rid)
 
 	if sw != nil {

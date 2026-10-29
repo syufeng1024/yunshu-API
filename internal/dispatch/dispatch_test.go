@@ -103,6 +103,10 @@ func (b fakeBalance) Get(context.Context, int64) (int64, error) { return b.micro
 
 func ptrInt64(v int64) *int64 { return &v }
 
+// testConfigVersion is the ROUTING snapshot version the dispatcher fixtures
+// carry. In production gw.Handler stamps the same value on gw.Ctx at ingress.
+const testConfigVersion int64 = 42
+
 func testBox(t *testing.T) (*cryptobox.Box, string) {
 	t.Helper()
 	kek := make([]byte, 32)
@@ -135,6 +139,7 @@ func testCatalog(t *testing.T, baseURL, envelope string, mutate func(*gw.Channel
 		mutate(&ch)
 	}
 	return gw.NewStaticCatalog(&gw.RoutingSnapshot{
+		Version: testConfigVersion,
 		Models: []gw.ModelEntry{{
 			ID: 1, ModelName: "m", Region: gw.RegionDomestic, ModelType: gw.ModelTypeText,
 			ContextLength: 32768, MaxOutputTokens: 32, ListingState: gw.ListingListed,

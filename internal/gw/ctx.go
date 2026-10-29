@@ -88,6 +88,12 @@ type Ctx struct {
 	ConnID   string
 	Header   http.Header
 
+	// ConfigVersion is the cfg:ver of the ROUTING snapshot this request was
+	// routed and priced with. The entry point stamps it once from the loaded
+	// snapshot (never a Redis read on the request path); P28 copies it into the
+	// usage row so R09 can trace a charge back to its configuration.
+	ConfigVersion int64
+
 	RawBody  []byte
 	BodyHash string
 	IR       *ir.Request

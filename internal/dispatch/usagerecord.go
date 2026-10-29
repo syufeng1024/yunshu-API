@@ -116,6 +116,7 @@ func (d *Dispatcher) emitUsage(c *gw.Ctx, out outcome, started time.Time) {
 
 	d.opts.UsageSink(settle.UsageRecord{
 		RequestID:        c.RequestID,
+		ConfigVersion:    c.ConfigVersion,
 		UserID:           c.Auth.UserID,
 		APIKeyID:         c.Auth.KeyID,
 		APIKeyName:       c.Auth.KeyName,

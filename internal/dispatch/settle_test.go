@@ -113,6 +113,36 @@ func TestP26EnqueuesInsteadOfSettlingSynchronously(t *testing.T) {
 	}
 }
 
+// P28 copies the cfg:ver the gateway stamped on the Ctx into the usage row.
+// Without this the column stays 0 for every live request and R09 has only seed
+// rows to reconcile against.
+func TestP28UsageRecordCarriesConfigVersion(t *testing.T) {
+	led := &fakeLedger{}
+	enq := &fakeEnqueuer{}
+	usage := &usageRecorder{}
+	d, _ := newSettleDispatcher(t, led, enq, usage)
+
+	if got := d.opts.Catalog.Version(); got != testConfigVersion {
+		t.Fatalf("catalog version = %d, want %d", got, testConfigVersion)
+	}
+
+	c := testCtx(false)
+	// gw.Handler stamps this at ingress; dispatch tests bypass the handler and
+	// take the same value from the catalog the gateway would query.
+	c.ConfigVersion = d.opts.Catalog.Version()
+	if rec := serve(t, d, c); rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+	}
+
+	rows := usage.all()
+	if len(rows) != 1 {
+		t.Fatalf("usage rows = %d, want exactly 1", len(rows))
+	}
+	if got := rows[0].ConfigVersion; got != testConfigVersion || got == 0 {
+		t.Fatalf("usage config_version = %d, want %d and non-zero", got, testConfigVersion)
+	}
+}
+
 // An enqueue failure must fall back to the synchronous ledger call, not fail
 // the request: a hold with no persisted task would otherwise stay HELD.
 func TestP26EnqueueFailureFallsBackToSynchronousSettle(t *testing.T) {
