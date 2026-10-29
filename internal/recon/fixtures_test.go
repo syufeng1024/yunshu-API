@@ -2,6 +2,7 @@ package recon
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -55,10 +56,20 @@ func deleteAccount(t *testing.T, userID int64) {
 	}
 }
 
-// insertLedgerEntry writes one append-only row. The caller controls the
-// continuity values so R-03 fixtures can be deliberately broken.
+// insertLedgerEntry writes one append-only row stamped at now. The caller
+// controls the continuity values so R-03 fixtures can be deliberately broken.
 func insertLedgerEntry(t *testing.T, userID int64, no, bizType, direction string,
 	bonus, recharge, total, before, after int64, idemKey string, requestID *string) {
+	t.Helper()
+	insertLedgerEntryAt(t, userID, no, bizType, direction, bonus, recharge, total,
+		before, after, idemKey, requestID, time.Now().UTC())
+}
+
+// insertLedgerEntryAt is insertLedgerEntry with an explicit created_at, which
+// the settlement §2-1 day-window fixtures need.
+func insertLedgerEntryAt(t *testing.T, userID int64, no, bizType, direction string,
+	bonus, recharge, total, before, after int64, idemKey string, requestID *string,
+	createdAt time.Time) {
 	t.Helper()
 	execFixture(t,
 		`INSERT INTO t_ledger_entry
@@ -67,7 +78,21 @@ func insertLedgerEntry(t *testing.T, userID int64, no, bizType, direction string
 		    balance_before_micro, balance_after_micro, request_id, idem_key, created_at)
 		 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		userID, no, "MIXED", direction, bizType, bonus, recharge, total,
-		before, after, requestID, idemKey, time.Now().UTC())
+		before, after, requestID, idemKey, createdAt)
+}
+
+// insertBatch writes one credit batch. R-02's settlement §2-3 pass compares
+// SUM(remaining_micro) with balance_recharge + balance_bonus, so every fixture
+// that wants only its own violation must keep the batch sum consistent.
+func insertBatch(t *testing.T, userID, face, remaining, consumed int64) {
+	t.Helper()
+	now := time.Now().UTC()
+	execFixture(t,
+		`INSERT INTO t_credit_batch
+		   (user_id, batch_no, batch_type, face_value_micro, remaining_micro,
+		    consumed_micro, refundable, effective_at, created_at, updated_at)
+		 VALUES (?, ?, 'RECHARGE', ?, ?, ?, 1, ?, ?, ?)`,
+		userID, fmt.Sprintf("%020d", now.UnixNano()), face, remaining, consumed, now, now, now)
 }
 
 // insertUsage writes the minimum NOT NULL columns of t_usage_record.

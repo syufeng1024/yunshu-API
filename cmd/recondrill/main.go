@@ -1,4 +1,4 @@
-// Command recondrill runs R-01..R-08 against a database that is not the
+// Command recondrill runs R-01..R-09 against a database that is not the
 // package's test schema — in practice the restored `yunshu_drill` used by the
 // T36 backup/restore drill.
 //

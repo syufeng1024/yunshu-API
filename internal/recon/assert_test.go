@@ -1,10 +1,12 @@
 package recon
 
-// T21 deliverable 8: one test per reconciliation assertion R-01..R-08. Each
-// test plants exactly one violation and proves the check reports it. The
-// existing TestDailyChecksR01toR08 is table-driven; these tests exist so a
-// failing assertion can be selected by name (`go test -run R03`), which is how
-// the nightly job attributes a red run.
+// T21 deliverable 8: one test per reconciliation assertion R-01..R-08, plus
+// T38's settlement §2 additions (orphan ledger, batch sum, day-window
+// conservation, unsettled success, config traceability). Each test plants
+// exactly one violation and proves the check reports it. The existing
+// TestDailyChecksR01toR08 is table-driven; these tests exist so a failing
+// assertion can be selected by name (`go test -run R03`), which is how the
+// nightly job attributes a red run.
 
 import (
 	"context"
@@ -30,14 +32,8 @@ func assertCheck(t *testing.T, code string, lo, hi int64, day time.Time, setup f
 	t.Cleanup(func() { cleanReconScope(t, lo, hi, bizDate) })
 
 	want := setup(t)
-	var check Check
-	for _, c := range d.Checks() {
-		if c.Code == code {
-			check = c
-			break
-		}
-	}
-	if check.Run == nil {
+	check, ok := checkByCode(d, code)
+	if !ok {
 		t.Fatalf("%s: check not registered", code)
 	}
 	diffs, err := check.Run(ctx, d, bizDate, dayStart, dayEnd)
@@ -64,6 +60,16 @@ func assertCheck(t *testing.T, code string, lo, hi int64, day time.Time, setup f
 	}
 }
 
+// checkByCode selects one registered check by its acceptance label.
+func checkByCode(d *Daily, code string) (Check, bool) {
+	for _, c := range d.Checks() {
+		if c.Code == code {
+			return c, true
+		}
+	}
+	return Check{}, false
+}
+
 type fixedClock struct{ day time.Time }
 
 func (c fixedClock) Now() time.Time { return c.day.Add(12 * time.Hour) }
@@ -80,6 +86,7 @@ func TestR02RechargeBonusMismatchDetected(t *testing.T) {
 	assertCheck(t, DiffR02, 903101, 903200, time.Date(2026, 10, 21, 0, 0, 0, 0, CST),
 		func(t *testing.T) wantDiff {
 			insertAccountValues(t, 903101, 600, 300, 1000)
+			insertBatch(t, 903101, 900, 900, 0)
 			return wantDiff{DiffR02, "903101", MatchModeInternal, LevelCritical, 1000, 900, 100}
 		})
 }
@@ -174,4 +181,143 @@ func TestR08CostMarginMismatchDetected(t *testing.T) {
 				 VALUES (?, 903701, 1, 10000, 3000, 1, 8000)`, day.Format("2006-01-02"))
 			return wantDiff{DiffR08, "903701", MatchModeInternal, LevelHigh, 8000, 7000, 1000}
 		})
+}
+
+// ---- T38: settlement §2 additions ---------------------------------------
+
+// §2-4a: a ledger row whose user has no t_credit_account row. R-01's
+// account-side LEFT JOIN cannot see it; the orphan pass must.
+func TestR01OrphanLedgerWithoutAccountDetected(t *testing.T) {
+	day := time.Date(2026, 8, 19, 0, 0, 0, 0, CST)
+	assertCheck(t, DiffR01, 903901, 903950, day,
+		func(t *testing.T) wantDiff {
+			insertLedgerEntry(t, 903901, entryNo("T38A", 1), "RECHARGE",
+				"CREDIT", 0, 1200, 1200, 0, 1200, "t38a:1", nil)
+			var id int64
+			if err := testDB.QueryRow(`SELECT id FROM t_ledger_entry WHERE entry_no = ?`,
+				entryNo("T38A", 1)).Scan(&id); err != nil {
+				t.Fatalf("read T38A entry: %v", err)
+			}
+			return wantDiff{DiffMissingUpstream, fmt.Sprintf("ledger:%d", id),
+				MatchModeInternal, LevelCritical, 1200, 0, 1200}
+		})
+}
+
+// §2-4b: the account holds, but the entry's request_id has neither a
+// t_usage_record nor a t_prehold_hold row. Balance is consistent so only the
+// orphan branch can fire.
+func TestR01OrphanLedgerWithoutBusinessDocDetected(t *testing.T) {
+	day := time.Date(2026, 8, 19, 0, 0, 0, 0, CST)
+	assertCheck(t, DiffR01, 903951, 904000, day,
+		func(t *testing.T) wantDiff {
+			insertAccount(t, 903951, 1000, 0)
+			req := rid("T38B", 1)
+			insertLedgerEntry(t, 903951, entryNo("T38B", 1), "RECHARGE",
+				"CREDIT", 0, 1000, 1000, 0, 1000, "t38b:1", &req)
+			var id int64
+			if err := testDB.QueryRow(`SELECT id FROM t_ledger_entry WHERE entry_no = ?`,
+				entryNo("T38B", 1)).Scan(&id); err != nil {
+				t.Fatalf("read T38B entry: %v", err)
+			}
+			return wantDiff{DiffMissingUpstream, fmt.Sprintf("ledger:%d", id),
+				MatchModeInternal, LevelCritical, 1000, 0, 1000}
+		})
+}
+
+// §2-3: SUM(t_credit_batch.remaining_micro) != balance_recharge + balance_bonus.
+func TestR02BatchSumMismatchDetected(t *testing.T) {
+	day := time.Date(2026, 8, 19, 0, 0, 0, 0, CST)
+	assertCheck(t, DiffR02, 904101, 904150, day,
+		func(t *testing.T) wantDiff {
+			insertAccount(t, 904101, 1000, 0)
+			insertBatch(t, 904101, 1000, 700, 300)
+			return wantDiff{DiffAmountMismatch, "batch:904101",
+				MatchModeInternal, LevelCritical, 1000, 700, 300}
+		})
+}
+
+// §2-1: the day window is broken while every adjacent pair is continuous.
+// Entry 2 claims balance_after=2000 for an amount of 0 on a before of 1000, so
+// first_before+SUM=1000 != last_after=2000. R-03's continuity pass alone would
+// miss it, which is exactly the gap T38 closes.
+func TestR03DayWindowConservationDetected(t *testing.T) {
+	day := time.Date(2026, 8, 19, 0, 0, 0, 0, CST)
+	at := day.Add(10 * time.Hour)
+	assertCheck(t, DiffR03, 904201, 904250, day,
+		func(t *testing.T) wantDiff {
+			insertLedgerEntryAt(t, 904201, entryNo("T38C", 1), "RECHARGE", "CREDIT",
+				0, 1000, 1000, 0, 1000, "t38c:1", nil, at)
+			insertLedgerEntryAt(t, 904201, entryNo("T38C", 2), "ADJUST", "CREDIT",
+				0, 0, 0, 1000, 2000, "t38c:2", nil, at)
+			return wantDiff{DiffAmountMismatch, "user:904201",
+				MatchModeInternal, LevelCritical, 2000, 1000, 1000}
+		})
+}
+
+// §2-5: SUCCESS + consumed>0, older than one hour, with no CONSUME_SETTLE row.
+func TestR06UnsettledSuccessDetected(t *testing.T) {
+	day := time.Date(2026, 8, 19, 0, 0, 0, 0, CST)
+	req := rid("T38D", 1)
+	assertCheck(t, DiffR06, 904301, 904350, day,
+		func(t *testing.T) wantDiff {
+			insertUsage(t, req, 904301, day.Add(10*time.Hour), "SUCCESS", 500)
+			return wantDiff{DiffMissingUpstream, "unsettled:" + req,
+				MatchModeInternal, LevelP0, 0, 500, 500}
+		})
+}
+
+// §2-8: config_version > 0 with no t_config_publish row of that version.
+func TestR09ConfigVersionTraceDetected(t *testing.T) {
+	day := time.Date(2026, 8, 19, 0, 0, 0, 0, CST)
+	req := rid("T38E", 1)
+	assertCheck(t, checkCodeR09, 904401, 904450, day,
+		func(t *testing.T) wantDiff {
+			execFixture(t,
+				`INSERT INTO t_usage_record
+				   (request_id, user_id, api_key_id, api_key_name_snap, model_name_snap,
+				    request_model_req, inbound_protocol, http_status, result,
+				    consumed_micro, total_ms, config_version, created_at)
+				 VALUES (?,904401,1,'fixture','fixture-model','fixture-model',
+				         'OPENAI_COMPAT',200,'SUCCESS',1,1,990077,?)`,
+				req, day.Add(10*time.Hour).UTC())
+			return wantDiff{DiffMissingLocal, "config:" + req,
+				MatchModeInternal, LevelHigh, 0, 990077, 990077}
+		})
+}
+
+// T38 / D-31: chain order is (created_at, id). id=3 is a backfilled seed row
+// with an earlier created_at; ordering by id alone reports a CRITICAL between
+// the live row and the seed, ordering by (created_at, id) does not.
+func TestR03OrderingUsesCreatedAtThenID(t *testing.T) {
+	ctx := context.Background()
+	day := time.Date(2026, 8, 19, 0, 0, 0, 0, CST)
+	bizDate := day.Format("2006-01-02")
+	dayStart, dayEnd := day, day.AddDate(0, 0, 1)
+	const lo, hi = 904501, 904550
+
+	cleanReconScope(t, lo, hi, bizDate)
+	t.Cleanup(func() { cleanReconScope(t, lo, hi, bizDate) })
+
+	live := day.Add(10 * time.Hour)
+	// Live rows first (lower ids), seed row after (higher id, older created_at).
+	insertLedgerEntryAt(t, 904501, entryNo("T38F", 1), "CONSUME_PREHOLD", "DEBIT",
+		0, -200, -200, 1000, 800, "t38f:1", nil, live)
+	insertLedgerEntryAt(t, 904501, entryNo("T38F", 2), "PREHOLD_RELEASE", "CREDIT",
+		0, 200, 200, 800, 1000, "t38f:2", nil, live)
+	insertLedgerEntryAt(t, 904501, entryNo("T38F", 3), "RECHARGE", "CREDIT",
+		0, 1000, 1000, 0, 1000, "t38f:3", nil, day.AddDate(0, 0, -30))
+
+	d := NewDaily(testDB, nil, nil, nil, "t38-order")
+	d.UserLo, d.UserHi = lo, hi
+	check, ok := checkByCode(d, DiffR03)
+	if !ok {
+		t.Fatal("R-03 not registered")
+	}
+	diffs, err := check.Run(ctx, d, bizDate, dayStart, dayEnd)
+	if err != nil {
+		t.Fatalf("R-03: %v", err)
+	}
+	if len(diffs) != 0 {
+		t.Fatalf("R-03 reported %d diff(s) for a (created_at, id)-ordered chain: %+v", len(diffs), diffs)
+	}
 }

@@ -54,7 +54,7 @@ type Daily struct {
 	// UserLo/UserHi bound the internal checks to [UserLo, UserHi). Zero, zero
 	// means the whole table, which is the only shape production uses. Tests
 	// sharing a schema set them so another fixture's accounts cannot appear in
-	// R-01..R-07.
+	// R-01..R-09.
 	UserLo, UserHi int64
 }
 
@@ -102,13 +102,22 @@ type DailyResult struct {
 	P0Reason string
 }
 
-// Check is one of R-01..R-08, exposed for table-driven acceptance tests.
+// checkCodeR09 labels settlement §2-8 in Checks(). It is a check code, not a
+// diff_type: the check emits MISSING_LOCAL, one of the four values frozen by
+// TDS §5.4.1, so no new diff_type enum is introduced.
+const checkCodeR09 = "R09_CONFIG_TRACE"
+
+// Check is one of R-01..R-09, exposed for table-driven acceptance tests.
+//
+// Code is the acceptance label. It is not always the stored diff_type: a check
+// that was extended to cover several settlement §2 assertions emits the §2
+// diff_type for the added assertion (see checkR03, checkR06, checkR09).
 type Check struct {
 	Code string
 	Run  func(ctx context.Context, d *Daily, bizDate string, dayStart, dayEnd time.Time) ([]Diff, error)
 }
 
-// Checks returns R-01..R-08 in order.
+// Checks returns R-01..R-09 in order.
 func (d *Daily) Checks() []Check {
 	return []Check{
 		{DiffR01, checkR01},
@@ -119,6 +128,7 @@ func (d *Daily) Checks() []Check {
 		{DiffR06, checkR06},
 		{DiffR07, checkR07},
 		{DiffR08, checkR08},
+		{checkCodeR09, checkR09},
 	}
 }
 
@@ -177,7 +187,10 @@ func (d *Daily) Run(ctx context.Context, day time.Time) (DailyResult, error) {
 			out.Changed++
 		}
 		d.Recorder.Alert(ctx, diff)
-		if diff.Level == LevelCritical && !alerted[diff.DiffType] {
+		// P0 is the highest external-bill level, and settlement §2-5 assigns it
+		// to unsettled success requests inside an internal check. Without this
+		// branch a P0 finding would only reach the log, not the ops channel.
+		if (diff.Level == LevelCritical || diff.Level == LevelP0) && !alerted[diff.DiffType] {
 			alerted[diff.DiffType] = true
 			body := fmt.Sprintf("biz_date=%s diff_type=%s subject=%s local=%d upstream=%d delta=%d",
 				diff.BizDate, diff.DiffType, diff.Subject, diff.LocalValue, diff.UpstreamValue, diff.DeltaMicro)
@@ -230,18 +243,26 @@ func (d *Daily) shardSize() int64 {
 	return d.ShardSize
 }
 
-// ---- R-01 .. R-08 -------------------------------------------------------
+// ---- R-01 .. R-09 -------------------------------------------------------
 
-// R-01: materialised balance == sum of ledger entries. No tolerance.
+// R-01: materialised balance == sum of ledger entries (settlement §2-2). No
+// tolerance.
+//
+// The second pass covers settlement §2-4 (orphan ledger rows). The account-side
+// LEFT JOIN above starts from t_credit_account, so a ledger row whose user has
+// no account is invisible to it. An entry is also an orphan when it carries a
+// request_id that neither t_usage_record nor t_prehold_hold knows: every
+// request-scoped biz_type is written from a request that must have one of the
+// two rows.
 func checkR01(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]Diff, error) {
-	const q = `SELECT a.user_id, a.balance_micro,
-	                  COALESCE(SUM(l.amount_total_micro), 0) AS ledger_sum
-	             FROM t_credit_account a
-	             LEFT JOIN t_ledger_entry l ON l.user_id = a.user_id
-	            WHERE a.user_id >= ? AND a.user_id < ?
-	            GROUP BY a.user_id, a.balance_micro
-	           HAVING a.balance_micro <> ledger_sum`
-	return d.scanDiffs(ctx, "t_credit_account", q,
+	const balanceQ = `SELECT a.user_id, a.balance_micro,
+	                         COALESCE(SUM(l.amount_total_micro), 0) AS ledger_sum
+	                    FROM t_credit_account a
+	                    LEFT JOIN t_ledger_entry l ON l.user_id = a.user_id
+	                   WHERE a.user_id >= ? AND a.user_id < ?
+	                   GROUP BY a.user_id, a.balance_micro
+	                  HAVING a.balance_micro <> ledger_sum`
+	diffs, err := d.scanDiffs(ctx, "t_credit_account", balanceQ,
 		func(rows *sql.Rows) (Diff, error) {
 			var userID, balance, sum int64
 			if err := rows.Scan(&userID, &balance, &sum); err != nil {
@@ -253,16 +274,52 @@ func checkR01(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 				MatchMode: MatchModeInternal, Level: LevelCritical,
 			}, nil
 		})
+	if err != nil {
+		return nil, err
+	}
+
+	const orphanQ = `SELECT l.id, l.amount_total_micro
+	                   FROM t_ledger_entry l
+	                   LEFT JOIN t_credit_account a ON a.user_id = l.user_id
+	                  WHERE l.user_id >= ? AND l.user_id < ?
+	                    AND (a.user_id IS NULL
+	                         OR (l.request_id IS NOT NULL
+	                             AND NOT EXISTS (SELECT 1 FROM t_usage_record u
+	                                              WHERE u.request_id = l.request_id)
+	                             AND NOT EXISTS (SELECT 1 FROM t_prehold_hold h
+	                                              WHERE h.request_id = l.request_id)))`
+	orphans, err := d.scanDiffs(ctx, "t_ledger_entry", orphanQ,
+		func(rows *sql.Rows) (Diff, error) {
+			var id, amount int64
+			if err := rows.Scan(&id, &amount); err != nil {
+				return Diff{}, err
+			}
+			return Diff{
+				BizDate: bizDate, DiffType: DiffMissingUpstream,
+				Subject:    "ledger:" + strconv.FormatInt(id, 10),
+				LocalValue: amount, UpstreamValue: 0, DeltaMicro: amount,
+				MatchMode: MatchModeInternal, Level: LevelCritical,
+			}, nil
+		})
+	if err != nil {
+		return diffs, err
+	}
+	return append(diffs, orphans...), nil
 }
 
 // R-02: balance_micro == recharge + bonus. No tolerance.
+//
+// The second pass covers settlement §2-3: the batch ledger must add up to the
+// same two account columns, SUM(t_credit_batch.remaining_micro) ==
+// balance_recharge + balance_bonus. It is compared against the split columns,
+// not balance_micro, so a §2-2 violation does not mask a §2-3 one.
 func checkR02(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]Diff, error) {
 	const q = `SELECT user_id, balance_micro,
 	                  balance_recharge_micro + balance_bonus_micro AS two_accounts
 	             FROM t_credit_account
 	            WHERE user_id >= ? AND user_id < ?
 	              AND balance_micro <> balance_recharge_micro + balance_bonus_micro`
-	return d.scanDiffs(ctx, "t_credit_account", q,
+	diffs, err := d.scanDiffs(ctx, "t_credit_account", q,
 		func(rows *sql.Rows) (Diff, error) {
 			var userID, balance, sum int64
 			if err := rows.Scan(&userID, &balance, &sum); err != nil {
@@ -274,12 +331,64 @@ func checkR02(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 				MatchMode: MatchModeInternal, Level: LevelCritical,
 			}, nil
 		})
+	if err != nil {
+		return nil, err
+	}
+
+	const batchQ = `SELECT a.user_id,
+	                       a.balance_recharge_micro + a.balance_bonus_micro AS account_sum,
+	                       COALESCE(SUM(b.remaining_micro), 0) AS batch_sum
+	                  FROM t_credit_account a
+	                  LEFT JOIN t_credit_batch b ON b.user_id = a.user_id
+	                 WHERE a.user_id >= ? AND a.user_id < ?
+	                 GROUP BY a.user_id, a.balance_recharge_micro, a.balance_bonus_micro
+	                HAVING a.balance_recharge_micro + a.balance_bonus_micro
+	                       <> COALESCE(SUM(b.remaining_micro), 0)`
+	batchDiffs, err := d.scanDiffs(ctx, "t_credit_account", batchQ,
+		func(rows *sql.Rows) (Diff, error) {
+			var userID, accountSum, batchSum int64
+			if err := rows.Scan(&userID, &accountSum, &batchSum); err != nil {
+				return Diff{}, err
+			}
+			return Diff{
+				BizDate: bizDate, DiffType: DiffAmountMismatch,
+				Subject:    "batch:" + strconv.FormatInt(userID, 10),
+				LocalValue: accountSum, UpstreamValue: batchSum, DeltaMicro: accountSum - batchSum,
+				MatchMode: MatchModeInternal, Level: LevelCritical,
+			}, nil
+		})
+	if err != nil {
+		return diffs, err
+	}
+	return append(diffs, batchDiffs...), nil
 }
 
-// R-03: each entry's balance_before equals the previous entry's
-// balance_after, ordered by id within a user. Per-user pagination follows the
-// TDS shard guidance; the subject is the earlier entry id.
-func checkR03(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]Diff, error) {
+// R-03: covers settlement §2-1 twice over.
+//
+//   - Per-entry continuity: each entry's balance_before equals the previous
+//     entry's balance_after (subject = the earlier entry id).
+//   - Day window: for each user, first_before + SUM(day amount) == last_after.
+//
+// Chain order is (created_at, id), never id alone: ledger id monotonicity is
+// not a contract — backfilled rows (seed imports, cross-day settlements) get a
+// higher auto-increment id but an earlier created_at. The 2026-10-29 DR drill
+// produced a false CRITICAL because id=33/34 (live) preceded id=35..42 (seed
+// rows with earlier created_at).
+func checkR03(ctx context.Context, d *Daily, bizDate string, dayStart, dayEnd time.Time) ([]Diff, error) {
+	diffs, err := d.checkR03Continuity(ctx, bizDate)
+	if err != nil {
+		return diffs, err
+	}
+	dayDiffs, err := d.checkR03DayWindow(ctx, bizDate, dayStart, dayEnd)
+	if err != nil {
+		return diffs, err
+	}
+	return append(diffs, dayDiffs...), nil
+}
+
+// checkR03Continuity walks each user's chain in (created_at, id) order. Per-user
+// pagination follows the TDS shard guidance; the page cursor is the same tuple.
+func (d *Daily) checkR03Continuity(ctx context.Context, bizDate string) ([]Diff, error) {
 	var diffs []Diff
 	lo, hi := d.shardBounds()
 	maxUser, err := d.maxUser(ctx, "t_ledger_entry", "")
@@ -299,15 +408,23 @@ func checkR03(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 		}
 		for _, uid := range users {
 			var lastID int64
+			var lastCreated time.Time
+			haveLast := false
 			var prevID, prevAfter int64
 			havePrev := false
 			for {
-				rows, err := d.DB.QueryContext(ctx,
-					`SELECT id, request_id, balance_before_micro, balance_after_micro
-					   FROM t_ledger_entry
-					  WHERE user_id = ? AND id > ?
-					  ORDER BY id ASC
-					  LIMIT ?`, uid, lastID, DailyLedgerPage)
+				q := `SELECT id, request_id, balance_before_micro, balance_after_micro, created_at
+				        FROM t_ledger_entry
+				       WHERE user_id = ?`
+				args := []any{uid}
+				if haveLast {
+					q += ` AND (created_at > ? OR (created_at = ? AND id > ?))`
+					args = append(args, lastCreated, lastCreated, lastID)
+				}
+				q += ` ORDER BY created_at ASC, id ASC LIMIT ?`
+				args = append(args, DailyLedgerPage)
+
+				rows, err := d.DB.QueryContext(ctx, q, args...)
 				if err != nil {
 					return diffs, fmt.Errorf("recon: R-03 page user=%d: %w", uid, err)
 				}
@@ -315,7 +432,8 @@ func checkR03(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 				for rows.Next() {
 					var id, before, after int64
 					var requestID sql.NullString
-					if err := rows.Scan(&id, &requestID, &before, &after); err != nil {
+					var created time.Time
+					if err := rows.Scan(&id, &requestID, &before, &after, &created); err != nil {
 						rows.Close()
 						return diffs, fmt.Errorf("recon: R-03 scan: %w", err)
 					}
@@ -328,7 +446,7 @@ func checkR03(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 						})
 					}
 					prevID, prevAfter, havePrev = id, after, true
-					lastID = id
+					lastID, lastCreated, haveLast = id, created, true
 					n++
 				}
 				if err := rows.Err(); err != nil {
@@ -341,6 +459,66 @@ func checkR03(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 				}
 			}
 		}
+	}
+	return diffs, nil
+}
+
+// checkR03DayWindow implements settlement §2-1 for one natural day: opening
+// balance (first row's balance_before) + the day's net amount must equal the
+// closing balance (last row's balance_after). Ordering is (created_at, id) for
+// the same reason as the continuity pass.
+func (d *Daily) checkR03DayWindow(ctx context.Context, bizDate string, dayStart, dayEnd time.Time) ([]Diff, error) {
+	const q = `SELECT user_id, first_before, last_after, day_sum
+	             FROM (
+	               SELECT user_id,
+	                      FIRST_VALUE(balance_before_micro) OVER
+	                        (PARTITION BY user_id ORDER BY created_at, id
+	                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS first_before,
+	                      LAST_VALUE(balance_after_micro) OVER
+	                        (PARTITION BY user_id ORDER BY created_at, id
+	                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS last_after,
+	                      SUM(amount_total_micro) OVER (PARTITION BY user_id) AS day_sum,
+	                      ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY created_at, id) AS rn
+	                 FROM t_ledger_entry
+	                WHERE user_id >= ? AND user_id < ?
+	                  AND created_at >= ? AND created_at < ?
+	             ) t
+	            WHERE rn = 1 AND first_before + day_sum <> last_after`
+	var diffs []Diff
+	lo, hi := d.shardBounds()
+	maxUser, err := d.maxUser(ctx, "t_ledger_entry",
+		"created_at >= ? AND created_at < ?", dayStart.UTC(), dayEnd.UTC())
+	if err != nil {
+		return nil, err
+	}
+	for shardLo := lo; shardLo <= maxUser; shardLo += d.shardSize() {
+		shardHi := shardLo + d.shardSize()
+		if shardHi > hi {
+			shardHi = hi
+		}
+		rows, err := d.DB.QueryContext(ctx, q, shardLo, shardHi, dayStart.UTC(), dayEnd.UTC())
+		if err != nil {
+			return diffs, fmt.Errorf("recon: R-03 day window: %w", err)
+		}
+		for rows.Next() {
+			var uid, firstBefore, lastAfter, daySum int64
+			if err := rows.Scan(&uid, &firstBefore, &lastAfter, &daySum); err != nil {
+				rows.Close()
+				return diffs, fmt.Errorf("recon: R-03 day window scan: %w", err)
+			}
+			want := firstBefore + daySum
+			diffs = append(diffs, Diff{
+				BizDate: bizDate, DiffType: DiffAmountMismatch,
+				Subject:    "user:" + strconv.FormatInt(uid, 10),
+				LocalValue: lastAfter, UpstreamValue: want, DeltaMicro: lastAfter - want,
+				MatchMode: MatchModeInternal, Level: LevelCritical,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return diffs, fmt.Errorf("recon: R-03 day window rows: %w", err)
+		}
+		rows.Close()
 	}
 	return diffs, nil
 }
@@ -436,7 +614,12 @@ func checkR05(ctx context.Context, d *Daily, bizDate string, dayStart, dayEnd ti
 }
 
 // R-06: expired HELD older than one hour. Any row is HIGH.
-func checkR06(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]Diff, error) {
+//
+// The second pass covers settlement §2-5: a SUCCESS usage row with
+// consumed_micro > 0 that still has no CONSUME_SETTLE ledger row one hour
+// after the request is an unsettled success request. §2-5 sets the level to
+// P0; the check stays read-only, the operator confirms and reverses manually.
+func checkR06(ctx context.Context, d *Daily, bizDate string, dayStart, dayEnd time.Time) ([]Diff, error) {
 	q := `SELECT COUNT(*) FROM t_prehold_hold
 	       WHERE state = 'HELD'
 	         AND expires_at < UTC_TIMESTAMP(3) - INTERVAL 1 HOUR`
@@ -451,14 +634,47 @@ func checkR06(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 	if err != nil {
 		return nil, fmt.Errorf("recon: R-06: %w", err)
 	}
-	if n == 0 {
-		return nil, nil
+	var diffs []Diff
+	if n > 0 {
+		diffs = append(diffs, Diff{
+			BizDate: bizDate, DiffType: DiffR06, Subject: "GLOBAL",
+			LocalValue: n, UpstreamValue: 0, DeltaMicro: n,
+			MatchMode: MatchModeInternal, Level: LevelHigh,
+		})
 	}
-	return []Diff{{
-		BizDate: bizDate, DiffType: DiffR06, Subject: "GLOBAL",
-		LocalValue: n, UpstreamValue: 0, DeltaMicro: n,
-		MatchMode: MatchModeInternal, Level: LevelHigh,
-	}}, nil
+
+	const unsettledQ = `SELECT u.request_id, u.consumed_micro
+	                      FROM t_usage_record u
+	                     WHERE u.user_id >= ? AND u.user_id < ?
+	                       AND u.created_at >= ? AND u.created_at < ?
+	                       AND u.result = 'SUCCESS' AND u.consumed_micro > 0
+	                       AND u.created_at < UTC_TIMESTAMP(3) - INTERVAL 1 HOUR
+	                       AND NOT EXISTS (SELECT 1 FROM t_ledger_entry l
+	                                        WHERE l.request_id = u.request_id
+	                                          AND l.biz_type = 'CONSUME_SETTLE')`
+	lo, hi := d.shardBounds()
+	rows, err := d.DB.QueryContext(ctx, unsettledQ, lo, hi, dayStart.UTC(), dayEnd.UTC())
+	if err != nil {
+		return diffs, fmt.Errorf("recon: R-06 unsettled: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var requestID string
+		var consumed int64
+		if err := rows.Scan(&requestID, &consumed); err != nil {
+			return diffs, fmt.Errorf("recon: R-06 unsettled scan: %w", err)
+		}
+		diffs = append(diffs, Diff{
+			BizDate: bizDate, DiffType: DiffMissingUpstream,
+			Subject: "unsettled:" + requestID, RequestID: requestID,
+			LocalValue: 0, UpstreamValue: consumed, DeltaMicro: consumed,
+			MatchMode: MatchModeInternal, Level: LevelP0,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return diffs, fmt.Errorf("recon: R-06 unsettled rows: %w", err)
+	}
+	return diffs, nil
 }
 
 // R-07: expired idempotency rows above the TDS threshold (100,000).
@@ -515,6 +731,62 @@ func checkR08(ctx context.Context, d *Daily, bizDate string, _, _ time.Time) ([]
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("recon: R-08 rows: %w", err)
+	}
+	return diffs, nil
+}
+
+// R-09: covers settlement §2-8 (config version traceability). Every usage row
+// served after the config_version column existed must point at a published
+// version in t_config_publish; a version with no publish row means the request
+// cannot be replayed against the config that priced it.
+//
+// config_version = 0 is exempt: the column comment defines 0 as "requests from
+// before this column was added", and there is no publish row to point at.
+// Diff type is MISSING_LOCAL (one of the four frozen TDS §5.4.1 values); the
+// check label is checkCodeR09, so no diff_type enum is added.
+func checkR09(ctx context.Context, d *Daily, bizDate string, dayStart, dayEnd time.Time) ([]Diff, error) {
+	const q = `SELECT u.request_id, u.config_version
+	             FROM t_usage_record u
+	            WHERE u.user_id >= ? AND u.user_id < ?
+	              AND u.created_at >= ? AND u.created_at < ?
+	              AND u.config_version > 0
+	              AND NOT EXISTS (SELECT 1 FROM t_config_publish p
+	                               WHERE p.version = u.config_version)`
+	var diffs []Diff
+	lo, hi := d.shardBounds()
+	maxUser, err := d.maxUser(ctx, "t_usage_record",
+		"created_at >= ? AND created_at < ?", dayStart.UTC(), dayEnd.UTC())
+	if err != nil {
+		return nil, err
+	}
+	for shardLo := lo; shardLo <= maxUser; shardLo += d.shardSize() {
+		shardHi := shardLo + d.shardSize()
+		if shardHi > hi {
+			shardHi = hi
+		}
+		rows, err := d.DB.QueryContext(ctx, q, shardLo, shardHi, dayStart.UTC(), dayEnd.UTC())
+		if err != nil {
+			return diffs, fmt.Errorf("recon: R-09: %w", err)
+		}
+		for rows.Next() {
+			var requestID string
+			var version int64
+			if err := rows.Scan(&requestID, &version); err != nil {
+				rows.Close()
+				return diffs, fmt.Errorf("recon: R-09 scan: %w", err)
+			}
+			diffs = append(diffs, Diff{
+				BizDate: bizDate, DiffType: DiffMissingLocal,
+				Subject: "config:" + requestID, RequestID: requestID,
+				LocalValue: 0, UpstreamValue: version, DeltaMicro: version,
+				MatchMode: MatchModeInternal, Level: LevelHigh,
+			})
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return diffs, fmt.Errorf("recon: R-09 rows: %w", err)
+		}
+		rows.Close()
 	}
 	return diffs, nil
 }

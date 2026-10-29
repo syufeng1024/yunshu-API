@@ -55,20 +55,28 @@ sequenceDiagram
 
 ## 2. 日对账 8 条断言
 
-以下 8 条为任务卡原文，由第二段的 `internal/recon/daily.go` 执行。本段只建立 `t_reconcile_diff` 的落库契约：`diff_key = sha256(biz_date|diff_type|subject)`，其中 `subject` 编码断言与被比较的主体，`diff_type` 保持 TDS §5.4.1 冻结的四值，不新增枚举。
+以下 8 条为任务卡原文，由 `internal/recon/daily.go` 执行。`t_reconcile_diff` 的落库契约：`diff_key = sha256(biz_date|diff_type|subject)`，其中 `subject` 编码断言与被比较的主体。`diff_type` 不新增枚举：内部检查沿用 D-19 已定的 `R01_BALANCE_MISMATCH` … `R08_COST_MARGIN_MISMATCH`（`match_mode=INTERNAL`），T38 补齐的 §2 断言复用 TDS §5.4.1 的四个外部值（`TOKEN_MISMATCH` / `AMOUNT_MISMATCH` / `MISSING_LOCAL` / `MISSING_UPSTREAM`）；`R09` 只是检查编号，不是新的 `diff_type`。
 
-| # | 断言（原文） | 判定 SQL 口径 | `subject` / `diff_type` | 阈值 |
-| :--- | :--- | :--- | :--- | :--- |
-| 1 | 金额守恒 | 自然日内 `SUM(流水) + 期初 = 期末`，按 `user_id` 分片 | `<user_id>` / `AMOUNT_MISMATCH` | 任何差额 P0 |
-| 2 | 流水和 == 余额 | `t_credit_account.balance_micro <> SUM(t_ledger_entry.amount_total_micro)` | `<user_id>` / `AMOUNT_MISMATCH` | 任何一行 CRITICAL |
-| 3 | 批次余额和 == 账户余额 | `SUM(t_credit_batch.remaining_micro) <> balance_bonus_micro + balance_recharge_micro` | `<user_id>` / `AMOUNT_MISMATCH` | 任何一行 CRITICAL |
-| 4 | 无孤儿流水 | `t_ledger_entry.user_id` 在 `t_credit_account` 无行；或 `idem_key` 无对应业务单据 | `<ledger_id>` / `MISSING_UPSTREAM` | 任何一行 CRITICAL |
-| 5 | 无未结算成功请求 | `t_usage_record.result='SUCCESS' AND consumed_micro>0` 且无 `settle:{request_id}` | `<request_id>` / `MISSING_UPSTREAM` | 1 小时内未收敛即 P0 |
-| 6 | 上游账单差 ≤ 阈值 | `t_upstream_bill` 与 `t_usage_record` 按渠道/日汇总的差额 | `<channel_id>:<biz_date>` / `AMOUNT_MISMATCH` | 单笔 > 1 元或日汇总 > 100 元 P0，其余 P1 |
-| 7 | 日额度快照一致 | `t_user_daily_quota.used_total_micro` 与当日 `SUM(t_usage_record.consumed_micro)` | `<user_id>:<biz_date>` / `TOKEN_MISMATCH` | 偏差 > 100 微积分 HIGH，> 10,000 微积分 CRITICAL |
-| 8 | 配置版本可回溯 | `t_usage_record.config_version` 在 `t_config_publish` 有记录；缺失即为不可回溯 | `<request_id>` / `MISSING_LOCAL` | 任何一行 HIGH |
+「实现」列给出每条断言落在哪个检查函数。R-01..R-09 是 `Daily.Checks()` 的执行编号，不是 `diff_type`：扩展过的检查对新增断言写该条 §2 规定的 `diff_type`（如 R-01 的孤儿流水写 `MISSING_UPSTREAM`）。
 
-`match_mode`：单笔按 `request_id` 命中写 `EXACT`；只能用时间窗 + 模型 + token 数近似匹配时写 `APPROX`；汇总断言写 `DAILY`。
+| # | 断言（原文） | 判定 SQL 口径 | `subject` / `diff_type` | 阈值 | 实现（R 编号 / runExternal） |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 1 | 金额守恒 | 自然日内 `SUM(流水) + 期初 = 期末`，按 `user_id` 分片 | `user:<user_id>` / `AMOUNT_MISMATCH` | 任何差额 P0 | `checkR03` 日窗口 pass（`daily.go`，`checkR03DayWindow`） |
+| 2 | 流水和 == 余额 | `t_credit_account.balance_micro <> SUM(t_ledger_entry.amount_total_micro)` | `<user_id>` / `R01_BALANCE_MISMATCH` | 任何一行 CRITICAL | `checkR01` 余额 pass（`daily.go`） |
+| 3 | 批次余额和 == 账户余额 | `SUM(t_credit_batch.remaining_micro) <> balance_bonus_micro + balance_recharge_micro` | `batch:<user_id>` / `AMOUNT_MISMATCH` | 任何一行 CRITICAL | `checkR02` 批次 pass（`daily.go`） |
+| 4 | 无孤儿流水 | `t_ledger_entry.user_id` 在 `t_credit_account` 无行；或 `request_id` 在 `t_usage_record` / `t_prehold_hold` 均无行 | `ledger:<id>` / `MISSING_UPSTREAM` | 任何一行 CRITICAL | `checkR01` 孤儿 pass（`daily.go`） |
+| 5 | 无未结算成功请求 | `t_usage_record.result='SUCCESS' AND consumed_micro>0` 且无 `CONSUME_SETTLE` 流水 | `unsettled:<request_id>` / `MISSING_UPSTREAM` | 1 小时内未收敛即 P0 | `checkR06` 未结算 pass（`daily.go`） |
+| 6 | 上游账单差 ≤ 阈值 | `t_upstream_bill` 与 `t_usage_record` 逐笔匹配（`request_id` 缺失时按渠道 + 模型 + token 近似） | `<request_id>`/`<trade_no>` / `TOKEN_MISMATCH`、`AMOUNT_MISMATCH`、`MISSING_LOCAL`、`MISSING_UPSTREAM` | 单笔 > 1 元或日汇总 > 100 元 P0，其余 P1 | `runExternal`（`daily.go`，不在 `Checks()` 内） |
+| 7 | 日额度快照一致 | `t_user_daily_quota.used_total_micro` 与当日 `SUM(t_usage_record.consumed_micro)` | `<user_id>` / `R05_DAILY_QUOTA` | 偏差 > 100 微积分 HIGH，> 10,000 微积分 CRITICAL | `checkR05`（`daily.go`） |
+| 8 | 配置版本可回溯 | `t_usage_record.config_version` 在 `t_config_publish.version` 有记录；`config_version=0`（该列上线前的历史请求）豁免 | `config:<request_id>` / `MISSING_LOCAL` | 任何一行 HIGH | `checkR09`（`daily.go`，检查码 `R09_CONFIG_TRACE`） |
+
+`subject` 编码：第 1、3 条都落 `AMOUNT_MISMATCH`，若都直接写 `<user_id>`，同一用户的「金额守恒」与「批次余额和」会按 `(biz_date, diff_type, subject)` 归一成一行而互相覆盖。实现固定用 `user:<user_id>`（第 1 条）、`batch:<user_id>`（第 3 条）、`ledger:<id>`（第 4 条）、`unsettled:<request_id>`（第 5 条）、`config:<request_id>`（第 8 条）。第 2、7 条分别落 `R01_BALANCE_MISMATCH` / `R05_DAILY_QUOTA`，`subject` 直接写 `<user_id>`，与上述断言不共享 `diff_key`。
+
+等级：内部检查使用 TDS §5.4 的 `CRITICAL` / `HIGH` / `MEDIUM`，第 1～4 条为 `CRITICAL`、第 8 条为 `HIGH`；第 5 条按任务卡要求写 `P0`，`Daily.Run` 对 `P0` 与 `CRITICAL` 都发 `RECONCILE_ALERT`。
+
+R-02、R-04、R-06、R-07、R-08 在 §2 中没有独立行：R-02/R-04 的原始断言（余额 = 两账之和、单批次 `remaining = face - consumed`）是第 3 条的账户侧与批次侧前置条件；R-06 的悬挂预扣、R-07 的过期幂等、R-08 的毛利等式是 §2 之外的资金卫生检查，保留但不计入上述 8 条。
+
+`match_mode`：内部断言写 `INTERNAL`；外部单笔按 `request_id` 命中写 `DAILY`；只能用时间窗 + 模型 + token 数近似匹配时写 `APPROX`。
 
 ## 3. 差异处置路径
 

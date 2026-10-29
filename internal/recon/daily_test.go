@@ -116,6 +116,9 @@ func TestDailyChecksR01toR08(t *testing.T) {
 			name: "R02 balance != recharge+bonus", code: DiffR02,
 			setup: func(t *testing.T) []wantDiff {
 				insertAccountValues(t, 901002, 600, 300, 1000)
+				// Batch sum matches the split columns (900), so only the §2-2
+				// assertion fires; §2-3 is a separate case.
+				insertBatch(t, 901002, 900, 900, 0)
 				return []wantDiff{{DiffR02, "901002", MatchModeInternal, LevelCritical, 1000, 900, 100}}
 			},
 		},
@@ -272,6 +275,7 @@ func TestDailyRerunConvergesAndKeepsClosedRowsClosed(t *testing.T) {
 	const user = int64(902001)
 	cleanReconScope(t, 902000, 902100, bizDate)
 	insertAccount(t, user, 5000, 0)
+	insertBatch(t, user, 5000, 5000, 0) // keep settlement §2-3 satisfied
 	key := DiffKey(bizDate, DiffR01, "902001")
 	t.Cleanup(func() { cleanReconScope(t, 902000, 902100, bizDate) })
 
@@ -331,6 +335,7 @@ func TestDailyRerunConvergesAndKeepsClosedRowsClosed(t *testing.T) {
 	// Re-seed the account instead of updating the balance in place.
 	deleteAccount(t, user)
 	insertAccountValues(t, user, 6000, 0, 6000)
+	insertBatch(t, user, 6000, 6000, 0) // keep settlement §2-3 satisfied
 	resetLock()
 	fifth := run("instance-5")
 	if fifth.Changed != 1 {
@@ -368,19 +373,25 @@ func TestDailyThousandRequestsZeroDiffs(t *testing.T) {
 	// Opening balance must itself be a ledger row; otherwise R-01 cannot hold.
 	insertLedgerEntry(t, user, entryNo("A14", 0), "RECHARGE", "CREDIT",
 		0, 1000000, 1000000, 0, 1000000, "a14:open", nil)
+	// settlement §2-3: the recharge is backed by one batch whose remaining
+	// value equals the final balance (1,000,000 - 700,000 consumed).
+	insertBatch(t, user, 1000000, 300000, 700000)
 
 	const requests = 1000
 	var ledger []ledgerFixture
 	balance := int64(1_000_000)
 	for i := 0; i < requests; i++ {
 		req := rid("a14r", i)
+		// request_id is set on every request-scoped row, as ledger.Settle and
+		// ledger.Prehold do in production. settlement §2-4 (business doc) and
+		// §2-5 (unsettled success) both key on it.
 		ledger = append(ledger,
 			ledgerFixture{entryNo("A14", 3*i+1), "CONSUME_PREHOLD", "DEBIT", "a14:pre:" + req,
-				-1000, -1000, balance, balance - 1000},
+				-1000, -1000, balance, balance - 1000, &req},
 			ledgerFixture{entryNo("A14", 3*i+2), "PREHOLD_RELEASE", "CREDIT", "a14:rel:" + req,
-				1000, 1000, balance - 1000, balance},
+				1000, 1000, balance - 1000, balance, &req},
 			ledgerFixture{entryNo("A14", 3*i+3), "CONSUME_SETTLE", "DEBIT", "a14:set:" + req,
-				-700, -700, balance, balance - 700},
+				-700, -700, balance, balance - 700, &req},
 		)
 		balance -= 700
 	}
@@ -430,6 +441,7 @@ func TestDailyThousandRequestsZeroDiffs(t *testing.T) {
 type ledgerFixture struct {
 	no, biz, dir, idem             string
 	recharge, total, before, after int64
+	requestID                      *string
 }
 
 func insertLedgerBatch(t *testing.T, userID int64, rows []ledgerFixture) {
@@ -445,16 +457,16 @@ func insertLedgerBatch(t *testing.T, userID int64, rows []ledgerFixture) {
 		b.WriteString(`INSERT INTO t_ledger_entry
 		  (user_id, entry_no, account_type, direction, biz_type,
 		   amount_bonus_micro, amount_recharge_micro, amount_total_micro,
-		   balance_before_micro, balance_after_micro, idem_key, created_at) VALUES `)
-		args := make([]any, 0, (end-start)*12)
+		   balance_before_micro, balance_after_micro, request_id, idem_key, created_at) VALUES `)
+		args := make([]any, 0, (end-start)*13)
 		for i := start; i < end; i++ {
 			if i > start {
 				b.WriteByte(',')
 			}
-			b.WriteString(`(?,?,'RECHARGE',?,?,0,?,?,?,?,?,?)`)
+			b.WriteString(`(?,?,'RECHARGE',?,?,0,?,?,?,?,?,?,?)`)
 			r := rows[i]
 			args = append(args, userID, r.no, r.dir, r.biz, r.recharge, r.total,
-				r.before, r.after, r.idem, now)
+				r.before, r.after, r.requestID, r.idem, now)
 		}
 		if _, err := testDB.ExecContext(context.Background(), b.String(), args...); err != nil {
 			t.Fatalf("insert ledger batch: %v", err)
