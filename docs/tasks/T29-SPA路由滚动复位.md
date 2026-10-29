@@ -7,7 +7,7 @@
 | 优先级 | P1（A 项是 P0，但当前不可复现，本卡负责给出可证伪的结论） |
 | 依赖 | T28（A 项未复现、G10 由此登记） |
 | 交付根 | `web/src/router.tsx`、`web/src/layouts/`、`web/src/components/` |
-| 状态 | ⬜ 未开始 |
+| 状态 | ✅ 通过（2026-10-29；G10 修复，A 结论为「非同根因、仍不可复现」） |
 
 ## 1. 目标
 
@@ -73,4 +73,37 @@ cd /d/codes/yunshu-api && bash scripts/check-eol.sh; echo EOL=$?
 
 ## 8. 交付记录
 
-（待回填）
+### 完成回执（已归档，2026-10-29）
+
+派单 10:44，交付 10:54（56 turns / 592s / $2.17）。实现方未提交 git，改动由交付总监复核后提交。
+
+| 项 | 实现方自报 | 交付总监独立复核 | 裁定 |
+| :--- | :--- | :--- | :--- |
+| G10 根因 | `router.tsx:35` 用 `createBrowserRouter` 建数据路由，但三套 layout 都没挂 `<ScrollRestoration />`，react-router 因此不接管滚动 | 读码确认：全仓仅 `ScrollRestorer.tsx` 引用 `ScrollRestoration`，三套 layout 各挂 1 处（`ConsoleLayout.tsx:30`、`SiteLayout.tsx:45`、`AdminLayout.tsx:32`） | ✅ |
+| G10 修复 | 新增 `ScrollRestorer.tsx` 薄封装；三套 layout 挂载；新增 2 个用例（PUSH 回顶 / POP 恢复） | 重建 web 镜像后在 8088 实测：`/console/usage` 滚到 400 → 点侧栏「在线调试台」→ **`scrollY=0`**；`goBack()` → **`scrollY=400`**（位置恢复）；`/docs` 滚到 400 → 点「定价」→ **`scrollY=0`** | ✅ |
+| A 项结论 | **与 G10 非同根因**：8 组「残留 scrollY + PageDown」实测空白 0–13px；浏览器会先把 `scrollY` 钳到 `maxScroll`（实测 672 档 maxScroll=1299、停在 588），滚动只把内容上移，不可能在内容上方造出空白；G10 的真实症状是「页面从中段开始」，与 A 的「整体下沉、上方全白」方向相反 | 我在重建后的生产包上复测同一条路径：`scrollY=0` → PageDown 后 `scrollY=588`、视口 y=2 命中 **`TEXTAREA`**、`firstTop=-564`（内容在视口上方，非空白）；`/pricing` 同理命中站点头部、`firstTop=-523`。**未见任何 >24px 空白带** | ✅ 结论成立 |
+
+### 自检复跑（交付总监执行）
+
+| 检查 | 结果 |
+| :--- | :--- |
+| `npx tsc --noEmit` | `TSC_EXIT=0` |
+| `npx vitest run` | **47 文件 / 196 用例**全通过（基线 46/194，本卡 +1 文件 / +2 用例） |
+| `npm run build` + 重建 `yunshu-web:local` | 成功，`WEB=200` |
+| `bash scripts/check-eol.sh` | `EOL=0` |
+
+### 偏离（成立，已接受）
+
+| # | 偏离 | 裁定 |
+| :--- | :--- | :--- |
+| 1 | 改了卡面清单外的 `web/src/layouts/SiteLayout.test.tsx` | 成立：`<ScrollRestoration />` 在 `MemoryRouter` 下会抛 `useScrollRestoration must be used within a data router`，两例直接红。只换 harness（`MemoryRouter` → `createMemoryRouter`），断言逐字未改。**未采用「非数据路由静默降级」的绕法**，方向正确 |
+| 2 | 单测 POP 用 `navigate(-1)` 而非 `history.back()` | 成立：`createMemoryRouter` 不经过 `window.history`，`navigate(-1)` 派发的是同一个 POP action，`<ScrollRestoration>` 正是按 action 判定恢复分支 |
+| 3 | 验收口径①的 `/console/keys` 不可滚（`docH == innerHeight`，`maxScroll=0`） | 成立：当前种子数据下该页只有一屏，`scrollTo(0,400)` 只能停在 0，属**空真**。改用同布局的 `/console/usage`（`maxScroll=825`）作为真实来源，我独立复测时也走这条 |
+
+### 遗留
+
+| # | 项 | 处置 |
+| :--- | :--- | :--- |
+| 1 | **A 项（P0 布局空白带）在两档视口、四条路径下仍不可复现** | 四次独立测量（T28 两次 + 本卡两次，含生产包）空白带 ≤24px。**转 BACKLOG G13 挂起**，等用户提供浏览器版本 / 缩放 / 录屏路径 |
+| 2 | `ScrollRestorer` 依赖数据路由 | 后续任何直接渲染三套 layout 的新测试必须用 `createMemoryRouter`，否则抛错。已在 `SiteLayout.test.tsx` 注释说明 |
+

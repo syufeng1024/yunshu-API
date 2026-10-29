@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { Icon } from '@/components/Icon'
 import { Logo } from '@/components/Logo'
+import { ScrollRestorer } from '@/components/ScrollRestorer'
 import { CONSOLE_NAV, ROUTES } from '@/lib/constants'
 import { cn } from '@/lib/cn'
 import { useAuthStore } from '@/stores/auth'
@@ -26,6 +27,7 @@ export function ConsoleLayout() {
 
   return (
     <div className="min-h-screen bg-canvas md:flex">
+      <ScrollRestorer />
       <aside className="sticky top-0 z-30 flex w-full shrink-0 flex-row items-center gap-2 bg-sidebar-bg px-3 py-2 md:h-screen md:w-sidebar md:flex-col md:items-stretch md:gap-6 md:px-4 md:py-5">
         <div className="flex items-center justify-between md:justify-start">
           <Logo variant="dark" size="sm" collapsible to={ROUTES.console} />

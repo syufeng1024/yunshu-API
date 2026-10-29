@@ -11,7 +11,7 @@
 | 技术基线 | TDS V1.2（2026-10-25） |
 | 任务卡版本 | T-1.0（2026-10-26） |
 | 卡片总数 | 29 张（阶段 0–6，含补口卡 T24/T25、防线卡 T26、功能补口 T27、缺陷修复 T28） |
-| 跨卡待办 | 12 项，见 [BACKLOG.md](BACKLOG.md) |
+| 跨卡待办 | 12 项（含挂起 3 项），见 [BACKLOG.md](BACKLOG.md) |
 | 交付总监（需求拆分 / 派单 / 验收） | 齐活林（本会话主理人） |
 | 实现方（按卡执行） | Claude Code（`claude_code_run`） |
 
@@ -156,8 +156,8 @@
 | [T25](T25-日志请求正文落库.md) | 日志请求正文落库（迁移 0022 + 写入端 + 解密接线） | T14,T22 段1/2,T24 | `internal/platform/migrate/`、`internal/settle/`、`internal/logq/` | ✅ 一次通过（2026-10-28） |
 | [T26](T26-行尾一致性与迁移校验守卫.md) | 行尾一致性与迁移校验守卫（防 checksum 跨平台漂移） | T25 | `scripts/`、`.gitattributes`、`docs/dev-setup.md` | ✅ 通过（2026-10-28） |
 | [T27](T27-在线调试台段1内网扣费链路.md) | 在线调试台（段 1 内网扣费链路 + 段 2 前端接入） | T07–T09,T11,T12,T19 | `internal/gw/`、`internal/control/console/`、`web/src/`、`deploy/` | ✅ 两段完成（2026-10-29）；端到端已跑通 |
-| [T28](T28-实测缺陷修复与待办总账.md) | 实测缺陷修复与待办总账（5 修复 + 9 项总账） | T27 | `web/src/`、`internal/control/console/`、`scripts/` | 🟨 有条件通过（B/C/D/E 过，A 未复现→转 T29） |
-| [T29](T29-SPA路由滚动复位.md) | SPA 路由滚动复位与 A 项布局收口（G10） | T28 | `web/src/router.tsx`、`layouts/`、`components/` | 🟨 进行中（已派单） |
+| [T28](T28-实测缺陷修复与待办总账.md) | 实测缺陷修复与待办总账（5 修复 + 9 项总账） | T27 | `web/src/`、`internal/control/console/`、`scripts/` | ✅ 通过（B/C/D/E 过；A 转 G13 挂起） |
+| [T29](T29-SPA路由滚动复位.md) | SPA 路由滚动复位与 A 项布局收口（G10） | T28 | `web/src/router.tsx`、`layouts/`、`components/` | ✅ 通过（G10 修复；A 非同根因，转 G13） |
 | [T22](T22-部署与可观测.md) | 部署·可观测·灰度回滚 | T09,T21 | `deploy/`、`internal/obs/` | 🟨 段 1–3 ✅（指标 / 日志+trace / 容器化+灰度）；段 4 未开始 |
 | [T23](T23-验收对照与交付.md) | 验收对照与交付（82 项功能点） | 全部 | `docs/tasks/acceptance/` | ⬜ |
 
@@ -258,6 +258,7 @@ flowchart LR
 | T26 | 2026-10-28 | 2026-10-28 | ✅ **通过**（一次过） | 2 项 | `scripts/check-eol.sh` 守卫 46 个 SQL + `checksums.golden` 的 CR 检测，接入 `lint.sh` 第 10 条；`.gitattributes` 补 `*.lua eol=lf` 并归一 6 个 Lua；`dev-setup.md` 补 Windows 行尾说明。零依赖、无 xargs（本机 xargs 假阴性）、有 `checked==0` 保护。独立复跑：造 CRLF→`EXIT=1` 精确点名、恢复→`EXIT=0` 静默、**按其给出的修复命令原样执行确能修好且不误改内容**、`LINT_EXIT=0`。实测 HEAD 中 46 个 SQL 全为纯 LF，证明故障纯由旧工作区未 renormalize 造成。遗留：镜像产物的 embed checksum 仍未校验，待单独立项 |
 | T25 | 2026-10-28 | 2026-10-28 | ✅ **通过**（一次过，无需打回） | 3 项 | 补齐空缺的迁移 **0022**（`t_request_body` 7 列 + 3 索引）、正文写入落在 `settle.UsageWriter` 异步批（**不进 gw 热路径**，零命中审计通过）、读取端接上 `LOG_BODY_KEK` 独立信封解密；`BUILD_VET_OK`、四包 `EXIT=0`、测试库业务表 **59**。三处偏离已核实接受，其中**卡面 §5.1 的 `CHAR(26)` 是错的**（全项目实为 `char(36)`），实现方正确纠错。过程拦截：42 个历史迁移文件被 Windows 换行符重写（零内容改动）已还原，避免 `checksums.golden` 失效 |
 | T28 | 2026-10-29 | 2026-10-29 | 🟨 **有条件通过** | 4 项（A 未复现待环境信息） | 实测缺陷 5 项：B（首页 `--`/筹备中，D-24）、C（`copyHeaders` 单值头改 Set，curl 各 1 条）、D（`04-channel.sql` + keytool 加密，库内 `v1:`/107B，错误前移到 P15 502）、E（region DOMESTIC + schema 说明）全部通过；**A 布局空白带在 1408×672 下未复现**（Playwright 复测 `elementFromPoint=TEXTAREA`、pricing 区块间距全 0），按硬约束未盲改源码 |
+| T29 | 2026-10-29 | 2026-10-29 | ✅ **通过** | 1 项（A 项转 G13） | G10：三套 layout 挂 `<ScrollRestorer />`（数据路由原生 `ScrollRestoration`，D-26），生产包实测「滚 400 → 点导航 → `scrollY=0`，`goBack()` → 400」；A 项结论：**与 G10 非同根因**，8 组「残留 scrollY + PageDown」空白 0–13px，四次测量均未复现 |
 
 **T15 全卡验收结论（交付总监复核）**
 

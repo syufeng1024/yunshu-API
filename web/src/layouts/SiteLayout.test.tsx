@@ -1,18 +1,21 @@
 import { render, screen } from '@testing-library/react'
-import { MemoryRouter, Route, Routes } from 'react-router-dom'
+import { RouterProvider, createMemoryRouter } from 'react-router-dom'
 import { describe, expect, it } from 'vitest'
 import { SiteLayout } from './SiteLayout'
 
+// SiteLayout renders <ScrollRestorer />, which requires a data router, so the
+// harness uses createMemoryRouter rather than MemoryRouter.
 function renderLayout() {
-  return render(
-    <MemoryRouter>
-      <Routes>
-        <Route element={<SiteLayout />}>
-          <Route index element={<div>首页内容</div>} />
-        </Route>
-      </Routes>
-    </MemoryRouter>,
+  const router = createMemoryRouter(
+    [
+      {
+        element: <SiteLayout />,
+        children: [{ index: true, element: <div>首页内容</div> }],
+      },
+    ],
+    { initialEntries: ['/'] },
   )
+  return render(<RouterProvider router={router} />)
 }
 
 describe('SiteLayout', () => {

@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet } from 'react-router-dom'
 import { buttonVariants } from '@/components/Button'
 import { Copyright } from '@/components/layout-parts'
 import { Logo } from '@/components/Logo'
+import { ScrollRestorer } from '@/components/ScrollRestorer'
 import { BRAND_DESCRIPTION, ROUTES, SITE_NAV } from '@/lib/constants'
 import { cn } from '@/lib/cn'
 
@@ -41,6 +42,7 @@ const DOC_LINKS = [
 export function SiteLayout() {
   return (
     <div className="flex min-h-screen flex-col bg-canvas">
+      <ScrollRestorer />
       <a href="#main-content" className="skip-link">
         跳到主内容
       </a>
