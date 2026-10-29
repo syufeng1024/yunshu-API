@@ -13,8 +13,8 @@
 | D-05 | G-06：`30,000×0.6=18,000 < 26,667` 时分组端点拒绝保存。见 `matrix-gwt.md` G-06 | 同一用例在价格写入处断言拒绝（`actual=18000 required=26667 shortfall=8667`）；分组端点本身无地板校验 | 同 D-03 | GWT 断言通过但保护点与文档描述的位置不同；经分组端点改倍率仍可绕过 | **已关闭**（T31 `a6f1317` + G-06 补断言，矩阵转 ✅） |
 | D-06 | G-09：体验金发放须满足「发放延迟满 24 小时」等四项前置校验，拒绝时指明缺哪一项。见 `matrix-gwt.md` G-09 | 24h 延迟未实现；四类命中共用一条不指明因素的拒绝文案；其余断言（同设备 1 次、7,000 积分、90 天）通过 | 拒绝不指明因素是为避免向攻击者泄露命中维度；24h 延迟未排期 | 反刷强度低于 PRD；正常用户被拒时无法自助定位原因 | 否（属实现缺口；拒绝文案口径需产品确认） |
 | D-07 | F2-1：已登录点套餐卡跳充值中心并预选该档。见 `matrix-82.md` F2-1 | `PlanCards` 生成 `/console/recharge?plan=PRO`，但 `RechargePage` 不读取 `plan` 查询参数，进入后仍预选第一个可购档 | 充值页按 `plans[0]` 初始化，未接查询参数 | 用户需手动重选套餐，预付金额可能选错档 | 否（属实现缺口） |
-| D-08 | G-03：`t_recharge_order` 仅 1 行且状态 `SUCCESS`。见 `matrix-gwt.md` G-03 | 状态为 `PAID`；DDL 枚举 `PENDING / PAID / CLOSED / REFUNDING / REFUNDED / PARTIAL_REFUNDED` 无 `SUCCESS` | PRD 用叙述性状态名，DDL 无此值；用例按 DDL 断言并输出 DEVIATION 日志 | 按 PRD 原文对接的消费方读不到 `SUCCESS`；文档与库表不一致 | 是（PRD G-03 改为 `PAID`；见 `errata.md` ERR-03） |
-| D-09 | G-07：开票申请单初始状态 `PENDING`。见 `matrix-gwt.md` G-07 | `t_invoice_apply.state` 初始值 `APPLIED`，审批后 `ISSUED` | DDL 状态机为 `APPLIED → APPROVED / REJECTED → ISSUED`；PRD 的 `PENDING` 与审核中心五类单据的 `PENDING` 混用 | 按 PRD 查询 `PENDING` 发票申请返回 0 行 | 是（PRD G-07 改为 `APPLIED`；见 `errata.md` ERR-04） |
+| D-08 | G-03：`t_recharge_order` 仅 1 行且状态 `SUCCESS`。见 `matrix-gwt.md` G-03 | 状态为 `PAID`；DDL 枚举 `PENDING / PAID / CLOSED / REFUNDING / REFUNDED / PARTIAL_REFUNDED` 无 `SUCCESS` | PRD 用叙述性状态名，DDL 无此值；用例按 DDL 断言并输出 DEVIATION 日志 | 按 PRD 原文对接的消费方读不到 `SUCCESS`；文档与库表不一致 | 是（PRD G-03 改为 `PAID`；见 `errata.md` ERR-03）；✅ 已关闭：PRD 勘误 ERR-03/ERR-04，T35 |
+| D-09 | G-07：开票申请单初始状态 `PENDING`。见 `matrix-gwt.md` G-07 | `t_invoice_apply.state` 初始值 `APPLIED`，审批后 `ISSUED` | DDL 状态机为 `APPLIED → APPROVED / REJECTED → ISSUED`；PRD 的 `PENDING` 与审核中心五类单据的 `PENDING` 混用 | 按 PRD 查询 `PENDING` 发票申请返回 0 行 | 是（PRD G-07 改为 `APPLIED`；见 `errata.md` ERR-04）；✅ 已关闭：PRD 勘误 ERR-03/ERR-04，T35 |
 | D-10 | F16-1 / G-05：调价后历史行 `price_rule_id` 指向旧版本行，新请求指向新版本行。见 `matrix-82.md` F16-1、`matrix-gwt.md` G-05 | 调价在原 `t_price_rule` 行上 `version+1` 并写审计前后值，不生成独立旧版本行；历史 `consumed_micro` 与 `price_rule_id` 不变 | T15 定价模型用单行版本号 + 审计留痕，避免价格行复制 | 历史行指向的 `price_rule_id` 当前值已是新价，无法仅凭该行还原成交时单价；对账依赖 `t_usage_record` 金额快照 | 是（PRD/TDS 的版本行描述需改为单行版本 + 审计口径） |
 | D-11 | G-05：同 D-10。见 `matrix-gwt.md` G-05 | 同 D-10 | 同 D-10 | 同 D-10 | 是（同 D-10） |
 | D-12 | G-02：`est = raw_est × 1.2 = 7,200`（`raw_est=6,000`）。见 `matrix-gwt.md` G-02 | 流水线 `est = 6000 × 1.1 × 1.2 = 7,920`；`billing.prestimate_safety_bp=11000` 为安全系数；准入仍按 `raw_est` 判定，预扣被 `min(est, 可用×50%)` 截断 | PRD D-2 公式漏写安全系数；TDS §3.7 键表与 T07 实现均含 1.1 | 准入行为不变；预扣上限在可用余额充足时比 PRD 算式高 10%，文档与实现数值不一致 | 是（PRD D-2 / G-02 补 `× preestimate_safety_bp`；见 `errata.md` ERR-06） |
@@ -43,7 +43,7 @@
 | :--- | :--- | :--- |
 | 82 项 `❌ == 0` | 本表不含 `❌`；F14-6 已于 T32（`68c` 系列提交）关闭，仅剩 F4-3 见 `open-issues.md` OI-01 | 仍不达标（`❌ 1`） |
 | 82 项 `⚠️ ≤ 8` | 本表登记 14 条 matrix-82 `⚠️`：D-01、D-02、D-03、D-04、D-07、D-10、D-13、D-14、D-15–D-20 | 不达标（14 > 8） |
-| GWT 全 `✅` | 本表登记 6 条 GWT `⚠️`（D-06 G-09、D-08 G-03、D-09 G-07、D-11 G-05、D-12 G-02、D-21 G-12）；D-05（G-06）已在 T31 关闭 | 不达标（**6/12 ✅**） |
+| GWT 全 `✅` | 本表登记 4 条 GWT `⚠️`（D-06 G-09、D-11 G-05、D-12 G-02、D-21 G-12）；D-05（G-06）已在 T31 关闭，D-08（G-03）、D-09（G-07）已在 T35 关闭 | 不达标（**8/12 ✅**） |
 | 65 码断言通过 | 本表登记 9 条码 `⚠️`（D-22–D-30） | 不达标（另有 7 条 `❌` 见 OI-06） |
 
 ## T34 关闭清单（2026-10-29）

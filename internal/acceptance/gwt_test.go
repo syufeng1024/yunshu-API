@@ -397,17 +397,15 @@ func TestGWT_G03_CallbackIdempotentAndPlanGrant(t *testing.T) {
 		t.Fatalf("G-03: %d callbacks credited, want exactly 1", credited)
 	}
 
-	// PRD G-03 writes state SUCCESS; the T13 schema/enum uses PAID. Record the
-	// deviation instead of hiding it behind a loosely written assertion.
+	// PRD 已按 ERR-03/ERR-04 勘误为 PAID / APPLIED（G-03 订单成功状态 = PAID）。
 	var state string
 	if err := testDB.QueryRowContext(context.Background(),
 		`SELECT state FROM t_recharge_order WHERE id = ?`, order.ID).Scan(&state); err != nil {
 		t.Fatalf("G-03: read order: %v", err)
 	}
 	if state != "PAID" {
-		t.Fatalf("G-03: order state=%s, want PAID (PRD text says SUCCESS)", state)
+		t.Fatalf("G-03: order state=%s, want PAID (PRD corrected by ERR-03)", state)
 	}
-	t.Logf("G-03 DEVIATION: PRD appendix D writes order state SUCCESS; t_recharge_order uses PAID")
 
 	if got := accountBalance(t, uid); got != 119000000 {
 		t.Fatalf("G-03: balance=%d, want 119,000,000", got)
@@ -823,11 +821,10 @@ func TestGWT_G07_InvoiceFlow(t *testing.T) {
 	if created.Invoice.AmountFen != 50000 {
 		t.Fatalf("G-07: amount=%d, want 50,000 fen (the paid amount)", created.Invoice.AmountFen)
 	}
-	// PRD G-07 calls the initial state PENDING; the T13 enum uses APPLIED.
+	// PRD 已按 ERR-03/ERR-04 勘误为 PAID / APPLIED（G-07 发票初始状态 = APPLIED）。
 	if created.Invoice.State != "APPLIED" {
-		t.Fatalf("G-07: initial state=%s, want APPLIED (PRD text says PENDING)", created.Invoice.State)
+		t.Fatalf("G-07: initial state=%s, want APPLIED (PRD corrected by ERR-04)", created.Invoice.State)
 	}
-	t.Logf("G-07 DEVIATION: PRD appendix D writes invoice state PENDING; t_invoice_apply uses APPLIED")
 
 	overOrder := newPaidOrderDB(t, verified, 10000)
 	over := call(t, verified, http.MethodPost, "/api/console/invoices", map[string]any{
