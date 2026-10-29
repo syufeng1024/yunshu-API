@@ -56,7 +56,8 @@ type adminOverviewResponse struct {
 // (internal/control/user/overview.go): request_total counts every row,
 // consumed_micro sums every row (failed rows are zero), and the internal
 // availability denominator excludes 402/429 business rejections. The rate is
-// null when that denominator is zero.
+// null when that denominator is zero. consumed_micro excludes the internal
+// group (T31 D-28 ③): those rows are not billed and are not revenue.
 //
 // open_tickets means unresolved (OPEN or RESPONDED). sla_overdue is the same
 // first-response predicate as the ticket alert zone.
@@ -68,9 +69,13 @@ func (s *Service) Overview(w http.ResponseWriter, r *http.Request) {
 	var (
 		requests, consumed, successes, denominator int64
 	)
+	// T31 D-28 ③: the internal group is not billed, so its rows must not
+	// count as revenue. Request count and the availability denominator keep
+	// every row; only the money sum is scoped to billable groups.
 	err := s.DB.QueryRowContext(ctx, `
 		SELECT COUNT(*),
-		       CAST(COALESCE(SUM(consumed_micro), 0) AS SIGNED),
+		       CAST(COALESCE(SUM(CASE WHEN group_code_snap <> 'internal'
+		                              THEN consumed_micro ELSE 0 END), 0) AS SIGNED),
 		       CAST(COALESCE(SUM(CASE WHEN result = 'SUCCESS' THEN 1 ELSE 0 END), 0) AS SIGNED),
 		       CAST(COALESCE(SUM(CASE WHEN http_status NOT IN (402, 429) THEN 1 ELSE 0 END), 0) AS SIGNED)
 		  FROM t_usage_record

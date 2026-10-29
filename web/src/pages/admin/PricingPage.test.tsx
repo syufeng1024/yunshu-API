@@ -1,7 +1,7 @@
 import { cleanup, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { api } from '@/api/client'
+import { api, ApiError } from '@/api/client'
 import type { AdminPriceRule, PriceGroup } from '@/api/admin'
 import { earliestEffectiveAt, toLocalDateTimeValue } from '@/components/admin'
 import { renderWithProviders } from '@/test/renderConsole'
@@ -140,6 +140,20 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
+async function openGroupEditor(code: 'internal' | 'standard') {
+  const user = userEvent.setup()
+  renderWithProviders(<AdminPricingPage />)
+  await screen.findByText('qwen-max')
+  await user.click(screen.getByRole('tab', { name: '分组倍率' }))
+  const name = code === 'internal' ? '内部调用' : '标准分组'
+  const cell = await screen.findByText(name)
+  const row = cell.closest('tr')
+  if (!row) throw new Error(`未找到分组行：${name}`)
+  await user.click(within(row).getByRole('button', { name: '编辑倍率' }))
+  await screen.findByText('编辑分组倍率')
+  return user
+}
+
 async function openPriceEditor() {
   const user = userEvent.setup()
   renderWithProviders(<AdminPricingPage />)
@@ -241,5 +255,89 @@ describe('PricingPage', () => {
     expect(screen.queryByText('免费')).not.toBeInTheDocument()
     expect(screen.queryByText('0 折')).not.toBeInTheDocument()
     expect(screen.queryByText('100 折')).not.toBeInTheDocument()
+  })
+
+  it('PricingPage：internal 保存弹二次确认，理由为空时确认钮禁用', async () => {
+    installMock()
+    const user = await openGroupEditor('internal')
+
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    const dialog = await screen.findByRole('dialog', { name: '确认修改 internal 分组' })
+    const confirm = within(dialog).getByRole('button', { name: '确认保存 internal 分组' })
+    expect(confirm).toBeDisabled()
+    expect(mockedPatch).not.toHaveBeenCalled()
+
+    await user.type(within(dialog).getByLabelText(/操作理由/), '内部压测，工单 OPS-123')
+    expect(confirm).toBeEnabled()
+    await user.click(confirm)
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(1))
+    const body = (mockedPatch.mock.calls.at(-1)?.[1] ?? {}) as Record<string, unknown>
+    expect(body).toMatchObject({
+      ratio_bp: 0,
+      confirm: true,
+      reason: '内部压测，工单 OPS-123',
+    })
+  })
+
+  it('PricingPage：缺成本价 400 展示 warnings，仍要保存带 confirm 重发', async () => {
+    installMock()
+    const user = await openGroupEditor('standard')
+    const warning = '模型 qwen-max 缺成本价，地板未校验'
+    mockedPatch.mockRejectedValueOnce(
+      new ApiError({
+        status: 400,
+        code: 'invalid_request_body',
+        type: 'invalid_request_body',
+        message: '分组范围内存在无成本价的模型，毛利地板无法全部校验；确认继续请传 confirm=true',
+        hint: '',
+        warnings: [warning],
+      }),
+    )
+
+    const ratio = screen.getByLabelText(/倍率（万分比）/)
+    await user.clear(ratio)
+    await user.type(ratio, '9000')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    const list = await screen.findByTestId('group-warning-list')
+    expect(within(list).getByText(warning)).toBeInTheDocument()
+
+    mockedPatch.mockResolvedValueOnce({
+      group: groups[1],
+      key_sync: { keys: 0, ok: true },
+    })
+    await user.click(screen.getByRole('button', { name: '仍要保存分组倍率' }))
+
+    await waitFor(() => expect(mockedPatch).toHaveBeenCalledTimes(2))
+    const body = (mockedPatch.mock.calls.at(-1)?.[1] ?? {}) as Record<string, unknown>
+    expect(body).toEqual({ ratio_bp: 9000, confirm: true })
+  })
+
+  it('PricingPage：地板拒绝时原样展示后端消息（含差额与模型）', async () => {
+    installMock()
+    const user = await openGroupEditor('standard')
+    const message =
+      '分组 contract（倍率 6000）下 标准单价×倍率 = 18000 微积分/千 token，低于成本 20000 × 4/3 = 26667（18000 < 26667），差额 8667；涉及模型：qwen-max'
+    mockedPatch.mockRejectedValueOnce(
+      new ApiError({
+        status: 400,
+        code: 'invalid_request_body',
+        type: 'invalid_request_body',
+        message,
+        hint: '',
+      }),
+    )
+
+    const ratio = screen.getByLabelText(/倍率（万分比）/)
+    await user.clear(ratio)
+    await user.type(ratio, '6000')
+    await user.click(screen.getByRole('button', { name: '保存' }))
+
+    const alert = await screen.findByTestId('group-save-error')
+    expect(alert).toHaveTextContent(message)
+    expect(alert).toHaveTextContent('差额 8667')
+    expect(alert).toHaveTextContent('涉及模型：qwen-max')
+    expect(screen.queryByTestId('group-warning-confirm')).not.toBeInTheDocument()
   })
 })

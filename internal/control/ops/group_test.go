@@ -144,9 +144,10 @@ func TestGroupRatioBoundsAndK13WriteThrough(t *testing.T) {
 		t.Fatalf("ratio 0 status=%d body=%s, want 400", rec.Code, rec.Body.String())
 	}
 
-	// internal keeps its 0 exception; a non-zero ratio is refused.
+	// internal keeps its 0 exception; a non-zero ratio is refused. T31 D-28 ②
+	// added the second confirmation every internal save now needs.
 	rec = call(t, svc.UpdateGroup, http.MethodPatch, fmt.Sprintf("/api/admin/groups/%d", internalID),
-		map[string]any{"ratio": 0},
+		map[string]any{"ratio": 0, "confirm": true, "reason": "回归：internal 0 倍率例外"},
 		testCallOptions{uid: uid, role: "OPS", pathVal: map[string]string{"id": fmt.Sprint(internalID)}})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("internal ratio 0 status=%d body=%s, want 200", rec.Code, rec.Body.String())

@@ -21,6 +21,8 @@ export interface ApiErrorInit {
   hint: string
   requestId?: string
   retryAfterSeconds?: number
+  /** Additive top-level `warnings[]`; currently only PATCH /api/admin/groups. */
+  warnings?: string[]
 }
 
 /** Normalised failure from the control plane. Never carries a raw traceback. */
@@ -31,6 +33,7 @@ export class ApiError extends Error {
   readonly hint: string
   readonly requestId: string
   readonly retryAfterSeconds: number
+  readonly warnings: string[]
 
   constructor(init: ApiErrorInit) {
     super(init.message)
@@ -41,6 +44,7 @@ export class ApiError extends Error {
     this.hint = init.hint
     this.requestId = init.requestId ?? ''
     this.retryAfterSeconds = init.retryAfterSeconds ?? 0
+    this.warnings = init.warnings ?? []
   }
 }
 
@@ -62,6 +66,19 @@ function readEnvelope(payload: unknown): ErrorBody | null {
   if (typeof payload !== 'object' || payload === null) return null
   const envelope = payload as Partial<ErrorEnvelope>
   return isErrorBody(envelope.error) ? envelope.error : null
+}
+
+/**
+ * T31: PATCH /api/admin/groups puts `warnings[]` beside `error` in the 400
+ * envelope (mw.WriteError cannot carry extra fields). Unknown occurrences are
+ * dropped rather than surfaced as "[object Object]".
+ */
+function readWarnings(payload: unknown): string[] | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined
+  const raw = (payload as { warnings?: unknown }).warnings
+  if (!Array.isArray(raw)) return undefined
+  const warnings = raw.filter((item): item is string => typeof item === 'string')
+  return warnings.length > 0 ? warnings : undefined
 }
 
 function fallbackMessage(status: number): string {
@@ -165,6 +182,7 @@ async function request<T>(path: string, options: ApiRequestOptions = {}): Promis
       hint: detail?.hint ?? '',
       requestId: detail?.request_id,
       retryAfterSeconds: detail?.retry_after_seconds,
+      warnings: readWarnings(payload),
     })
     if (response.status === 401 && redirectOn401) {
       redirectToLogin()

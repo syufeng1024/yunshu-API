@@ -31,6 +31,46 @@ const (
 	groupRatioScale  = 10000
 )
 
+// marginFloor is the one floor rule, shared by the price write path and the
+// group-ratio write path (T31 D-28). 3*P*r/10000 >= 4*C/3 is evaluated as
+// 3*P*r >= 40000*C with integers only.
+//
+// actual is the billed unit under the given ratio; required is ceil(4*C/3),
+// the minimum standard price that clears the floor at ratio 10000. Callers
+// must skip ratioBP <= 0: internal's 0 means "not billed", not "free".
+func marginFloor(price, ratioBP, cost int64) (actual, required int64, ok bool) {
+	actual = price * ratioBP / groupRatioScale
+	required = (floorCrossFactor*cost + floorScale - 1) / floorScale
+	ok = 3*price*ratioBP >= floorCrossFactor*cost
+	return actual, required, ok
+}
+
+// marginDim is one priced dimension with its optional upstream cost. It is
+// built once so the price and group paths agree on which dimensions a model
+// type has.
+type marginDim struct {
+	field string
+	unit  string
+	price int64
+	cost  *int64
+}
+
+func marginDimensions(modelType string, inPrice, outPrice, perCall int64,
+	costIn, costOut, costCall *int64) []marginDim {
+	switch modelType {
+	case "TEXT":
+		return []marginDim{
+			{"in_price_micro_per_k", "微积分/千 token", inPrice, costIn},
+			{"out_price_micro_per_k", "微积分/千 token", outPrice, costOut},
+		}
+	case "IMAGE":
+		return []marginDim{{"per_call_price_micro", "微积分/张", perCall, costCall}}
+	case "EMBEDDING":
+		return []marginDim{{"in_price_micro_per_k", "微积分/千 token", inPrice, costIn}}
+	}
+	return nil
+}
+
 // priceRuleView is the operator representation of one t_price_rule row.
 type priceRuleView struct {
 	ID         int64  `json:"id"`
@@ -836,24 +876,8 @@ func (s *Service) checkNoticeAgainstActive(ctx context.Context, tx *sql.Tx, in p
 // integers only; the rendered figures use ceil(4C/3) so the operator sees the
 // exact shortfall.
 func (s *Service) checkMarginFloor(ctx context.Context, q priceDB, in priceInput) *apierr.APIError {
-	type dimension struct {
-		field string
-		price int64
-		cost  *int64
-		unit  string
-	}
-	var dims []dimension
-	switch in.modelType {
-	case "TEXT":
-		dims = []dimension{
-			{"in_price_micro_per_k", in.inPrice, in.costIn, "微积分/千 token"},
-			{"out_price_micro_per_k", in.outPrice, in.costOut, "微积分/千 token"},
-		}
-	case "IMAGE":
-		dims = []dimension{{"per_call_price_micro", in.perCall, in.costCall, "微积分/张"}}
-	case "EMBEDDING":
-		dims = []dimension{{"in_price_micro_per_k", in.inPrice, in.costIn, "微积分/千 token"}}
-	}
+	dims := marginDimensions(in.modelType, in.inPrice, in.outPrice, in.perCall,
+		in.costIn, in.costOut, in.costCall)
 
 	var missing []string
 	for _, d := range dims {
@@ -889,13 +913,10 @@ func (s *Service) checkMarginFloor(ctx context.Context, q priceDB, in priceInput
 				// participate in the floor (T15 hard constraint 5).
 				continue
 			}
-			lhs := 3 * d.price * g.ratioBP
-			rhs := floorCrossFactor * *d.cost
-			if lhs >= rhs {
+			actual, required, ok := marginFloor(d.price, g.ratioBP, *d.cost)
+			if ok {
 				continue
 			}
-			actual := d.price * g.ratioBP / groupRatioScale
-			required := (floorCrossFactor**d.cost + floorScale - 1) / floorScale
 			return apierr.Newf(apierr.CodeInvalidRequestBody,
 				fmt.Sprintf("%s：分组 %s（倍率 %d）下 标准单价×倍率 = %d %s，低于成本 %d × 4/3 = %d（%d < %d），差额 %d",
 					d.field, g.code, g.ratioBP, actual, d.unit, *d.cost, required,

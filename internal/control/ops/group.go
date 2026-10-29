@@ -14,6 +14,7 @@ import (
 	"yunshu.dev/core/internal/apikey"
 	"yunshu.dev/core/internal/control/mw"
 	"yunshu.dev/core/internal/jsonx"
+	obslog "yunshu.dev/core/internal/obs/log"
 )
 
 // Group codes defined by the PRD. Any other code is data, not a product
@@ -51,6 +52,10 @@ type groupKeySync struct {
 type groupDetailResponse struct {
 	Group   groupView    `json:"group"`
 	KeySync groupKeySync `json:"key_sync"`
+	// Warnings is additive (T31): models in scope whose floor could not be
+	// checked because they have no cost price. Empty means every in-scope
+	// model was floor-checked.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type groupPatchRequest struct {
@@ -65,6 +70,10 @@ type groupPatchRequest struct {
 	Enabled          *bool             `json:"enabled"`
 	ModelIDs         *[]int64          `json:"model_ids"`
 	ChannelIDs       *[]int64          `json:"channel_ids"`
+	// Confirm and Reason are the T31 second confirmation for internal saves
+	// and for ratio changes that skip the floor (models without cost).
+	Confirm *bool   `json:"confirm"`
+	Reason  *string `json:"reason"`
 }
 
 const groupSelectColumns = `
@@ -196,20 +205,24 @@ func (s *Service) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	modelScopeMode := before.ModelScopeMode
 	if req.ModelScopeMode != nil {
 		mode, apiErr := groupScopeMode(*req.ModelScopeMode, "model_scope_mode")
 		if apiErr != nil {
 			mw.WriteError(w, r, apiErr)
 			return
 		}
+		modelScopeMode = mode
 		add("model_scope_mode", mode)
 	}
+	channelScopeMode := before.ChannelScopeMode
 	if req.ChannelScopeMode != nil {
 		mode, apiErr := groupScopeMode(*req.ChannelScopeMode, "channel_scope_mode")
 		if apiErr != nil {
 			mw.WriteError(w, r, apiErr)
 			return
 		}
+		channelScopeMode = mode
 		add("channel_scope_mode", mode)
 	}
 	if req.SelfService != nil {
@@ -236,6 +249,7 @@ func (s *Service) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 
 	// internal's 0 ratio is the only zero allowed, and its meaning ("not
 	// billed", not "free discount") must stay written down.
+	auditReason := ""
 	if before.Code == groupCodeInternal {
 		if nextRatio != 0 {
 			mw.WriteError(w, r, apierr.Newf(apierr.CodeInvalidRequestBody,
@@ -248,6 +262,48 @@ func (s *Service) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		}
 		if remark == "" {
 			mw.WriteError(w, r, mw.InvalidField("remark"))
+			return
+		}
+		// T31 D-28 ②: every internal save needs an explicit confirmation and
+		// a written reason; the reason goes into t_admin_audit_log.reason.
+		reason := ""
+		if req.Reason != nil {
+			reason = strings.TrimSpace(*req.Reason)
+		}
+		if req.Confirm == nil || !*req.Confirm {
+			mw.WriteError(w, r, apierr.Newf(apierr.CodeInvalidRequestBody,
+				"internal 分组保存须二次确认：请传 confirm=true 并填写 reason"))
+			return
+		}
+		if reason == "" {
+			mw.WriteError(w, r, apierr.Newf(apierr.CodeInvalidRequestBody,
+				"internal 分组保存必须填写 reason（操作理由），审计将记录该理由"))
+			return
+		}
+		auditReason = reason
+		// T31 D-28 ④: internal must not include the current main channel.
+		if apiErr := s.checkInternalGroupChannels(r.Context(), tx, &req, before, channelScopeMode); apiErr != nil {
+			mw.WriteError(w, r, apiErr)
+			return
+		}
+	}
+
+	// T31 D-28 2/4: a non-internal ratio change is floor-checked against every
+	// in-scope model. Models without a cost price are warned about instead of
+	// being silently skipped, and the operator must confirm before saving.
+	var warnings []string
+	if before.Code != groupCodeInternal && ratioChanged && nextRatio > 0 {
+		var apiErr *apierr.APIError
+		warnings, apiErr = s.checkGroupRatioFloor(r.Context(), tx, before, nextRatio,
+			modelScopeMode, effectiveModelIDs(before, &req), now)
+		if apiErr != nil {
+			mw.WriteError(w, r, apiErr)
+			return
+		}
+		if len(warnings) > 0 && (req.Confirm == nil || !*req.Confirm) {
+			writeGroupWarningError(w, r, apierr.Newf(apierr.CodeInvalidRequestBody,
+				"分组范围内存在无成本价的模型，毛利地板无法全部校验；确认继续请传 confirm=true"),
+				warnings)
 			return
 		}
 	}
@@ -286,7 +342,7 @@ func (s *Service) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 		after.ChannelIDs = sc.channels
 	}
 	if err := s.insertAudit(ctx, tx, r, "GROUP", "UPDATE", "t_price_group", id,
-		groupAuditView(before), groupAuditView(after), ""); err != nil {
+		groupAuditView(before), groupAuditView(after), auditReason); err != nil {
 		s.logError(ctx, "ops_group_audit_failed: "+err.Error())
 		mw.WriteError(w, r, apierr.New(apierr.CodeInternalError))
 		return
@@ -302,7 +358,201 @@ func (s *Service) UpdateGroup(w http.ResponseWriter, r *http.Request) {
 	if ratioChanged {
 		sync = s.dispatchGroupRatioSync(ctx, after.Code, after.RatioBP)
 	}
-	_ = mw.WriteJSON(w, http.StatusOK, groupDetailResponse{Group: after, KeySync: sync})
+	_ = mw.WriteJSON(w, http.StatusOK, groupDetailResponse{
+		Group: after, KeySync: sync, Warnings: warnings})
+}
+
+// effectiveModelIDs is the SELECTED scope the request will leave behind, used
+// for the floor check before any write happens.
+func effectiveModelIDs(cur groupView, req *groupPatchRequest) []int64 {
+	if req.ModelIDs != nil {
+		return *req.ModelIDs
+	}
+	return cur.ModelIDs
+}
+
+// checkInternalGroupChannels enforces T31 D-28 ④: internal may not route
+// through the current main channel (highest weight among enabled channels).
+// Only an explicit channel scope can violate the rule; the seeded ALL mode
+// with no scope rows is left alone so existing internal saves keep working.
+func (s *Service) checkInternalGroupChannels(ctx context.Context, q priceDB,
+	req *groupPatchRequest, before groupView, mode string) *apierr.APIError {
+	if mode != scopeSelected && req.ChannelIDs == nil {
+		return nil
+	}
+	ids := before.ChannelIDs
+	if req.ChannelIDs != nil {
+		ids = *req.ChannelIDs
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	var mainID int64
+	var mainName string
+	err := q.QueryRowContext(ctx, `
+		SELECT id, name FROM t_channel
+		 WHERE enabled = 1 AND deleted_at IS NULL
+		 ORDER BY weight DESC, id LIMIT 1`).Scan(&mainID, &mainName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return apierr.New(apierr.CodeInternalError).WithCause(err)
+	}
+	for _, id := range ids {
+		if id == mainID {
+			return apierr.Newf(apierr.CodeInvalidRequestBody, fmt.Sprintf(
+				"internal 分组的可用渠道不能包含当前权重最高的启用渠道「%s」(id=%d)，请改用非主力渠道",
+				mainName, mainID))
+		}
+	}
+	return nil
+}
+
+type groupFloorModel struct {
+	name      string
+	modelType string
+	inPrice   int64
+	outPrice  int64
+	perCall   int64
+	costIn    sql.NullInt64
+	costOut   sql.NullInt64
+	costCall  sql.NullInt64
+}
+
+func loadGroupFloorModels(ctx context.Context, q priceDB, mode string, ids []int64, now time.Time) ([]groupFloorModel, error) {
+	where := "m.deleted_at IS NULL"
+	args := []any{now, now}
+	if mode != scopeSelected {
+		where += " AND m.listing_state = 'LISTED'"
+	} else {
+		if len(ids) == 0 {
+			return nil, nil
+		}
+		where += " AND m.id IN (" + placeholders(len(ids)) + ")"
+		for _, id := range ids {
+			args = append(args, id)
+		}
+	}
+	rows, err := q.QueryContext(ctx, `
+		SELECT m.model_name, m.model_type,
+		       COALESCE(p.in_price_micro_per_k, 0),
+		       COALESCE(p.out_price_micro_per_k, 0),
+		       COALESCE(p.per_call_price_micro, 0),
+		       p.cost_in_micro_per_k, p.cost_out_micro_per_k, p.cost_per_call_micro
+		  FROM t_model m
+		  LEFT JOIN t_price_rule p ON p.id = (
+		       SELECT p2.id FROM t_price_rule p2
+		        WHERE p2.scope_level = 'MODEL' AND p2.scope_id = m.id AND p2.enabled = 1
+		          AND p2.effective_from <= ? AND (p2.effective_to IS NULL OR p2.effective_to > ?)
+		        ORDER BY p2.version DESC, p2.id DESC LIMIT 1)
+		 WHERE `+where+`
+		 ORDER BY m.id`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []groupFloorModel
+	for rows.Next() {
+		var m groupFloorModel
+		if err := rows.Scan(&m.name, &m.modelType, &m.inPrice, &m.outPrice, &m.perCall,
+			&m.costIn, &m.costOut, &m.costCall); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+type groupFloorFailure struct {
+	field    string
+	unit     string
+	actual   int64
+	required int64
+}
+
+// checkGroupRatioFloor applies the price-side floor to every in-scope model at
+// the new ratio. It never returns a refusal for a missing cost: those models
+// come back as warnings and the caller demands confirm=true before writing.
+func (s *Service) checkGroupRatioFloor(ctx context.Context, q priceDB, grp groupView,
+	ratio int64, mode string, ids []int64, now time.Time) ([]string, *apierr.APIError) {
+	models, err := loadGroupFloorModels(ctx, q, mode, ids, now)
+	if err != nil {
+		s.logError(ctx, "ops_group_floor_models_failed: "+err.Error())
+		return nil, apierr.New(apierr.CodeInternalError).WithCause(err)
+	}
+	var (
+		warnings  []string
+		failNames []string
+		first     *groupFloorFailure
+	)
+	for _, m := range models {
+		dims := marginDimensions(m.modelType, m.inPrice, m.outPrice, m.perCall,
+			nullableInt64Ptr(m.costIn), nullableInt64Ptr(m.costOut), nullableInt64Ptr(m.costCall))
+		hasCost := false
+		for _, d := range dims {
+			if d.cost == nil || *d.cost == 0 {
+				continue
+			}
+			hasCost = true
+			actual, required, ok := marginFloor(d.price, ratio, *d.cost)
+			if ok {
+				continue
+			}
+			if first == nil {
+				first = &groupFloorFailure{field: d.field, unit: d.unit, actual: actual, required: required}
+			}
+			failNames = append(failNames, m.name)
+			break
+		}
+		if !hasCost {
+			warnings = append(warnings, fmt.Sprintf("模型 %s 缺成本价，地板未校验", m.name))
+		}
+	}
+	if first != nil {
+		return nil, apierr.Newf(apierr.CodeInvalidRequestBody, fmt.Sprintf(
+			"分组 %s（倍率 %d）下 %s 实际值 %d %s 低于地板值 %d（%d < %d），差额 %d；涉及模型：%s",
+			grp.Code, ratio, first.field, first.actual, first.unit, first.required,
+			first.actual, first.required, first.required-first.actual,
+			modelNameList(failNames, 5)))
+	}
+	return warnings, nil
+}
+
+// modelNameList names at most max models; the rest are counted, not silently
+// dropped, so the operator can size the blast radius.
+func modelNameList(names []string, max int) string {
+	if len(names) <= max {
+		return strings.Join(names, "、")
+	}
+	return fmt.Sprintf("%s 等 %d 个", strings.Join(names[:max], "、"), len(names))
+}
+
+// writeGroupWarningError writes the standard error envelope plus a top-level
+// warnings[] array. mw.WriteError cannot carry extra fields, but T31 G5
+// requires the refusal itself to name the models that were not checked.
+func writeGroupWarningError(w http.ResponseWriter, r *http.Request,
+	apiErr *apierr.APIError, warnings []string) {
+	if rid := obslog.MetaFrom(r.Context()).RequestID; rid != "" {
+		apiErr = apiErr.WithRequestID(rid)
+	}
+	// apierr.Write is the single error path and always sets X-Request-Id. This
+	// helper hand-rolls the envelope to add warnings[], so it must reproduce
+	// that header; EnsureRequestID also fills the body's request_id.
+	rid := apiErr.EnsureRequestID()
+	raw, err := jsonx.Marshal(apiErr)
+	if err != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	var env map[string]any
+	if err := jsonx.Unmarshal(raw, &env); err != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	env["warnings"] = warnings
+	w.Header().Set("X-Request-Id", rid)
+	_ = mw.WriteJSON(w, apiErr.HTTPStatus, env)
 }
 
 // dispatchGroupRatioSync runs the K13 fan-out after the response so a group

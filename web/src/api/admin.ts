@@ -765,6 +765,12 @@ export interface GroupKeySync {
 export interface GroupDetailResponse {
   group: PriceGroup
   key_sync: GroupKeySync
+  /**
+   * T31: in-scope models whose floor could not be checked because they have no
+   * cost price. Present on a 200 after `confirm: true`; also mirrored on the
+   * 400 body and read back through `ApiError.warnings`.
+   */
+  warnings?: string[]
 }
 
 /** groupPatchRequest. ratio may be the decimal ("0.85") or the stored basis points. */
@@ -780,6 +786,14 @@ export interface GroupPatchInput {
   enabled?: boolean
   model_ids?: number[]
   channel_ids?: number[]
+  /**
+   * T31: mandatory `true` for internal saves, and for non-internal ratio
+   * changes whose in-scope models have no cost price (the 400 carries
+   * `warnings[]` naming them).
+   */
+  confirm?: boolean
+  /** T31: operator's written reason; mandatory for internal saves (audited). */
+  reason?: string
 }
 
 export function fetchGroups(): Promise<GroupListResponse> {

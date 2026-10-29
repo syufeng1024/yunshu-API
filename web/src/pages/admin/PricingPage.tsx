@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { errorHint, errorMessage } from '@/api/client'
+import { ApiError, errorHint, errorMessage } from '@/api/client'
 import {
   useCreatePrice,
   useGroups,
@@ -22,6 +22,7 @@ import {
   Drawer,
   ErrorState,
   Input,
+  Modal,
   PageHeader,
   Select,
   Table,
@@ -670,6 +671,14 @@ export default function AdminPricingPage() {
   const [groupRemark, setGroupRemark] = useState('')
   const [groupError, setGroupError] = useState<string | null>(null)
   const [groupSync, setGroupSync] = useState<GroupKeySync | null>(null)
+  // T31: warnings come back on a 200 (saved, some models unchecked) and are
+  // mirrored on the 400 that demands confirm=true. Kept separate from
+  // groupError so the two states never overwrite each other.
+  const [groupWarnings, setGroupWarnings] = useState<string[]>([])
+  const [groupNeedsConfirm, setGroupNeedsConfirm] = useState(false)
+  const [internalConfirmOpen, setInternalConfirmOpen] = useState(false)
+  const [confirmReason, setConfirmReason] = useState('')
+  const [confirmReasonError, setConfirmReasonError] = useState<string | null>(null)
 
   const openGroup = (group: PriceGroup) => {
     setGroupTarget(group)
@@ -677,6 +686,11 @@ export default function AdminPricingPage() {
     setGroupRemark(group.remark)
     setGroupError(null)
     setGroupSync(null)
+    setGroupWarnings([])
+    setGroupNeedsConfirm(false)
+    setInternalConfirmOpen(false)
+    setConfirmReason('')
+    setConfirmReasonError(null)
   }
 
   const closeGroup = () => {
@@ -684,44 +698,110 @@ export default function AdminPricingPage() {
     setGroupTarget(null)
     setGroupError(null)
     setGroupSync(null)
+    setGroupWarnings([])
+    setGroupNeedsConfirm(false)
+    setInternalConfirmOpen(false)
+    setConfirmReason('')
+    setConfirmReasonError(null)
   }
 
-  const handleGroupSave = async () => {
-    if (!groupTarget) return
-    setGroupError(null)
+  /** Returns the validated ratio, or null after writing the field error. */
+  const validateGroupRatio = (): { internal: boolean; ratio: number } | null => {
+    if (!groupTarget) return null
     const internal = groupTarget.code === 'internal'
     const parsed = parseOptionalInteger(ratioBp)
     if (internal) {
       if (parsed.value !== 0) {
         setGroupError('internal 分组的倍率只能是 0（语义为不计费）。')
-        return
+        return null
       }
       if (!groupRemark.trim()) {
         setGroupError('internal 分组的备注不能为空：需写明「不计费」语义。')
-        return
+        return null
       }
-    } else if (!parsed.ok || parsed.value === null || parsed.value <= 0) {
-      setGroupError('分组倍率必须为大于 0 的整数（万分比）。')
-      return
-    } else if (parsed.value > 10_000) {
-      setGroupError('分组倍率不能大于 10000（即 1.00）。')
-      return
+      return { internal, ratio: 0 }
     }
-    const nextRatio = parsed.value as number
+    if (!parsed.ok || parsed.value === null || parsed.value <= 0) {
+      setGroupError('分组倍率必须为大于 0 的整数（万分比）。')
+      return null
+    }
+    if (parsed.value > 10_000) {
+      setGroupError('分组倍率不能大于 10000（即 1.00）。')
+      return null
+    }
+    return { internal, ratio: parsed.value }
+  }
+
+  const submitGroup = async (options: { confirm?: boolean; reason?: string } = {}) => {
+    if (!groupTarget) return
+    const validated = validateGroupRatio()
+    if (!validated) return
+    const { internal, ratio } = validated
+    setGroupError(null)
     try {
       const response = await updateGroup.mutateAsync({
         id: groupTarget.id,
         input: internal
-          ? { ratio_bp: 0, remark: groupRemark.trim() }
-          : { ratio_bp: nextRatio },
+          ? {
+              ratio_bp: 0,
+              remark: groupRemark.trim(),
+              // T31: internal always carries both; the backend rejects either
+              // one missing, and the reason lands in t_admin_audit_log.reason.
+              confirm: true,
+              reason: (options.reason ?? '').trim(),
+            }
+          : {
+              ratio_bp: ratio,
+              ...(options.confirm ? { confirm: true } : {}),
+            },
       })
+      const warnings = response.warnings ?? []
+      setGroupWarnings(warnings)
+      setGroupNeedsConfirm(false)
       setGroupSync(response.key_sync)
+      setInternalConfirmOpen(false)
       toast.success('分组倍率已更新')
       openAudit('GROUP', 't_price_group', groupTarget.id)
     } catch (error) {
+      // The 400 names every model whose floor could not be checked. Show the
+      // list verbatim and offer the same save with confirm=true; the operator
+      // does not retype the form.
+      const warnings = error instanceof ApiError ? error.warnings : []
+      const message = errorMessage(error)
+      if (!internal && warnings.length > 0 && message.includes('无成本价')) {
+        setGroupWarnings(warnings)
+        setGroupNeedsConfirm(true)
+        setGroupError(message)
+        return
+      }
+      setGroupWarnings([])
+      setGroupNeedsConfirm(false)
       const hint = errorHint(error)
-      setGroupError(hint ? `${errorMessage(error)}（${hint}）` : errorMessage(error))
+      setGroupError(hint ? `${message}（${hint}）` : message)
     }
+  }
+
+  const handleGroupSave = () => {
+    if (!groupTarget) return
+    setGroupError(null)
+    const validated = validateGroupRatio()
+    if (!validated) return
+    if (validated.internal) {
+      // T31 D-28 ②: no internal save without an explicit, audited reason.
+      setConfirmReason('')
+      setConfirmReasonError(null)
+      setInternalConfirmOpen(true)
+      return
+    }
+    void submitGroup()
+  }
+
+  const confirmInternalSave = () => {
+    if (!confirmReason.trim()) {
+      setConfirmReasonError('必须填写操作理由，审计日志会记录该内容。')
+      return
+    }
+    void submitGroup({ confirm: true, reason: confirmReason.trim() })
   }
 
   // -------------------------------------------------------------------------
@@ -1458,9 +1538,51 @@ export default function AdminPricingPage() {
               />
             ) : null}
             {groupError ? (
-              <p role="alert" className="rounded-lg border border-danger bg-danger-soft px-3 py-2 text-xs text-danger">
+              <p
+                role="alert"
+                data-testid="group-save-error"
+                className="rounded-lg border border-danger bg-danger-soft px-3 py-2 text-xs text-danger"
+              >
                 {groupError}
               </p>
+            ) : null}
+            {groupNeedsConfirm ? (
+              <div
+                role="alert"
+                data-testid="group-warning-confirm"
+                className="space-y-2 rounded-lg border border-warning bg-warning-soft px-3 py-2 text-xs text-warning"
+              >
+                <p className="font-medium">以下模型缺成本价，毛利地板无法校验：</p>
+                <ul
+                  data-testid="group-warning-list"
+                  className="list-disc space-y-0.5 pl-5 text-ink-secondary"
+                >
+                  {groupWarnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  loading={updateGroup.isPending}
+                  aria-label="仍要保存分组倍率"
+                  onClick={() => void submitGroup({ confirm: true })}
+                >
+                  仍要保存
+                </Button>
+              </div>
+            ) : groupWarnings.length > 0 ? (
+              <div
+                data-testid="group-save-warnings"
+                className="space-y-1 rounded-lg border border-warning bg-warning-soft px-3 py-2 text-xs text-warning"
+              >
+                <p className="font-medium">已保存，但以下模型的毛利地板未校验：</p>
+                <ul className="list-disc space-y-0.5 pl-5 text-ink-secondary">
+                  {groupWarnings.map((warning) => (
+                    <li key={warning}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
             ) : null}
             {groupSync ? (
               <div className="space-y-1 rounded-lg border border-border bg-surface-muted p-3 text-xs">
@@ -1478,6 +1600,48 @@ export default function AdminPricingPage() {
           </div>
         ) : null}
       </Drawer>
+
+      <Modal
+        open={internalConfirmOpen}
+        onClose={() => {
+          if (updateGroup.isPending) return
+          setInternalConfirmOpen(false)
+        }}
+        title="确认修改 internal 分组"
+        description="internal 的倍率 0 表示不计费。保存须二次确认并填写理由，理由会写入审计日志。"
+        size="sm"
+        footer={
+          <>
+            <Button
+              variant="secondary"
+              onClick={() => setInternalConfirmOpen(false)}
+              disabled={updateGroup.isPending}
+            >
+              取消
+            </Button>
+            <Button
+              onClick={confirmInternalSave}
+              loading={updateGroup.isPending}
+              disabled={!confirmReason.trim()}
+              aria-label="确认保存 internal 分组"
+            >
+              确认保存
+            </Button>
+          </>
+        }
+      >
+        <Input
+          label="操作理由（必填）"
+          required
+          value={confirmReason}
+          error={confirmReasonError ?? undefined}
+          onChange={(event) => {
+            setConfirmReason(event.target.value)
+            setConfirmReasonError(null)
+          }}
+          hint="例：内部压测临时关闭计费，工单 OPS-123。理由为空时无法提交。"
+        />
+      </Modal>
 
       <AuditTrail
         open={auditOpen}

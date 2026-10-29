@@ -13,3 +13,13 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
   }
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver
 }
+
+/**
+ * jsdom implements `window.scrollTo` only as "not implemented", which logs a
+ * jsdom error every time a data router's <ScrollRestoration /> mounts (T29).
+ * Those log lines surface as a non-zero vitest "Errors" count and make the
+ * shared worker slower and noisier, so the call is stubbed here. Component
+ * tests that need to observe scroll calls install their own spy
+ * (see ScrollRestorer.test.tsx).
+ */
+window.scrollTo = (() => {}) as typeof window.scrollTo
