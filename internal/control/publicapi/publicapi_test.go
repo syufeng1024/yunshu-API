@@ -429,26 +429,87 @@ func findIndex(items []map[string]any, id int64) int {
 func ptrTime(v time.Time) *time.Time { return &v }
 
 // ---------------------------------------------------------------------------
-// empty routes
+// empty / integration-link routes
 // ---------------------------------------------------------------------------
 
+// TestEndpointsAndIntegrationLinksAreHonestlyEmpty keeps its name for history,
+// but "Empty" now applies only to /api/public/endpoints: t_endpoint still does
+// not exist (D-24), while /api/public/integration-links reads t_integration
+// since 0026 and serves the enabled rows. Renaming the test would hide that the
+// earlier expectation deliberately changed.
 func TestEndpointsAndIntegrationLinksAreHonestlyEmpty(t *testing.T) {
 	svc := testService()
-	for name, handler := range map[string]http.HandlerFunc{
-		"/api/public/endpoints":         svc.Endpoints,
-		"/api/public/integration-links": svc.IntegrationLinks,
-	} {
-		t.Run(name, func(t *testing.T) {
-			rec := get(t, handler, name)
-			if rec.Code != http.StatusOK {
-				t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-			}
-			if got := rec.Header().Get("Cache-Control"); got != publicCache {
-				t.Fatalf("Cache-Control = %q", got)
-			}
-			if got := rec.Body.String(); got != `{"data":[]}` {
-				t.Fatalf("body = %s, want an empty data array", got)
-			}
-		})
+
+	t.Run("/api/public/endpoints", func(t *testing.T) {
+		rec := get(t, svc.Endpoints, "/api/public/endpoints")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("Cache-Control"); got != publicCache {
+			t.Fatalf("Cache-Control = %q", got)
+		}
+		if got := rec.Body.String(); got != `{"data":[]}` {
+			t.Fatalf("body = %s, want an empty data array", got)
+		}
+	})
+
+	// cursor = enabled with a template, nextchat = enabled with a NULL template,
+	// claude-code = disabled. Different rows from the ops package's tests so the
+	// two packages can run in parallel against the same test schema.
+	const cursorTemplate = "https://cursor.example/import/{key}"
+	ctx := context.Background()
+	if _, err := testDB.ExecContext(ctx,
+		`UPDATE t_integration SET enabled = 1, deep_link_template = ? WHERE tool_key = 'cursor'`,
+		cursorTemplate); err != nil {
+		t.Fatalf("enable cursor: %v", err)
 	}
+	if _, err := testDB.ExecContext(ctx,
+		`UPDATE t_integration SET enabled = 1, deep_link_template = NULL WHERE tool_key = 'nextchat'`); err != nil {
+		t.Fatalf("enable nextchat: %v", err)
+	}
+	if _, err := testDB.ExecContext(ctx,
+		`UPDATE t_integration SET enabled = 0, deep_link_template = NULL WHERE tool_key = 'claude-code'`); err != nil {
+		t.Fatalf("disable claude-code: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = testDB.ExecContext(context.Background(),
+			`UPDATE t_integration SET enabled = 0, deep_link_template = NULL
+			  WHERE tool_key IN ('cursor','nextchat','claude-code')`)
+	})
+
+	t.Run("/api/public/integration-links", func(t *testing.T) {
+		items := decodeRaw(t, get(t, svc.IntegrationLinks, "/api/public/integration-links"))
+
+		cursor := findBy(t, items, "tool_key", "cursor")
+		if cursor == nil {
+			t.Fatalf("enabled cursor missing from %v", items)
+		}
+		// Wire shape only: no id, timestamps or display_name.
+		assertKeys(t, cursor, "deep_link_template", "enabled", "tool_key")
+		if cursor["enabled"] != true {
+			t.Fatalf("cursor enabled = %v, want true", cursor["enabled"])
+		}
+		if cursor["deep_link_template"] != cursorTemplate {
+			t.Fatalf("cursor template = %v, want %q", cursor["deep_link_template"], cursorTemplate)
+		}
+
+		// A NULL template must stay JSON null, not become "".
+		next := findBy(t, items, "tool_key", "nextchat")
+		if next == nil {
+			t.Fatalf("enabled nextchat missing from %v", items)
+		}
+		if value, ok := next["deep_link_template"]; !ok || value != nil {
+			t.Fatalf("nextchat template = %v (present=%v), want null", value, ok)
+		}
+
+		// The disabled row is filtered by the query, not by the client.
+		if findBy(t, items, "tool_key", "claude-code") != nil {
+			t.Fatalf("disabled claude-code leaked into %v", items)
+		}
+		for _, item := range items {
+			if item["enabled"] != true {
+				t.Fatalf("public integration link is not enabled: %v", item)
+			}
+		}
+	})
 }

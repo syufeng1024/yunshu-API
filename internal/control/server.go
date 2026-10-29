@@ -360,6 +360,13 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("GET /api/admin/config", s.authed(mw.PermConfigWrite, s.ops.GetConfig))
 	mux.Handle("PUT /api/admin/config", s.authed(mw.PermConfigWrite, s.ops.PutConfig))
 
+	// T33 integration deep links. The five rows are seeded by 0026 and fixed
+	// (D-30 Q3): PATCH addresses an existing tool_key and cannot create a
+	// sixth. config.write already owns operator-level settings, so no new
+	// permission constant is introduced.
+	mux.Handle("GET /api/admin/integrations", s.authed(mw.PermConfigWrite, s.ops.ListIntegrations))
+	mux.Handle("PATCH /api/admin/integrations/{toolKey}", s.authed(mw.PermConfigWrite, s.ops.UpdateIntegration))
+
 	// T16 ticket centre. The account console holds ticket.read/ticket.write and
 	// sees only its own rows; the operator console answers through ticket.reply.
 	// OPS deliberately does not hold ticket.read: the two consoles never share

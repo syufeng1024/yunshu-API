@@ -12,9 +12,10 @@
 | T09 实际建表（0021） | 2 | `t_job_lock`、`t_reconcile_diff` |
 | T24 段 2 实际建表（0025） | 2 | `t_balance_adjust`、`t_announcement_model` |
 | T25 实际建表（0022） | 1 | `t_request_body` |
-| 当前业务表总量 | 59 | 47 + 7 + 2 + 2 + 1；0010 / 0011 / 0013 / 0020 / 0023 / 0024 只改列或加索引，0017 另建 1 表（已计入 7） |
-| 当前 `information_schema.tables` | 60 | 59 张业务表 + `schema_migrations` |
-| 当前迁移条数 | 23 | 0001–0006（6）、0009（1）、0010–0020（11）、0021（1）、0022（1）、0023（1）、0024（1）、0025（1）；0007 / 0008 永久空缺，不计 |
+| T33 实际建表（0026） | 1 | `t_integration` |
+| 当前业务表总量 | 60 | 47 + 7 + 2 + 2 + 1 + 1；0010 / 0011 / 0013 / 0020 / 0023 / 0024 只改列或加索引，0017 另建 1 表（已计入 7） |
+| 当前 `information_schema.tables` | 61 | 60 张业务表 + `schema_migrations` |
+| 当前迁移条数 | 24 | 0001–0006（6）、0009（1）、0010–0020（11）、0021（1）、0022（1）、0023（1）、0024（1）、0025（1）、0026（1）；0007 / 0008 永久空缺，不计 |
 
 任务卡 §1 / §7 A2 写「46 张」，与卡内 §4 逐表清单（8 + 11 + 26 + 2 = 47）相差 1；差的是 `t_config_publish`。本表按逐表清单登记，未删表凑数。`information_schema` 计数含迁移记录表，因此比业务表多 1。
 
@@ -27,6 +28,7 @@
 | T09 | `t_job_lock`、`t_reconcile_diff` | 2 |
 | T24 段 2 | `t_balance_adjust`、`t_announcement_model` | 2 |
 | T25 | `t_request_body` | 1 |
+| T33 | `t_integration` | 1 |
 
 ## 编号占用
 
@@ -57,6 +59,7 @@
 | 0023 | `t_admin_audit_log.result` 放宽到 `varchar(24)` | 已落盘（E-28） |
 | 0024 | `t_admin_audit_log` 补 `idx_aal_created (created_at, id)` 与 `idx_aal_action_created (action, created_at, id)` | 已落盘（T11 第二段） |
 | 0025 | `t_balance_adjust` / `t_announcement_model` 建表 | 已落盘（T24 段 2） |
+| 0026 | `t_integration` 建表 + 5 个工具种子（`enabled=0`、模板 NULL） | 已落盘（T33 段 1） |
 
 > **需回写 TDS §8.6**：0018 / 0019 / 0020 / 0021 是 TDS §8.6 裁定表之外的新增占用，由交付总监统一改源文档；实现方未改 TDS。
 
@@ -125,6 +128,7 @@
 | `t_request_body` | 0022 | 计量 | `uk_rb_request_user (request_id, user_id)`；`ciphertext mediumblob` 存 `v1:` 信封密文，`body_key_id` 由 `LOG_BODY_KEK` 独立派生；`idx_rb_expire (expires_at)` 服务 10,000 行/批的保留期清理，`idx_rb_user_created (user_id, created_at)` 服务按用户审计 |
 | `t_balance_adjust` | 0025 | 资金 | `uk_ba_user_pending (pending_user_id)`，生成列在 `state='PENDING'` 时等于 `user_id`，其余为 NULL；`chk_ba_amount`、`chk_ba_direction` |
 | `t_announcement_model` | 0025 | 运营 | `PRIMARY KEY (announcement_id, model_id)`、`idx_am_model (model_id)` |
+| `t_integration` | 0026 | 运营 | `uk_integration_tool (tool_key)`；5 行固定种子，`tool_key` 与 `web/src/content/toolIntegrations.ts` 逐字一致；`deep_link_template varchar(512)` 可空，服务端白名单占位符 `{key}` / `{base_url}` / `{model}` |
 
 ## 持有字段的迁移
 
