@@ -15,9 +15,11 @@ type Stage interface {
 	Run(ctx context.Context, c *Ctx) error
 }
 
-// Stage names used by the pipeline and the tests.
+// Stage names used by the pipeline and the tests. P06.5 is a child of the P05
+// slot, not a seventh slot.
 const (
 	StageP05  = "P05"
+	StageP065 = "P06.5"
 	StageP085 = "P08.5"
 	StageP12  = "P12"
 	StageP09  = "P09"
@@ -61,9 +63,12 @@ func (p *Pipeline) Names() []string {
 // write), so doing it earlier has no side effect. Limiting still precedes every
 // money write: P10 is the first stage that touches the ledger.
 //
-// P06 (IP), P07 (model) and P08 (idempotency) execute inside the P05 slot, in
-// numeric order, before backpressure. They are sub-steps rather than slots so
-// the six-slot execution order stays the single invariant this card asserts.
+// P06.5 (content safety) executes inside the P05 slot immediately after P05
+// authentication, then P06 (IP), P07 (model) and P08 (idempotency) continue in
+// numeric order, all before backpressure. They are sub-steps rather than slots
+// so the six-slot execution order stays the single invariant this card
+// asserts. P06.5 needs the authenticated identity to write
+// t_content_policy_hit, and P04 has already decoded the messages (TDS §8.4.1).
 func (p *Pipeline) Run(ctx context.Context, c *Ctx) error {
 	for _, stage := range p.stages {
 		if err := ctx.Err(); err != nil {
@@ -115,9 +120,9 @@ type AdmissionStage struct {
 	stages []Stage
 }
 
-// NewAdmissionStage builds the P05 slot from P05, P06, P07 and P08.
-func NewAdmissionStage(auth, ip, model, idem Stage) *AdmissionStage {
-	return &AdmissionStage{stages: []Stage{auth, ip, model, idem}}
+// NewAdmissionStage builds the P05 slot from P05, P06.5, P06, P07 and P08.
+func NewAdmissionStage(auth, policy, ip, model, idem Stage) *AdmissionStage {
+	return &AdmissionStage{stages: []Stage{auth, policy, ip, model, idem}}
 }
 
 // Name implements Stage.

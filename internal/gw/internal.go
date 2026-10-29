@@ -17,8 +17,9 @@ import (
 // pool: a console call cannot authenticate with a token, so controld signs the
 // verified key attributes and this handler injects them.
 //
-// Stage coverage: P06, P07, P08, P08.5, P12 (P13 folded into RouterStage),
-// P09, P11, P10 and P14 (the injected terminal). P05 is deliberately absent:
+// Stage coverage: P06.5, P06, P07, P08, P08.5, P12 (P13 folded into
+// RouterStage), P09, P11, P10 and P14 (the injected terminal). P05 is
+// deliberately absent:
 // its only job here would be to overwrite the verified claims with a K13
 // lookup, which gatewayd cannot perform for a browser session.
 //
@@ -51,20 +52,24 @@ func NewInternalHandler(d *Deps, terminal Terminal, secret string) (*InternalHan
 	}, nil
 }
 
-// NewInternalPipeline is the public pipeline minus the P05 slot. P06/P07/P08
-// stay in numeric order ahead of backpressure, P12 precedes P09 for the same
-// reason as NewDefaultPipeline (the estimate needs the route price), and P11
-// still precedes P10 so no money is written before the rate gate.
+// NewInternalPipeline is the public pipeline minus the P05 slot. P06.5 runs
+// first, then P06/P07/P08 in numeric order, all ahead of backpressure; P12
+// precedes P09 for the same reason as NewDefaultPipeline (the estimate needs
+// the route price), and P11 still precedes P10 so no money is written before
+// the rate gate. P06.5 runs first because the internal entry injects the signed
+// identity before P04, so the hit row has the same owner fields as the public
+// path.
 func NewInternalPipeline(d *Deps) *Pipeline {
 	return NewPipeline(d.Logger,
-		NewIPStage(d),           // P06
-		NewModelStage(d),        // P07
-		NewIdemStage(d),         // P08
-		NewBackpressureStage(d), // P08.5
-		NewRouterStage(d),       // P12; P13 breaker state is read inside
-		NewEstimateStage(d),     // P09
-		NewRateLimitStage(d),    // P11
-		NewPreholdStage(d),      // P10
+		NewContentPolicyStage(d), // P06.5
+		NewIPStage(d),            // P06
+		NewModelStage(d),         // P07
+		NewIdemStage(d),          // P08
+		NewBackpressureStage(d),  // P08.5
+		NewRouterStage(d),        // P12; P13 breaker state is read inside
+		NewEstimateStage(d),      // P09
+		NewRateLimitStage(d),     // P11
+		NewPreholdStage(d),       // P10
 	)
 }
 

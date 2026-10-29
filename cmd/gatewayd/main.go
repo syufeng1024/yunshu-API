@@ -182,11 +182,17 @@ func main() {
 		Clock:         redisClock,
 		Metrics:       rec,
 		NodeID:        nodeID,
+		// P06.5 content safety (T42). The keyword half is in-process and has no
+		// configuration key (D-08 freezes the set); hits are written through the
+		// same restricted gateway channel as every other gw write.
+		PolicyChecker: gw.NewKeywordChecker(),
+		PolicyHits:    gw.ContentPolicyHitWriter{DB: gwDB},
 	}
 	if err := deps.Validate(); err != nil {
 		logger.Error(rootCtx, "gateway wiring incomplete: "+err.Error(), obslog.Fields{Stage: "startup", Status: 1})
 		os.Exit(1)
 	}
+	deps.WarnDisabled(rootCtx)
 
 	// The channel KEK. A missing or malformed KEK does not stop the process:
 	// every dispatch then answers 503 config_unavailable, which is visible and

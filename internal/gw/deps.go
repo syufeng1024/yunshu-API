@@ -110,6 +110,16 @@ type Deps struct {
 	// nil-safe and does not return an error.
 	Metrics *obsmetrics.Recorder
 
+	// PolicyChecker is the P06.5 content-safety gate (PRD §10.1). nil means the
+	// gate is explicitly not configured; it is not replaced by a permissive
+	// implementation. WarnDisabled reports the state at startup.
+	PolicyChecker PolicyChecker
+	// PolicyHits records a hit into t_content_policy_hit. A nil store still
+	// refuses the request but records no evidence; WarnDisabled reports it.
+	// Unlike the required dependencies this is not a boot failure: refusing is
+	// the safe direction, losing the row is the visible cost.
+	PolicyHits PolicyHitStore
+
 	// NodeID is written to t_prehold_hold.node_id.
 	NodeID string
 }
@@ -146,12 +156,31 @@ func (e depsError) Error() string { return "gw: missing dependency: " + string(e
 
 func errDeps(name string) error { return depsError(name) }
 
+// WarnDisabled reports optional wiring that is absent, once per process. It is
+// called from cmd/gatewayd after Validate. A nil PolicyChecker is a deliberate
+// configuration state (the request path skips the gate) and must be visible in
+// the log rather than inferred from an empty table.
+func (d *Deps) WarnDisabled(ctx context.Context) {
+	if d == nil || d.Logger == nil {
+		return
+	}
+	if d.PolicyChecker == nil {
+		d.Logger.Warn(ctx, "content_policy_checker_disabled: Deps.PolicyChecker is nil; requests are not screened",
+			obslog.Fields{Stage: StageP065})
+	}
+	if d.PolicyHits == nil {
+		d.Logger.Warn(ctx, "content_policy_hit_store_disabled: Deps.PolicyHits is nil; hits will be refused without an evidence row",
+			obslog.Fields{Stage: StageP065})
+	}
+}
+
 // NewDefaultPipeline builds the six-slot execution order. The slice order is
 // the contract; see Pipeline.Run for why P12 precedes P11.
 func NewDefaultPipeline(d *Deps) *Pipeline {
 	return NewPipeline(d.Logger,
 		NewAdmissionStage(
 			NewAuthStage(d),
+			NewContentPolicyStage(d),
 			NewIPStage(d),
 			NewModelStage(d),
 			NewIdemStage(d),
