@@ -11,13 +11,13 @@
 | D-03 | F16-5：分组倍率降到成本线以下须拒绝并给差额；§6.4 套餐分支四步公式落地。见 `matrix-82.md` F16-5 | 地板只在价格写入 `pricing.go:838` 校验；分组端点 `group.go:119` 只校验倍率语法。`plan_min_margin_bp` / `max_bonus_ratio_bp` 仅有配置键，无实现与后台入口；`internal` 分组二次确认未实现 | 地板检查复用了价格写入路径的整数交叉相乘，未在分组写入路径重复实现 | 已配价模型可被事后调低分组倍率绕过地板，出现负毛利；`internal` 分组改倍率无二次确认 | **分组侧已修复**（T31 `a6f1317`）；**套餐分支仍缺**（无写入路径，OI-13） |
 | D-04 | F20-4：提额通过后站内通知到达；发票 `ISSUED`、退款 `REFUNDED` / `REFUND_FAILED` 额外发邮件。见 `matrix-82.md` F20-4 | 提额通过路径不写站内通知，仅驳回写 `QUOTA_AUDIT`；`notify.go:13` 注明仓库无 SMTP 客户端，nil Mailer 只记 WARN，邮件实际不发 | 邮件/短信供应商未定（BACKLOG G7）；站内通知只接了驳回分支 | 用户不知道提额已通过；发票与退款状态变化无邮件触达 | 否（属实现缺口；邮件通道受产品决策阻塞） |
 | D-05 | G-06：`30,000×0.6=18,000 < 26,667` 时分组端点拒绝保存。见 `matrix-gwt.md` G-06 | 同一用例在价格写入处断言拒绝（`actual=18000 required=26667 shortfall=8667`）；分组端点本身无地板校验 | 同 D-03 | GWT 断言通过但保护点与文档描述的位置不同；经分组端点改倍率仍可绕过 | **已关闭**（T31 `a6f1317` + G-06 补断言，矩阵转 ✅） |
-| D-06 | G-09：体验金发放须满足「发放延迟满 24 小时」等四项前置校验，拒绝时指明缺哪一项。见 `matrix-gwt.md` G-09 | 24h 延迟未实现；四类命中共用一条不指明因素的拒绝文案；其余断言（同设备 1 次、7,000 积分、90 天）通过 | 拒绝不指明因素是为避免向攻击者泄露命中维度；24h 延迟未排期 | 反刷强度低于 PRD；正常用户被拒时无法自助定位原因 | 否（属实现缺口；拒绝文案口径需产品确认） |
+| D-06 | G-09：体验金发放须满足「发放延迟满 24 小时」等四项前置校验，拒绝时指明缺哪一项。见 `matrix-gwt.md` G-09 | 24h 延迟未实现；四类命中共用一条不指明因素的拒绝文案；其余断言（同设备 1 次、7,000 积分、90 天）通过 | 拒绝不指明因素是为避免向攻击者泄露命中维度；24h 延迟未排期 | 反刷强度低于 PRD；正常用户被拒时无法自助定位原因 | 否（属实现缺口；拒绝文案口径需产品确认）；✅ 已关闭：PRD 登记 ERR-11（T37，需求方裁定 V1.0 不做 24h 延迟） |
 | D-07 | F2-1：已登录点套餐卡跳充值中心并预选该档。见 `matrix-82.md` F2-1 | `PlanCards` 生成 `/console/recharge?plan=PRO`，但 `RechargePage` 不读取 `plan` 查询参数，进入后仍预选第一个可购档 | 充值页按 `plans[0]` 初始化，未接查询参数 | 用户需手动重选套餐，预付金额可能选错档 | 否（属实现缺口） |
 | D-08 | G-03：`t_recharge_order` 仅 1 行且状态 `SUCCESS`。见 `matrix-gwt.md` G-03 | 状态为 `PAID`；DDL 枚举 `PENDING / PAID / CLOSED / REFUNDING / REFUNDED / PARTIAL_REFUNDED` 无 `SUCCESS` | PRD 用叙述性状态名，DDL 无此值；用例按 DDL 断言并输出 DEVIATION 日志 | 按 PRD 原文对接的消费方读不到 `SUCCESS`；文档与库表不一致 | 是（PRD G-03 改为 `PAID`；见 `errata.md` ERR-03）；✅ 已关闭：PRD 勘误 ERR-03/ERR-04，T35 |
 | D-09 | G-07：开票申请单初始状态 `PENDING`。见 `matrix-gwt.md` G-07 | `t_invoice_apply.state` 初始值 `APPLIED`，审批后 `ISSUED` | DDL 状态机为 `APPLIED → APPROVED / REJECTED → ISSUED`；PRD 的 `PENDING` 与审核中心五类单据的 `PENDING` 混用 | 按 PRD 查询 `PENDING` 发票申请返回 0 行 | 是（PRD G-07 改为 `APPLIED`；见 `errata.md` ERR-04）；✅ 已关闭：PRD 勘误 ERR-03/ERR-04，T35 |
 | D-10 | F16-1 / G-05：调价后历史行 `price_rule_id` 指向旧版本行，新请求指向新版本行。见 `matrix-82.md` F16-1、`matrix-gwt.md` G-05 | 调价在原 `t_price_rule` 行上 `version+1` 并写审计前后值，不生成独立旧版本行；历史 `consumed_micro` 与 `price_rule_id` 不变 | T15 定价模型用单行版本号 + 审计留痕，避免价格行复制 | 历史行指向的 `price_rule_id` 当前值已是新价，无法仅凭该行还原成交时单价；对账依赖 `t_usage_record` 金额快照 | 是（PRD/TDS 的版本行描述需改为单行版本 + 审计口径） |
-| D-11 | G-05：同 D-10。见 `matrix-gwt.md` G-05 | 同 D-10 | 同 D-10 | 同 D-10 | 是（同 D-10） |
-| D-12 | G-02：`est = raw_est × 1.2 = 7,200`（`raw_est=6,000`）。见 `matrix-gwt.md` G-02 | 流水线 `est = 6000 × 1.1 × 1.2 = 7,920`；`billing.prestimate_safety_bp=11000` 为安全系数；准入仍按 `raw_est` 判定，预扣被 `min(est, 可用×50%)` 截断 | PRD D-2 公式漏写安全系数；TDS §3.7 键表与 T07 实现均含 1.1 | 准入行为不变；预扣上限在可用余额充足时比 PRD 算式高 10%，文档与实现数值不一致 | 是（PRD D-2 / G-02 补 `× preestimate_safety_bp`；见 `errata.md` ERR-06） |
+| D-11 | G-05：同 D-10。见 `matrix-gwt.md` G-05 | 同 D-10 | 同 D-10 | 同 D-10 | 是（同 D-10）；✅ 已关闭：PRD 已按 ERR-10 改为单行版本递增 + 审计口径（T37） |
+| D-12 | G-02：`est = raw_est × 1.2 = 7,200`（`raw_est=6,000`）。见 `matrix-gwt.md` G-02 | 流水线 `est = 6000 × 1.1 × 1.2 = 7,920`；`billing.prestimate_safety_bp=11000` 为安全系数；准入仍按 `raw_est` 判定，预扣被 `min(est, 可用×50%)` 截断 | PRD D-2 公式漏写安全系数；TDS §3.7 键表与 T07 实现均含 1.1 | 准入行为不变；预扣上限在可用余额充足时比 PRD 算式高 10%，文档与实现数值不一致 | 是（PRD D-2 / G-02 补 `× preestimate_safety_bp`；见 `errata.md` ERR-06）；✅ 已关闭：PRD 已按 ERR-09 勘误三处 `7,200 → 7,920`（T37） |
 | D-13 | F1-1：请求向量模型返回 **404** `model_not_found`。见 `matrix-82.md` F1-1 | 返回 **400** `model_not_found`（`internal/gw/p07_model.go:55`、`apierr/codes.go`）；无向量模型专项用例 | PRD E.1 第 1823 行与 TDS 均定义 400；D.3 的 404 是孤立写法 | 客户端按 404 处理会漏判；错误码状态以 E.1 为准 | 是（PRD D.3 的 404 改为 400；见 `errata.md` ERR-02） |
 | D-14 | F2-2：一张表含 RPM / TPM / 并发 / 日额度 / **积分** / 价格六项。见 `matrix-82.md` F2-2 | `PlanLimitTable` 表头为套餐 / RPM / TPM / 并发 / 日额度 / 价格；赠送积分只在 `PlanCards` 卡片展示 | 对比表按「限流规格」组织，积分与价格分属购买卡片 | 用户无法在同一张表比较各档赠送积分 | 否（属实现缺口） |
 | D-15 | F6-2：四步向导可前进**后退**。见 `matrix-82.md` F6-2 | `goBack`（`CreateKeyDialog.tsx:138`）无自动化断言；仅前进路径与第 4 步越界被覆盖 | 用例按主路径编写，回退分支漏测 | 回退后字段保留/清空行为无回归保护 | 否（属测试缺口） |
@@ -26,7 +26,7 @@
 | D-18 | F22-4：模型列表可按来源地 / 类型 / 上架状态筛选，`仅目录` 行单独标色。见 `matrix-82.md` F22-4 | 后端三筛选有用例；前端筛选控件与 `warning` 徽标（`ModelsPage.tsx:152`、`:649`）无自动化断言 | 前端用例未覆盖后台模型列表 | 筛选参数或配色回归不可发现 | 否（属测试缺口） |
 | D-19 | F22-6：推荐权重 0→10 保存成功，审计含前后值与操作人，首页位次前移。见 `matrix-82.md` F22-6 | 落库 0→10 有断言；首页位次仅由 F1-7 排序用例间接覆盖；`SetRecommendWeight` 审计前后值与操作人无专项用例 | 审计断言未单独编写 | 权重审计字段缺失时无法定位操作人 | 否（属测试缺口） |
 | D-20 | F16-3：官网价格表与控制台广场均显示新价。见 `matrix-82.md` F16-3 | 控制台目录、K19、公开接口三处同价有断言；官网 `/pricing` DOM 未验，G-12 日志注明留待 Playwright | 官网是 SPA，Go 用例无法验 DOM | 官网价格表渲染回归不可发现 | 否（属测试缺口；补 Playwright） |
-| D-21 | G-12：官网 `/pricing`、控制台广场、价格接口三处同一价。见 `matrix-gwt.md` G-12 | 控制台目录与 K19 一致；`/pricing` DOM 比对留待 Playwright 段 | 同 D-20 | 同 D-20 | 否（属测试缺口；补 Playwright） |
+| D-21 | G-12：官网 `/pricing`、控制台广场、价格接口三处同一价。见 `matrix-gwt.md` G-12 | 控制台目录与 K19 一致；官网价格表 DOM 由 T37 段2 的 `web/e2e/pricing-price.spec.ts` 比对：首页 `data-section="models"` 首行输入价与 `/api/public/models` 经 `formatPricePerK` 换算后一致（`/pricing` 本身无价格表） | 官网是 SPA，Go 用例无法验 DOM；改由 Playwright 连真实栈（8088）断言 | 官网价格表渲染回归不可发现（已消除） | 否（属测试缺口）；✅ 已关闭：T37 段2 补 Playwright 用例，`1 passed`，改一位反证即 FAIL |
 | D-22 | 65 码断言：`key_disabled` 须有自动化触发用例。见 `matrix-codes.md` key_disabled | 生产者 `internal/gw/p05_auth.go` 存在，无 `Test*` 用例 | 鉴权分支只做了代码路径覆盖 | 403 文案或状态码回归不可发现 | 否（属测试缺口） |
 | D-23 | 65 码断言：`account_frozen_due_to_overdraft` 须有自动化触发用例。见 `matrix-codes.md` account_frozen_due_to_overdraft | 生产者 `internal/apierr/quota402.go` 存在，无 `Test*` 用例 | 透支冻结路径由 G-02 间接覆盖，未断言该码 | 402 码选择回归不可发现 | 否（属测试缺口） |
 | D-24 | 65 码断言：`idempotent_replay_unsupported` 须有自动化触发用例。见 `matrix-codes.md` idempotent_replay_unsupported | 生产者 `internal/gw/server.go`（幂等重放正文 >64KB）存在，无 `Test*` 用例 | 大正文重放分支未构造 | 409 分支回归不可发现 | 否（属测试缺口） |
@@ -43,7 +43,7 @@
 | :--- | :--- | :--- |
 | 82 项 `❌ == 0` | 本表不含 `❌`；F14-6 已于 T32（`68c` 系列提交）关闭，仅剩 F4-3 见 `open-issues.md` OI-01 | 仍不达标（`❌ 1`） |
 | 82 项 `⚠️ ≤ 8` | 本表登记 14 条 matrix-82 `⚠️`：D-01、D-02、D-03、D-04、D-07、D-10、D-13、D-14、D-15–D-20 | 不达标（14 > 8） |
-| GWT 全 `✅` | 本表登记 4 条 GWT `⚠️`（D-06 G-09、D-11 G-05、D-12 G-02、D-21 G-12）；D-05（G-06）已在 T31 关闭，D-08（G-03）、D-09（G-07）已在 T35 关闭 | 不达标（**8/12 ✅**） |
+| GWT 全 `✅` | D-21（G-12）已在 T37 段2 关闭（Playwright DOM 断言）；D-05（G-06）在 T31 关闭，D-08（G-03）、D-09（G-07）在 T35 关闭，D-06（G-09）、D-11（G-05）、D-12（G-02）在 T37 关闭 | 12/12 ✅ |
 | 65 码断言通过 | 本表登记 9 条码 `⚠️`（D-22–D-30） | 不达标（另有 7 条 `❌` 见 OI-06） |
 
 ## T34 关闭清单（2026-10-29）

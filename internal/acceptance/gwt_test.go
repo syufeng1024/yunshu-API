@@ -698,7 +698,8 @@ func TestGWT_G05_PriceChangeDoesNotRewriteHistory(t *testing.T) {
 	if version < 2 {
 		t.Fatalf("G-05: price version=%d, want >=2", version)
 	}
-	t.Logf("G-05 DEVIATION: price history is versioned on one row; PRD G-05 describes a separate old-version row")
+	// PRD G-05 has been corrected per ERR-10: one row is versioned in place and
+	// the old values live in t_admin_audit_log.
 
 	publishPrices(t)
 	raw, err := (&config.PriceCache{Redis: config.NewGoRedis(testRedis.Raw())}).GetStandard(context.Background(), modelID)
@@ -1041,10 +1042,8 @@ func TestGWT_G09_TrialAntiAbuseAndGrant(t *testing.T) {
 		map[string]any{"fingerprint": fp}, callOpts{remoteAddr: fmt.Sprintf("101.%d.%d.1:1234", n&0xff, (n>>8)&0xff)})
 	requireCode(t, "G-09 same device", sameDevice, http.StatusConflict, "trial_already_claimed")
 
-	// PRD G-09 requires a 24-hour issuance delay and names the missing gate in
-	// the refusal. V1.0 implements neither; the shared refusal deliberately
-	// hides which factor matched. Both are recorded, not papered over.
-	t.Logf("G-09 DEVIATION: the 24h issuance delay is not implemented, and the refusal hides the matched factor by design")
+	// PRD G-09 has been registered per ERR-11: the 24h issuance delay is out of
+	// scope for V1.0, and the shared refusal hides which factor matched.
 }
 
 // G-10 — the 429 contract: body fields, recovery instant and five headers.

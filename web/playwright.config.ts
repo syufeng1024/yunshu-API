@@ -13,7 +13,15 @@ import { defineConfig, devices } from '@playwright/test'
  * component-layer fallback; F7-1 and F19-1 must hit the real control plane.
  */
 
-const BASE_URL = 'http://127.0.0.1:5180'
+// T37 段2: the G-12 spec asserts the rendered price on the full stack that is
+// already running (nginx + production build). Set E2E_BASE_URL to point the
+// fixture `page`/`request` at it; the security specs still pass their own
+// baseURL through e2e/security/helpers.ts.
+const DEV_SERVER_URL = 'http://127.0.0.1:5180'
+// Default stays the dev server so `npm run e2e` keeps its old behaviour;
+// E2E_BASE_URL is opt-in for runs against the already-running stack.
+const BASE_URL = process.env.E2E_BASE_URL ?? DEV_SERVER_URL
+const EXTERNAL_STACK = Boolean(process.env.E2E_BASE_URL)
 const CONTROL_URL = 'http://127.0.0.1:8081/healthz'
 
 const backendDSN =
@@ -37,13 +45,10 @@ const backendEnv: Record<string, string> = {
   EXPORT_HMAC_KEY: 'e2e-only-export-hmac-key',
 }
 
-// Local Windows machines may use the installed Chrome/Edge; CI leaves this
-// unset and therefore runs Playwright's bundled Chromium.
-const browserChannel = process.env.E2E_BROWSER_CHANNEL as
-  | 'chrome'
-  | 'msedge'
-  | 'chromium'
-  | undefined
+// Local Windows machines use the installed Chrome; CI has only the bundled
+// Chromium and must not be forced onto a channel.
+const browserChannel = (process.env.E2E_BROWSER_CHANNEL ??
+  (process.env.CI ? undefined : 'chrome')) as 'chrome' | 'msedge' | 'chromium' | undefined
 
 const frontendEnv: Record<string, string> = {
   ...(process.env as Record<string, string>),
@@ -76,23 +81,27 @@ export default defineConfig({
       },
     },
   ],
-  webServer: [
-    {
-      // Explicit IPv4: the baseURL is 127.0.0.1 and Windows may resolve
-      // "localhost" to ::1 only.
-      command: 'npm run dev -- --host 127.0.0.1 --port 5180',
-      url: BASE_URL,
-      reuseExistingServer: true,
-      timeout: 120_000,
-      env: frontendEnv,
-    },
-    {
-      command: 'go run ./cmd/controld',
-      cwd: '..',
-      url: CONTROL_URL,
-      reuseExistingServer: true,
-      timeout: 180_000,
-      env: backendEnv,
-    },
-  ],
+  // E2E_BASE_URL means the stack is already up (e.g. the 8088 production
+  // build); never start a second dev server in that mode.
+  webServer: EXTERNAL_STACK
+    ? undefined
+    : [
+        {
+          // Explicit IPv4: the dev-server URL is 127.0.0.1 and Windows may
+          // resolve "localhost" to ::1 only.
+          command: 'npm run dev -- --host 127.0.0.1 --port 5180',
+          url: DEV_SERVER_URL,
+          reuseExistingServer: true,
+          timeout: 120_000,
+          env: frontendEnv,
+        },
+        {
+          command: 'go run ./cmd/controld',
+          cwd: '..',
+          url: CONTROL_URL,
+          reuseExistingServer: true,
+          timeout: 180_000,
+          env: backendEnv,
+        },
+      ],
 })

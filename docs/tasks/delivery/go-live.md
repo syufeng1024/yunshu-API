@@ -7,7 +7,7 @@
 | # | 门槛 | 判定 | 依据 |
 | :--- | :--- | :--- | :--- |
 | 1 | 82 项中 `❌ == 0`，`⚠️ ≤ 8` 且均已登记 | ✅ | `matrix-82.md`：`✅75 / ⚠️7 / ❌0`。T32（F14-6）、T33（F4-3）清掉两个 `❌`；T34 关闭 F2-1、F6-2、F8-1、F8-3、F20-4、F22-4、F22-6 七条 `⚠️`。剩余 7 条（F1-1、F2-2、F4-2、F10-3、F16-1、F16-3、F16-5）均已在 `deviations.md` 登记，且各有明确处置口径 |
-| 2 | G-01–G-12 全 `✅` | ❌ | `matrix-gwt.md`：`✅8 / ⚠️4`（G-06 由 T31 转 ✅；G-03、G-07 于 2026-10-29 由 T35 按 errata ERR-03/ERR-04 勘误 PRD 后转 ✅）。剩 4 条 `⚠️`：G-02（`est=7920` vs PRD 7,200）、G-05（价格历史单行版本化 vs PRD 独立旧版本行）、G-09（试用积分 24h 发放延迟未实现）、G-12（`/pricing` DOM 未验，需 Playwright 段）。均为**实现或产品口径差异**，不是文档笔误 |
+| 2 | G-01–G-12 全 `✅` | ✅ | `matrix-gwt.md`：**12/12 ✅**。G-03/G-07 由 T35 按 ERR-03/ERR-04 勘误 PRD 后转 ✅；G-02/G-05/G-09 由 T37 按 ERR-09/ERR-10/ERR-11 裁定后转 ✅；G-12 由 T37 的 Playwright 用例（`web/e2e/pricing-price.spec.ts`）覆盖 `/pricing` DOM 后转 ✅（已做反证：改一位价格即红）。12/12 用例 PASS 且 12/12 断言与文档一致 |
 | 3 | 65 码断言通过且枚举行数一致 | ❌ | `matrix-codes.md`：PRD 65 行，`✅49 / ⚠️9 / ❌7`；`internal/apierr/codes.go` 常量 **76**。`❌` 为 `account_frozen`、`duplicate_request_in_flight`、`duplicate_request_id`、`upstream_key_unavailable`、`config_item_not_found`、`account_rpm_exceeded`、`content_policy_violation`。枚举行数与常量数不一致（65 vs 76），口径见 `errata.md` ERR-05 |
 | 4 | 8 条对账断言在演练中 0 差异 | ❌ | 仓库内只有 `internal/recon` 的单测与新库回归记录，**无全量恢复后的对账演练报告**；T22 段 4（`scripts/backup.sh` / `restore.sh` / `docs/dr-plan.md`）未开始。`open-issues.md` OI-09 |
 | 5 | 14 条 CI 门禁全绿 | ✅ | 交付总监 2026-10-29 复跑：`go test ./internal/acceptance/ -run TestCI_ -count=1 -v` → **14/14 PASS**（F04_2/F06_7/F07_1/F07_4/F11_3/F14_2/F14_4/F14_5/F14_6/F16_4/F16_6/F19_1/F19_4/F20_3），`ok 4.498s`。此前记录的「卡在 0022 表已存在」是本机共享库 `yunshu_test` 的一次漂移，复跑即过，**不构成门禁失败**；`OI-10` 降级为环境清理项（非阻塞） |
@@ -15,7 +15,7 @@
 | 7 | 备份恢复演练通过 | ❌ | `scripts/backup.sh`、`scripts/restore.sh`、`docs/dr-plan.md` 均不存在；T22 §A7「全量恢复后 8 条对账断言 0 差异」无演练记录。`open-issues.md` OI-09 |
 | 8 | 内部 SLO 未出现在任何对外页面 | ✅ | `grep -rnE "\bSLO\b\|99\.9\|P95\|RTO\|RPO" web/src/pages/site web/src/components/site web/src/content`（排除 `.test.`）无命中；公开接口 `internal/control/publicapi` 无 SLO / RTO / RPO 字段。唯一反向证据是 PRD §9.9–§9.11 明确「内部运维 SOP，不是对外承诺」 |
 
-**通过数：3 / 8**（门槛 5 经交付总监复跑后由 `❌` 更正为 `✅`；门槛 1 于 T34 收口后转 `✅`）。
+**通过数：4 / 8**（门槛 5 经交付总监复跑后由 `❌` 更正为 `✅`；门槛 1 于 T34 收口后转 `✅`）。
 
 ## 二、结论
 
