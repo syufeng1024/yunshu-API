@@ -181,7 +181,7 @@
 | T23 | `docs/tasks/delivery/file-index.md` | 本文件 | 全量交付文件索引 |
 | — | `docs/tasks/README.md` | 805 | 任务卡总览、决策 D-01–D-25、验收记录与台账 |
 | — | `docs/tasks/BACKLOG.md` | 51 | 跨卡待办 G1–G14 与上线前必办 |
-| — | `docs/tasks/HANDOFF-2026-10-28.md` | 116 | 交接说明 |
+| — | `docs/tasks/HANDOFF-2026-10-30.md` | 121 | 交接说明（当前唯一有效的交接单；2026-10-28 / 10-29 两版已删除，其独有要点已并入本版） |
 | — | `docs/tasks/errata.md` | 55 | 源文档勘误 E-01–E-34（实现期累计） |
 | — | `docs/tasks/ref-frontend-structure.md` | 102 | 前端结构参考（参考非规范） |
 | — | `docs/tasks/T01`–`T30` 任务卡 | 6,047 | 31 个文件（30 张卡 + T27 两段）的边界、硬约束、验收标准与回执 |
