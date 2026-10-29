@@ -17,6 +17,7 @@
 | G7 | 邮件短信通知 / 一键导入 | T24 §11 | **需产品决策** | 等需求方定供应商与范围 | ⏸ |
 | G8 | 枚举归一口径：`usage_source` 输出 `UPSTREAM_API`、`protocol_in/out` 输出 `OPENAI_COMPAT`，而 TDS §5.1 要求小写 `upstream` / `openai` | T22 段2 遗留 #3 | 一致性 | 二选一：改日志产出侧，或在消费端做映射。必须定一处为准，否则按 TDS 聚合会落空 | ⬜ |
 | G9 | 未配 `VITE_API_BASE_URL` 时，调试台代码生成用 `window.location.origin` | T28 §8（原盘点结论修正） | 部署提醒 | **非代码缺陷**：`PlaygroundPage.tsx:174` 的 `apiBaseUrl()` 优先读环境变量，回退 origin 属正常设计。上线清单必须加一条「配 `VITE_API_BASE_URL`」，否则生成的示例代码域名会是错的 | ⬜ |
+| G10 | SPA 路由切换不复位滚动：从已滚动的控制台页点侧栏进入 `/console/playground`，`scrollY` 会保留（实测 444），新页从中间开始显示 | T28 §9 遗留 #2 | 交互缺陷（非 P0） | 修复点在路由层（`web/src/App.tsx`/布局），T28 文件域外未动。需先确认是否就是用户报告的「上方空白」现象（A 项在本机未复现） | ⬜ |
 
 ## 状态图例
 

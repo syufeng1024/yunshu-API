@@ -386,9 +386,29 @@ func relay(w http.ResponseWriter, resp *http.Response) error {
 	return err
 }
 
+// singleValuedHeaders must be overwritten, not appended. The console's own
+// middleware (httpsrv.RequestID) has already written X-Request-Id and
+// X-Trace-Id on this response; the gateway writes them too, so Add would leave
+// two values and `curl -D` prints each header twice. Both values describe one
+// request, and the gateway's is the one the upstream attempt was logged under.
+//
+// Everything else keeps Add semantics: Set-Cookie is legitimately multi-valued
+// and collapsing it would drop a cookie.
+var singleValuedHeaders = map[string]bool{
+	"X-Request-Id": true,
+	"X-Trace-Id":   true,
+}
+
 func copyHeaders(dst, src http.Header) {
 	for name, values := range src {
-		if hopByHopHeaders[http.CanonicalHeaderKey(name)] {
+		key := http.CanonicalHeaderKey(name)
+		if hopByHopHeaders[key] {
+			continue
+		}
+		if singleValuedHeaders[key] {
+			for _, v := range values {
+				dst.Set(name, v)
+			}
 			continue
 		}
 		for _, v := range values {

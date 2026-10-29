@@ -481,3 +481,77 @@ func TestPlaygroundStreamsSSEWithoutBuffering(t *testing.T) {
 		t.Fatalf("tail = %q", rest)
 	}
 }
+
+// TestCopyHeadersOverwritesSingleValuedKeys is the unit-level proof for the
+// 2026-10-29 defect: the console middleware has already set X-Request-Id and
+// X-Trace-Id, and the gateway sends the same two headers, so Add produced two
+// values each (`curl -D` printed both lines twice).
+func TestCopyHeadersOverwritesSingleValuedKeys(t *testing.T) {
+	dst := http.Header{}
+	dst.Set("X-Request-Id", "console-rid")
+	dst.Set("X-Trace-Id", "console-trace")
+
+	src := http.Header{}
+	src.Set("X-Request-Id", "gateway-rid")
+	src.Set("X-Trace-Id", "gateway-trace")
+	src.Set("X-Credits-Remaining", "42")
+	src.Add("Set-Cookie", "a=1; Path=/")
+	src.Add("Set-Cookie", "b=2; Path=/")
+	src.Set("Connection", "keep-alive")
+
+	copyHeaders(dst, src)
+
+	if got := dst.Values("X-Request-Id"); len(got) != 1 || got[0] != "gateway-rid" {
+		t.Fatalf("X-Request-Id = %v, want exactly [gateway-rid]", got)
+	}
+	if got := dst.Values("X-Trace-Id"); len(got) != 1 || got[0] != "gateway-trace" {
+		t.Fatalf("X-Trace-Id = %v, want exactly [gateway-trace]", got)
+	}
+	// Everything else keeps Add semantics.
+	if got := dst.Values("Set-Cookie"); len(got) != 2 {
+		t.Fatalf("Set-Cookie = %v, want two values", got)
+	}
+	if got := dst.Get("X-Credits-Remaining"); got != "42" {
+		t.Fatalf("X-Credits-Remaining = %q", got)
+	}
+	if got := dst.Values("Connection"); len(got) != 0 {
+		t.Fatalf("Connection leaked through as %v", got)
+	}
+}
+
+// TestPlaygroundResponseHeadersAreSingleValued runs the same assertion through
+// Chat, with the console response pre-seeded the way httpsrv.RequestID does.
+func TestPlaygroundResponseHeadersAreSingleValued(t *testing.T) {
+	uid := seedUser(t)
+	kid := seedKey(t, uid, "ENABLED", nil, false)
+
+	gwSrv := fakeGateway(t, testSecret, func(w http.ResponseWriter, _ *http.Request, _ gw.InternalClaims) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Request-Id", "gw-rid")
+		w.Header().Set("X-Trace-Id", "gw-trace")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"chatcmpl-1"}`))
+	})
+	svc := newService(gwSrv.URL, string(testSecret))
+
+	req := httptest.NewRequest(http.MethodPost, "/api/console/playground/chat",
+		strings.NewReader(envelope(kid, chatBody)))
+	req = sessionContext(req, uid)
+	req.Header.Set("X-Request-Id", "rid-pg-dup")
+	rec := httptest.NewRecorder()
+	// httpsrv.RequestID writes both headers before the handler runs.
+	rec.Header().Set("X-Request-Id", "rid-pg-dup")
+	rec.Header().Set("X-Trace-Id", "console-trace")
+
+	svc.Chat(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Values("X-Request-Id"); len(got) != 1 || got[0] != "gw-rid" {
+		t.Fatalf("X-Request-Id = %v, want exactly [gw-rid]", got)
+	}
+	if got := rec.Header().Values("X-Trace-Id"); len(got) != 1 || got[0] != "gw-trace" {
+		t.Fatalf("X-Trace-Id = %v, want exactly [gw-trace]", got)
+	}
+}

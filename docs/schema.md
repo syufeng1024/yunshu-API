@@ -143,6 +143,8 @@
 | 0023 | `t_admin_audit_log` | `result` 改 `varchar(24) NOT NULL DEFAULT 'OK'`（E-28：`REJECTED_BY_GUARD` 17 字符超出原 `varchar(16)`）；回滚前校验超长值，有则 SIGNAL 拒绝 |
 | 0024 | `t_admin_audit_log` | 加 `idx_aal_created (created_at, id)`、`idx_aal_action_created (action, created_at, id)`；只加索引，不改列、不回填；down 直接 DROP INDEX |
 
+`t_route.region` 是枚举，只接受大写 `DOMESTIC`（冗余自 `t_channel.region`）。P12 在 `internal/gw/p12_router.go` 把非 `DOMESTIC` 的路由硬排除，写成 `cn` 会得到 `no_available_upstream`；种子与文档示例一律用 `DOMESTIC`。
+
 `t_arrears.amount_micro` / `settled_micro` 对应 TDS §1.5 的 `due_micro` / `repaid_micro`；列名按 T03 卡落地，语义不变（欠费额 / 已抵扣额）。
 
 `0018` 的 5 档限流策略是**模板行**：`scope_type='USER'`、`scope_id=0` 为哨兵，不对应任何真实用户；用 `effective_from` 的固定毫秒差满足唯一键。`source` 写档位标识（TRIAL / STANDARD / PRO / ENTERPRISE / FREE_DEFAULT）便于运营对照；运行时按用户惰性生成的策略行仍使用 `PLAN` / `TRIAL` / `FREE_DEFAULT`。`FREE_DEFAULT.daily_quota_micro` 为 `NULL`（无上限），不是 0。

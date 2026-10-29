@@ -43,6 +43,16 @@ function HeroStat({ stat }: { stat: Stat }) {
   )
 }
 
+/**
+ * A zero in the hero reads as "this platform has nothing" (D-24): there is no
+ * t_endpoint table in V1.0, so /api/public/endpoints is honestly empty. An
+ * unknown or absent count must render as "--", never as the literal 0 — the
+ * same rule applies to the model and protocol counts when their data is empty.
+ */
+function formatStatValue(value: number): string {
+  return value > 0 ? formatInteger(value) : '--'
+}
+
 function CapabilityCard({
   icon,
   index,
@@ -87,10 +97,16 @@ export default function LandingPage() {
   const statsError = modelsQuery.isError || endpointsQuery.isError
   const statsErrorMessage = errorMessage(modelsQuery.error ?? endpointsQuery.error)
 
+  const hasEndpoints = endpoints.length > 0
   const stats: Stat[] = [
-    { label: '已上架模型', value: formatInteger(listedModels.length) },
-    { label: '接入线路', value: formatInteger(endpoints.length) },
-    { label: '兼容协议', value: formatInteger(protocolCount) },
+    { label: '已上架模型', value: formatStatValue(listedModels.length) },
+    {
+      // Public access points are not implemented in V1.0, so the label says so
+      // instead of implying a live line count.
+      label: hasEndpoints ? '接入线路' : '接入线路（筹备中）',
+      value: formatStatValue(endpoints.length),
+    },
+    { label: '兼容协议', value: formatStatValue(protocolCount) },
   ]
 
   return (
@@ -139,7 +155,10 @@ export default function LandingPage() {
               注册后可主动领取体验积分，具体额度以控制台展示为准。
             </p>
 
-            <dl className="mt-8 grid grid-cols-3 gap-4 border-t border-border pt-6">
+            <dl
+              data-testid="hero-stats"
+              className="mt-8 grid grid-cols-3 gap-4 border-t border-border pt-6"
+            >
               {statsError ? (
                 <div className="col-span-3">
                   <ErrorState

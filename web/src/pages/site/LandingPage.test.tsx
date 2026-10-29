@@ -95,6 +95,38 @@ describe('LandingPage', () => {
     expect(endpointSection?.textContent).not.toMatch(/可用|正常|在线/)
   })
 
+  // D-24: /api/public/endpoints is a deliberate empty stub in V1.0 (there is no
+  // t_endpoint table). The hero must not advertise a literal 0, and the same
+  // applies to the model and protocol counts when their data is empty.
+  it('D-24: empty endpoints render -- and 筹备中, never a literal 0', () => {
+    mockedEndpoints.mockReturnValue(result([]) as ReturnType<typeof usePublicEndpoints>)
+    mockedModels.mockReturnValue(result([]) as ReturnType<typeof usePublicModels>)
+
+    render(
+      <MemoryRouter>
+        <LandingPage />
+      </MemoryRouter>,
+    )
+
+    const stats = screen.getByTestId('hero-stats')
+    expect(stats.textContent).toContain('接入线路（筹备中）')
+    expect(stats.textContent).toContain('--')
+    expect(stats.textContent ?? '').not.toMatch(/(^|\D)0(\D|$)/)
+  })
+
+  it('D-24: keeps the live label and counts when endpoints exist', () => {
+    render(
+      <MemoryRouter>
+        <LandingPage />
+      </MemoryRouter>,
+    )
+
+    const stats = screen.getByTestId('hero-stats')
+    expect(stats.textContent).toContain('接入线路')
+    expect(stats.textContent).not.toContain('筹备中')
+    expect(stats.textContent).toContain(String(endpoints.length))
+  })
+
   it('renders announcements with an effective time and four plan rows', () => {
     render(
       <MemoryRouter>

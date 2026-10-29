@@ -11,7 +11,7 @@
 | 技术基线 | TDS V1.2（2026-10-25） |
 | 任务卡版本 | T-1.0（2026-10-26） |
 | 卡片总数 | 28 张（阶段 0–6，含补口卡 T24/T25、防线卡 T26、功能补口 T27、缺陷修复 T28） |
-| 跨卡待办 | 9 项，见 [BACKLOG.md](BACKLOG.md) |
+| 跨卡待办 | 10 项，见 [BACKLOG.md](BACKLOG.md) |
 | 交付总监（需求拆分 / 派单 / 验收） | 齐活林（本会话主理人） |
 | 实现方（按卡执行） | Claude Code（`claude_code_run`） |
 
@@ -69,6 +69,8 @@
 | D-13 | **执行顺序调整：T10 提到 T07 之前**。T10 是纯库（65 码 + 写出口 + 响应头 + SSE 错误帧），不依赖流水线；而 T07 的每个失败分支都要产出这些码。若按原图先做 T07，错误处理会先写一套临时实现、T10 再返工 | 依赖图原标 T10 依赖 T07，是把它当成"流水线的错误出口"；实际它是被流水线**消费**的库 | T10、T07 |
 | D-12 | **幂等租约补列走方案 A**：新增迁移 `0020` 给 `t_idempotency_record` 加 `fence_token char(36)` + `lease_expires_at datetime(3)`（纯 Expand，只加不删，可回滚为 `DROP COLUMN`）；不做「用 `request_id` 当 fence」的凑合方案 | 幂等 fencing 的语义一旦凑合，后续排查「谁抢了租约」时无从下手；现在只是一条 DDL。编号超出 TDS §8.6 裁定表，已在 `docs/schema.md` 登记待回写 | T06（补正）、T07 |
 | D-11 | **套餐发票/SLA 口径**（原 Q-06）：`invoice_supported` 付费三档（STANDARD / PRO / ENTERPRISE）= `1`，`TRIAL` / `FREE_DEFAULT` = `0`；`sla_text` 付费三档填「7×24 工单受理，不承诺可用性百分比」，其余为空串 | 开票是 PRD G-07 功能点，若五档全 0，定价页会渲染成"全部不支持发票"，与产品事实相反；但开票需实名且需实际支付，体验版与默认档无可开票金额 | T03（0018 种子）、T18（定价页展示） |
+| D-24 | **T28-B 只走前端占位，不许造后端数据**：`/api/public/endpoints` 在 V1.0 是**刻意空桩**（`internal/control/publicapi/empty.go`，无 `t_endpoint` 表；把 `t_channel` 当公开接入点会泄漏 base_url + 密文凭据），因此「接入线路」不能靠补种子变真。`endpoints.length === 0` 时渲染 `--` + 标签「接入线路（筹备中）」；同规则适用于模型数与协议数为 0 的情况 | 卡面 §2B 的方案 1 在本仓库不可行；三个统计位出现字面 `0` 会被读成「平台什么都没有」，比 `--` 更糟 | T28 |
+| D-25 | **T28-D 的真实现象是「prod 栈根本没有渠道」**：全栈 compose 固定 `ENV=prod`，迁移 `0019_seed_local.sql` 被跳过，实测 `t_channel=0 / t_route=0`；卡面写的 `local-dev-placeholder` 只在 `ENV=local` 路径出现。修法落在 `deploy/seed/04-channel.sql` + `scripts/seed-demo.sh`（不碰 `internal/platform/migrate/**`），密钥必须走 `cmd/keytool seed-channel` 的 `v1:` 信封路径 | 两种路径都要能用，否则「空卷重建 → 播种 → 调试台可用」这条验收在 prod 栈上永远不成立 | T28 |
 | D-23 | **T16 的「模型主数据」并入 `internal/control/ops/`，不新建 `internal/control/modelmaster/`**；交付根改为 `internal/control/ops/{model,alias,listing}.go`。T16 卡面写的 `modelmaster/` 作废 | T15 已经交付了模型管理（`ops/model.go`：CRUD、三态、推荐权重、公告草稿、F16-7 未配价不得上架），路由占着 `GET/POST /api/admin/models`。若按卡面另建 `modelmaster/`，同一个资源会有两套 handler 与两套状态机校验——这正是 D-15 禁止的「两套 IR」同类问题，必然字段漂移 | T16 第二段 |
 
 ## 三、待确认事项（不阻塞派单，默认按右列执行）
@@ -154,7 +156,7 @@
 | [T25](T25-日志请求正文落库.md) | 日志请求正文落库（迁移 0022 + 写入端 + 解密接线） | T14,T22 段1/2,T24 | `internal/platform/migrate/`、`internal/settle/`、`internal/logq/` | ✅ 一次通过（2026-10-28） |
 | [T26](T26-行尾一致性与迁移校验守卫.md) | 行尾一致性与迁移校验守卫（防 checksum 跨平台漂移） | T25 | `scripts/`、`.gitattributes`、`docs/dev-setup.md` | ✅ 通过（2026-10-28） |
 | [T27](T27-在线调试台段1内网扣费链路.md) | 在线调试台（段 1 内网扣费链路 + 段 2 前端接入） | T07–T09,T11,T12,T19 | `internal/gw/`、`internal/control/console/`、`web/src/`、`deploy/` | ✅ 两段完成（2026-10-29）；端到端已跑通 |
-| [T28](T28-实测缺陷修复与待办总账.md) | 实测缺陷修复与待办总账（5 修复 + 9 项总账） | T27 | `web/src/`、`internal/control/console/`、`scripts/` | ⬜ 未开始 |
+| [T28](T28-实测缺陷修复与待办总账.md) | 实测缺陷修复与待办总账（5 修复 + 9 项总账） | T27 | `web/src/`、`internal/control/console/`、`scripts/` | 🟨 有条件通过（B/C/D/E 过，A 未复现） |
 | [T22](T22-部署与可观测.md) | 部署·可观测·灰度回滚 | T09,T21 | `deploy/`、`internal/obs/` | 🟨 段 1–3 ✅（指标 / 日志+trace / 容器化+灰度）；段 4 未开始 |
 | [T23](T23-验收对照与交付.md) | 验收对照与交付（82 项功能点） | 全部 | `docs/tasks/acceptance/` | ⬜ |
 
@@ -254,6 +256,7 @@ flowchart LR
 | T27 段1 | 2026-10-28 | 2026-10-28 | ✅ **通过** | 3 项（段 2 未做、端到端未验证、密钥待配） | 打通调试台真实扣费链路的内网段：`gw.InternalHandler`（验签→注入 Auth→跑 P06–P12+P08.5+terminal，**P05 加 8 行短路**）+ controld `POST /api/console/playground/chat`（会话鉴权→查 Key 属主→签名转发→**SSE 逐块 flush**）。三重门：不发布额外端口 / nginx `location /internal/` 404 / secret 缺失即不注册路由。`Auth.KeyID` 用真实 Key（8 处依赖，含反向用例拒绝哨兵）。超出卡面的加固：terminal nil 即构造报错、controld 检测密钥复用即禁用。`BUILD_VET_OK`、`EXIT=0`（gw + console 两包）。过程拦截：44 个 M 中 34 个是 stat 假 M，已清；**nginx 拦截写错文件已修（`851c6da`）** |
 | T26 | 2026-10-28 | 2026-10-28 | ✅ **通过**（一次过） | 2 项 | `scripts/check-eol.sh` 守卫 46 个 SQL + `checksums.golden` 的 CR 检测，接入 `lint.sh` 第 10 条；`.gitattributes` 补 `*.lua eol=lf` 并归一 6 个 Lua；`dev-setup.md` 补 Windows 行尾说明。零依赖、无 xargs（本机 xargs 假阴性）、有 `checked==0` 保护。独立复跑：造 CRLF→`EXIT=1` 精确点名、恢复→`EXIT=0` 静默、**按其给出的修复命令原样执行确能修好且不误改内容**、`LINT_EXIT=0`。实测 HEAD 中 46 个 SQL 全为纯 LF，证明故障纯由旧工作区未 renormalize 造成。遗留：镜像产物的 embed checksum 仍未校验，待单独立项 |
 | T25 | 2026-10-28 | 2026-10-28 | ✅ **通过**（一次过，无需打回） | 3 项 | 补齐空缺的迁移 **0022**（`t_request_body` 7 列 + 3 索引）、正文写入落在 `settle.UsageWriter` 异步批（**不进 gw 热路径**，零命中审计通过）、读取端接上 `LOG_BODY_KEK` 独立信封解密；`BUILD_VET_OK`、四包 `EXIT=0`、测试库业务表 **59**。三处偏离已核实接受，其中**卡面 §5.1 的 `CHAR(26)` 是错的**（全项目实为 `char(36)`），实现方正确纠错。过程拦截：42 个历史迁移文件被 Windows 换行符重写（零内容改动）已还原，避免 `checksums.golden` 失效 |
+| T28 | 2026-10-29 | 2026-10-29 | 🟨 **有条件通过** | 4 项（A 未复现待环境信息） | 实测缺陷 5 项：B（首页 `--`/筹备中，D-24）、C（`copyHeaders` 单值头改 Set，curl 各 1 条）、D（`04-channel.sql` + keytool 加密，库内 `v1:`/107B，错误前移到 P15 502）、E（region DOMESTIC + schema 说明）全部通过；**A 布局空白带在 1408×672 下未复现**（Playwright 复测 `elementFromPoint=TEXTAREA`、pricing 区块间距全 0），按硬约束未盲改源码 |
 
 **T15 全卡验收结论（交付总监复核）**
 

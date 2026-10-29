@@ -52,6 +52,14 @@ SELECT '当前生效价目数', CAST(COUNT(*) AS CHAR)
    AND r.enabled = 1 AND r.effective_from <= UTC_TIMESTAMP(3)
    AND (r.effective_to IS NULL OR r.effective_to > UTC_TIMESTAMP(3))
 UNION ALL
+SELECT '境内渠道数（启用）', CAST(COUNT(*) AS CHAR)
+  FROM t_channel c
+ WHERE c.region = 'DOMESTIC' AND c.enabled = 1 AND c.deleted_at IS NULL
+UNION ALL
+SELECT '路由数（启用）', CAST(COUNT(*) AS CHAR)
+  FROM t_route r
+ WHERE r.region = 'DOMESTIC' AND r.enabled = 1
+UNION ALL
 SELECT 'API Key 数（未删除）', CAST(COUNT(*) AS CHAR)
   FROM t_api_key k WHERE k.user_id = @uid AND k.deleted_at IS NULL;
 
