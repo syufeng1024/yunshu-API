@@ -159,16 +159,15 @@ case "$cmd" in
     # shellcheck source=scripts/test-env.sh
     . "$ROOT/scripts/test-env.sh"
     "$GO" vet ./... && "$GO" test -count=1 -p 2 ./...
-    if grep -rn '"encoding/json"' --include='*.go' . | grep -v 'internal/jsonx'; then
-      echo 'FAIL: encoding/json is only allowed inside internal/jsonx'; exit 1
-    fi
-    bad="$(grep -rn 'context.Background()' --include='*.go' internal/ cmd/ || true)"
-    bad="$(printf '%s\n' "$bad" | grep -v '^cmd/' | grep -v '^$' || true)"
-    if [ -n "$bad" ]; then echo 'FAIL: context.Background() outside cmd/'; echo "$bad"; exit 1; fi
-    if grep -rn 'QuantumNous' --include='*.go' --include='*.sql' .; then
-      echo 'FAIL: new-api source string in Go/SQL — we do not copy AGPL code into a closed-source product (errata E-23)'; exit 1
-    fi
-    echo 'check: grep assertions passed'
+    # One implementation, not a second copy: every hard-constraint grep lives in
+    # lint.sh, which is what CI actually runs. This target used to inline its own
+    # stale copy of three of those greps; its scopes had drifted (`.` without the
+    # _test.go exemption, no relaykit carve-out, no cmd/ exclusion for
+    # context.Background()) so `dev.sh check` was permanently red on hits that
+    # lint.sh legitimately allows. Delegating keeps a single source of truth —
+    # including the port-precedence guard lint.sh rule 11 runs, which must not be
+    # executed twice here.
+    bash "$ROOT/scripts/lint.sh"
     ;;
   migrate)
     if [ -d cmd/migrate ]; then
