@@ -14,7 +14,6 @@ import {
   Badge,
   Button,
   CopyBlock,
-  EmptyState,
   ErrorState,
   Icon,
   Input,
@@ -584,7 +583,7 @@ export default function PlaygroundPage() {
       <PageHeader
         className="pb-4 sm:pb-5"
         title="在线调试台"
-        description="直接对话测试模型；按真实调用扣费。"
+        description="选择密钥与模型后直接对话，响应流式返回。"
         actions={balanceCard}
       />
 
@@ -716,11 +715,16 @@ export default function PlaygroundPage() {
         >
           {hasConversation ? null : (
             <div className="m-auto w-full max-w-md space-y-3">
-              <EmptyState
-                title="开始对话"
-                description="发送一条消息，测试模型回复与扣费链路。"
-                icon={<Icon name="terminal" className="h-5 w-5" />}
-              />
+              {/* 空状态不用虚线框：那在国内产品里读作「这块还没做完」，
+                  而这里要表达的是「对话区本身就是空的」。无边框、只居中排版，
+                  让它融进对话区背景。 */}
+              <div className="flex flex-col items-center gap-2 text-center">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-surface-muted text-ink-secondary">
+                  <Icon name="terminal" className="h-5 w-5" />
+                </div>
+                <p className="text-sm font-medium text-ink">开始对话</p>
+                <p className="text-xs text-ink-muted">发送一条消息，开始测试模型回复。</p>
+              </div>
               <div className="space-y-2">
                 <p className="text-center text-xs text-ink-muted">
                   试试示例：只填入内容，不会发送，也不会计费。
@@ -810,9 +814,12 @@ export default function PlaygroundPage() {
             className="max-h-36 w-full resize-none rounded-lg border border-border-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           />
           <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="hidden text-xs text-ink-muted sm:block">
-              {pending ? '正在生成，可随时停止并保留已收到的内容。' : '调用按真实用量扣费。'}
-            </p>
+            {/* 费用说明只在顶部提示行出现一次，这里不重复；仅在流式中给出状态提示。 */}
+            {pending ? (
+              <p className="hidden text-xs text-ink-muted sm:block">
+                正在生成，可随时停止并保留已收到的内容。
+              </p>
+            ) : null}
             <div className="ml-auto flex items-center gap-2">
               {pending ? (
                 <Button variant="secondary" onClick={handleStop}>

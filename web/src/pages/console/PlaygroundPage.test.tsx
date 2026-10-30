@@ -343,7 +343,7 @@ describe('PlaygroundPage', () => {
     expect(screen.queryByText('清空前的消息')).not.toBeInTheDocument()
     expect(composer()).toHaveValue('')
     expect(
-      screen.getByText('发送一条消息，测试模型回复与扣费链路。'),
+      screen.getByText('发送一条消息，开始测试模型回复。'),
     ).toBeInTheDocument()
   })
 
