@@ -114,3 +114,81 @@ for (const viewport of VIEWPORTS) {
     }
   })
 }
+
+/**
+ * 首屏高度护栏：1366×768 下首页必须能看到下一区块（WHY YUNSHU）的标题。
+ *
+ * 回归背景：用户两次反馈「首页上方还有空白」。hero 顶部的 `py-16 / lg:py-24`
+ * 在 lg 下上下各留 96px，把约 500px 的内容撑到 646px，标题顶部被推到 791px；
+ * 1366×768 是本机与多数笔记本的常见档位，折叠线在 768px——标题原本落在折
+ * 叠线以下 23px，用户看到的就是「一屏空白，还得往下滚」。收紧到
+ * `py-12 / lg:py-16` 后标题顶部 707px，进到折叠线内，余量 61px。
+ *
+ * 为什么单独一条用例、不用 `test.use`：本文件上面的矩阵测的是**宽度**
+ * （横向溢出），这一条测的是**高度**（纵向首屏可见性），两件事混在一个矩阵
+ * 里会让失败原因变模糊；`setViewportSize` 也避免把 1366×768 传染给其他用例。
+ *
+ * 余量只有 61px，hero 里再加约 60px（多一行文案、多一个 badge）就会静默回退，
+ * 而宽度矩阵不会红——所以这条断言必须存在。失败时不要调宽阈值，回到
+ * `LandingPage.tsx` 收紧 hero 的 `py` 与列内 `mt-*`。
+ */
+test('首屏：1366×768 下首页能看到下一区块标题', async ({ page }) => {
+  await page.setViewportSize({ width: 1366, height: 768 })
+
+  await page.goto('/', { waitUntil: 'load' })
+  try {
+    // 模型/价格数据填充后才出现数据条，hero 高度在此之后才最终确定。
+    await page.waitForLoadState('networkidle')
+  } catch {
+    // 与上面宽度用例一致：某些代理环境下 networkidle 不触发，退回 load 后的布局。
+  }
+
+  interface FirstScreenProbe {
+    /** 下一区块标题（capabilities 的 h2）顶部相对视口的纵坐标。 */
+    titleTop: number | null
+    headerBottom: number | null
+    heroTop: number | null
+    heroHeight: number | null
+    innerWidth: number
+    innerHeight: number
+  }
+
+  const probe: FirstScreenProbe = await page.evaluate(async () => {
+    if (document.fonts?.ready) {
+      await document.fonts.ready
+    }
+    const topOf = (selector: string): number | null => {
+      const element = document.querySelector(selector)
+      return element ? Math.round(element.getBoundingClientRect().top) : null
+    }
+    const header = document.querySelector('header')
+    const hero = document.querySelector('section[data-section="hero"]')
+    return {
+      titleTop: topOf('[data-section="capabilities"] h2'),
+      headerBottom: header ? Math.round(header.getBoundingClientRect().bottom) : null,
+      heroTop: topOf('section[data-section="hero"]'),
+      heroHeight: hero ? Math.round(hero.getBoundingClientRect().height) : null,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+    }
+  })
+
+  expect(
+    { width: probe.innerWidth, height: probe.innerHeight },
+    '视口必须是 1366×768，否则首屏断言无意义',
+  ).toEqual({ width: 1366, height: 768 })
+
+  if (probe.titleTop === null) {
+    throw new Error('首页找不到 [data-section="capabilities"] h2，首屏护栏无从度量')
+  }
+
+  const overflow = probe.titleTop - probe.innerHeight
+  expect(
+    probe.titleTop,
+    `1366×768 首屏看不到下一区块标题：「从接入到计费」h2 顶部=${probe.titleTop}px，`
+      + `折叠线=${probe.innerHeight}px，掉到折叠线以下 ${overflow}px`
+      + `（header 底边=${probe.headerBottom}px、hero 顶部=${probe.heroTop}px、`
+      + `hero 高=${probe.heroHeight}px）。请收紧 LandingPage 的 hero py / 列内 mt-*，`
+      + '不要把这条用例的阈值放宽。',
+  ).toBeLessThan(probe.innerHeight)
+})

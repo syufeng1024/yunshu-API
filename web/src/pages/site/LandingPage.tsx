@@ -98,17 +98,20 @@ export default function LandingPage() {
   const statsErrorMessage = errorMessage(modelsQuery.error ?? endpointsQuery.error)
 
   const hasEndpoints = endpoints.length > 0
+  // 数据条只放真实数字（D-24 修订）：V1.0 没有对外接入点，原来第三格填「筹备中」，
+  // 夹在两个数字中间读起来像少填了一格，也等于主动告诉访客「还没上线」。因此
+  // 没有接入点时整格不渲染，有接入点时照常显示线路条数。
   const stats: Stat[] = [
     { label: '已上架模型', value: formatStatValue(listedModels.length) },
-    {
-      // V1.0 没有对外接入点。数值位放「筹备中」而不是 formatStatValue(0) 的
-      // 「--」：首页数据条是营销位，一个破折号看起来像没填完，而 0 又会读成
-      // 「这家平台什么都没有」——两者都不该出现在第一屏。
-      label: '接入线路',
-      value: hasEndpoints ? formatStatValue(endpoints.length) : '筹备中',
-    },
+    ...(hasEndpoints
+      ? [{ label: '接入线路', value: formatStatValue(endpoints.length) }]
+      : []),
     { label: '兼容协议', value: formatStatValue(protocolCount) },
   ]
+  // Tailwind 只识别静态类名，这里用三元选完整的类名，不能拼 `grid-cols-${n}`。
+  // 加载态骨架屏也用同一个数量，否则会先渲染 3 格再收回 2 格，首屏闪一下跳动。
+  const statsColumnClass = stats.length > 2 ? 'grid-cols-3' : 'grid-cols-2'
+  const statsErrorSpanClass = stats.length > 2 ? 'col-span-3' : 'col-span-2'
 
   return (
     <div>
@@ -117,7 +120,13 @@ export default function LandingPage() {
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,var(--primary-soft),transparent_58%)]"
         />
-        <div className="relative mx-auto grid w-full max-w-6xl gap-10 px-4 py-16 sm:px-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center lg:py-24">
+        {/* 首屏节奏：header 底边到徽标之间只留一档呼吸（py-12 / lg:py-16）。
+            原来 lg 下上下各 96px，把约 500px 的内容撑成 646px。注意收益在
+            1366×768 这一档而不是 1440×900：1440×900 下下一区块标题本来就在
+            首屏内（顶部 791px < 900），而 1366×768 里 791 > 768，标题落在
+            折叠线以下；收紧后标题顶部 707px，余量 61px。这条约束由
+            e2e/responsive.spec.ts 的「首屏：1366×768」用例守住。 */}
+        <div className="relative mx-auto grid w-full max-w-6xl gap-10 px-4 py-12 sm:px-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center lg:py-16">
           {/* G19: 两个列子项都要 min-w-0。grid 子项的自动最小尺寸默认是
               min-content，右侧代码块的 <pre> 是 510px 的不可断行内容，会把整列
               撑到 546px；外层 hero section 的 overflow-hidden（裁径向渐变用）
@@ -126,14 +135,14 @@ export default function LandingPage() {
             <Badge variant="primary" dot>
               V1.0 · 境内模型统一接入
             </Badge>
-            <h1 className="mt-5 text-balance text-4xl font-semibold leading-tight tracking-tight text-ink sm:text-5xl">
+            <h1 className="mt-4 text-balance text-4xl font-semibold leading-tight tracking-tight text-ink sm:text-5xl">
               一个 Base URL，接入多家境内模型
             </h1>
-            <p className="mt-4 max-w-xl text-base leading-relaxed text-ink-secondary">
+            <p className="mt-3 max-w-xl text-base leading-relaxed text-ink-secondary">
               保持客户端现有的 OpenAI 或 Anthropic 调用方式，只替换地址、Key 与模型名。计费、限流与日志在同一个控制台完成。
             </p>
 
-            <ul className="mt-5 flex flex-wrap gap-x-5 gap-y-2 text-sm text-ink-secondary">
+            <ul className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm text-ink-secondary">
               {['主流模型聚合', '换地址即用', '积分按量抵扣'].map((item) => (
                 <li key={item} className="flex items-center gap-1.5">
                   <Icon name="check" className="h-4 w-4 text-success" />
@@ -142,7 +151,7 @@ export default function LandingPage() {
               ))}
             </ul>
 
-            <div className="mt-7 flex flex-wrap items-center gap-3">
+            <div className="mt-6 flex flex-wrap items-center gap-3">
               <Link
                 to={`${ROUTES.login}?tab=register`}
                 className={buttonVariants({ variant: 'primary', size: 'lg' })}
@@ -162,10 +171,10 @@ export default function LandingPage() {
 
             <dl
               data-testid="hero-stats"
-              className="mt-8 grid grid-cols-3 gap-4 border-t border-border pt-6"
+              className={`mt-7 grid gap-4 border-t border-border pt-6 ${statsColumnClass}`}
             >
               {statsError ? (
-                <div className="col-span-3">
+                <div className={statsErrorSpanClass}>
                   <ErrorState
                     compact
                     message={statsErrorMessage}
@@ -176,7 +185,7 @@ export default function LandingPage() {
                   />
                 </div>
               ) : statsLoading ? (
-                Array.from({ length: 3 }, (_, index) => (
+                Array.from({ length: stats.length }, (_, index) => (
                   <div key={index} className="space-y-2">
                     <Skeleton className="h-3 w-16" />
                     <Skeleton className="h-6 w-12" />
@@ -197,7 +206,6 @@ export default function LandingPage() {
               <span className="font-mono text-xs text-ink-muted">POST /chat/completions</span>
             </div>
             <CodeBlock code={HERO_SNIPPET} label="curl" />
-            <p className="mt-2 text-xs text-ink-muted">示例域名与 Key 均为虚拟值。</p>
 
             <div className="mt-4 rounded-xl border border-border bg-surface p-4">
               <p className="text-xs text-ink-muted">需要填写的地址</p>

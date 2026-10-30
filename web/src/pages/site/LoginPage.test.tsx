@@ -40,8 +40,14 @@ describe('LoginPage', () => {
     )
 
     expect(screen.getByRole('button', { name: '主动领取体验积分' })).toBeInTheDocument()
-    expect(screen.getByText(/注册不会自动发放/)).toBeInTheDocument()
+    // 领取入口仍是「主动领取」，但文案站在用户视角：正向说明注册后如何领到，
+    // 不再对用户讲「注册不会自动发放」这类内部口径。
+    expect(screen.getByText(/注册后可在控制台主动领取/)).toBeInTheDocument()
     expect(screen.queryByText(/注册即送/)).not.toBeInTheDocument()
+    // 公开页面不出现内部口径：角色/跳转规则由服务端决定，用户不需要在登录页读到。
+    expect(screen.queryByText(/服务端返回/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/运营后台/)).not.toBeInTheDocument()
+    expect(screen.queryByText('登录后跳转')).not.toBeInTheDocument()
   })
 
   it('renders the agreement checkbox and the plan marker from the query', () => {

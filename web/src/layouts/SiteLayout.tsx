@@ -149,9 +149,8 @@ export function SiteLayout() {
             </div>
           </div>
 
-          <div className="mt-8 flex flex-col gap-2 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="mt-8 border-t border-border pt-4">
             <Copyright />
-            <p className="text-xs text-ink-muted">示例域名与 Key 均为虚拟值。</p>
           </div>
         </div>
       </footer>

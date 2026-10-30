@@ -265,7 +265,7 @@ export default function LoginPage() {
         >
           忘记密码
         </button>
-        <span className="text-ink-muted">登录后按账号角色进入控制台或运营后台</span>
+        <span className="text-ink-muted">支持邮箱与手机号登录</span>
       </div>
 
       {resetOpen ? (
@@ -308,7 +308,7 @@ export default function LoginPage() {
     <form className="space-y-4" onSubmit={handleRegister} noValidate>
       {claimNotice ? (
         <div className="rounded-lg border border-info bg-info-soft p-3 text-xs text-ink-secondary">
-          完成注册后，请在控制台主动领取体验积分；注册不会自动发放。
+          完成注册后，请在控制台主动领取体验积分；积分不会自动到账。
         </div>
       ) : null}
 
@@ -405,12 +405,12 @@ export default function LoginPage() {
         </Badge>
         <h1 className="mt-4 text-3xl font-semibold tracking-tight text-ink">进入云枢 API 控制台</h1>
         <p className="mx-auto mt-3 max-w-xl text-sm leading-relaxed text-ink-secondary">
-          登录后管理密钥、查看用量与账单；运营账号由服务端返回角色后进入运营后台。
+          管理密钥、用量与账单，一个账号通用。
         </p>
       </header>
 
-      {/* lg:items-start：右侧三张信息卡比表单高，默认 stretch 会把左侧表单
-          卡片拉成同高，底部留出约 110px 的空白，看起来像没排完。 */}
+      {/* lg:items-start：右侧信息卡与左侧表单不等高，默认 stretch 会把表单卡
+          拉成和信息栏同高，底部留出一块空白，看起来像没排完。 */}
       <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
         <section className="rounded-2xl border border-border bg-surface p-5 shadow-card sm:p-6">
           <Tabs
@@ -445,15 +445,15 @@ export default function LoginPage() {
               </div>
             ) : trialPlan ? (
               <p className="mt-2 text-xs leading-relaxed text-ink-secondary">
-                体验积分需主动领取：
+                注册后可在控制台主动领取{' '}
                 <span className="font-medium tabular-nums text-ink">
                   {formatCreditAmount(trialPlan.grant_bonus_micro)}
                 </span>{' '}
-                积分（7 天体验版）。注册不会自动发放，领取入口在控制台。
+                积分（7 天体验版），领取后即可调用。
               </p>
             ) : (
               <p className="mt-2 text-xs leading-relaxed text-ink-secondary">
-                体验积分需主动领取，额度以控制台展示为准；注册不会自动发放。
+                注册后可在控制台主动领取体验积分，额度以控制台展示为准。
               </p>
             )}
             <Button
@@ -465,17 +465,6 @@ export default function LoginPage() {
             >
               主动领取体验积分
             </Button>
-          </section>
-
-          <section className="rounded-xl border border-border bg-surface-muted p-5">
-            <h2 className="text-sm font-semibold text-ink">登录后跳转</h2>
-            <ul className="mt-2 space-y-1 text-xs text-ink-secondary">
-              <li>个人账号 → 控制台</li>
-              <li>运营、财务与超级管理员 → 运营后台</li>
-            </ul>
-            <p className="mt-2 text-xs text-ink-muted">
-              角色由服务端返回，前端不提供角色切换入口。
-            </p>
           </section>
 
           <section className="rounded-xl border border-border bg-surface p-5">
