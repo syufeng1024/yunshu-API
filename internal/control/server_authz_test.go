@@ -131,10 +131,13 @@ var adminRoutes = []struct {
 	{http.MethodGet, "/api/admin/reviews"},
 	{http.MethodPost, "/api/admin/reviews/1/approve"},
 	{http.MethodPost, "/api/admin/reviews/1/reject"},
-	// Operator fund surface: the pending-order queue and the manual payment
-	// confirmation. Both are fund.approve, i.e. FINANCE and SUPER_ADMIN only.
+	// Operator fund surface: the pending-order queue, the manual payment
+	// confirmation and redeem-code issuance. fund.read / fund.approve are
+	// FINANCE and SUPER_ADMIN only.
 	{http.MethodGet, "/api/admin/orders"},
 	{http.MethodPost, "/api/admin/orders/1/confirm-payment"},
+	{http.MethodGet, "/api/admin/redeem-codes"},
+	{http.MethodPost, "/api/admin/redeem-codes/batch"},
 }
 
 func TestPersonalAccountGets403OnEveryAdminRoute(t *testing.T) {

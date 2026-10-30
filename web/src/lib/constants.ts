@@ -39,6 +39,7 @@ export const ROUTES = {
   adminAnnouncements: '/admin/announcements',
   adminReviews: '/admin/reviews',
   adminOrders: '/admin/orders',
+  adminRedeemCodes: '/admin/redeem-codes',
   adminTickets: '/admin/tickets',
   adminModels: '/admin/models',
 } as const
@@ -74,6 +75,7 @@ export const ROUTE_TITLES = {
   [ROUTES.adminAnnouncements]: '公告与风控',
   [ROUTES.adminReviews]: '审核中心',
   [ROUTES.adminOrders]: '订单与收款',
+  [ROUTES.adminRedeemCodes]: '兑换码',
   [ROUTES.adminTickets]: '工单处理',
   [ROUTES.adminModels]: '模型主数据',
 } as const
@@ -182,6 +184,12 @@ export const ADMIN_NAV: readonly AdminNavItem[] = [
     to: ROUTES.adminOrders,
     label: '订单与收款',
     icon: 'wallet',
+    roles: ['FINANCE', 'SUPER_ADMIN'],
+  },
+  {
+    to: ROUTES.adminRedeemCodes,
+    label: '兑换码',
+    icon: 'ticket',
     roles: ['FINANCE', 'SUPER_ADMIN'],
   },
   {

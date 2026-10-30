@@ -46,6 +46,8 @@ func TestOpsCannotReachOperatorFundRoutes(t *testing.T) {
 	}{
 		{http.MethodGet, "/api/admin/orders", nil},
 		{http.MethodPost, "/api/admin/orders/1/confirm-payment", []byte(`{"bank_txn_no":"20261030001"}`)},
+		{http.MethodGet, "/api/admin/redeem-codes", nil},
+		{http.MethodPost, "/api/admin/redeem-codes/batch", []byte(`{"batch_name":"x","face_value_fen":1000,"quantity":1,"valid_days":30}`)},
 	}
 	for _, route := range routes {
 		t.Run(route.method+" "+route.path, func(t *testing.T) {
@@ -66,7 +68,7 @@ func TestFinanceCanReachOperatorFundRoutes(t *testing.T) {
 	cookieValue, csrfToken := issueSession(t, sessMgr, uid)
 
 	// Reads answer 200 with an empty or full page.
-	for _, path := range []string{"/api/admin/orders"} {
+	for _, path := range []string{"/api/admin/orders", "/api/admin/redeem-codes"} {
 		req := newAuthedRequest(http.MethodGet, path, nil, cookieValue, csrfToken)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
@@ -82,4 +84,11 @@ func TestFinanceCanReachOperatorFundRoutes(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assertErrorCode(t, rec, http.StatusNotFound, "resource_not_found")
+
+	// An empty body is a 400 from the handler, again past the permission gate.
+	req = newAuthedRequest(http.MethodPost, "/api/admin/redeem-codes/batch",
+		bytes.NewReader(nil), cookieValue, csrfToken)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request_body")
 }

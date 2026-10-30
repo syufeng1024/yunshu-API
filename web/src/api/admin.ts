@@ -1704,3 +1704,75 @@ export function useConfirmOrderPayment() {
     },
   })
 }
+
+// ---------------------------------------------------------------------------
+// Redeem-code batches (internal/control/fund/redeem_batch.go)
+// ---------------------------------------------------------------------------
+
+export type RedeemCreditTarget = 'RECHARGE' | 'BONUS'
+
+export interface RedeemBatch {
+  id: number
+  batch_name: string
+  face_value_fen: number
+  face_value_yuan: number
+  quantity: number
+  generated_count: number
+  redeemed_count: number
+  valid_from: string
+  valid_to: string
+  credit_target: RedeemCreditTarget
+  created_by: number
+  created_by_email?: string
+  created_at: string
+}
+
+export type RedeemBatchList = Page<RedeemBatch>
+
+export interface RedeemBatchListParams extends PageParams {}
+
+export interface CreateRedeemBatchInput {
+  batch_name: string
+  face_value_fen: number
+  /** 1–500 per call. */
+  quantity: number
+  credit_target: RedeemCreditTarget
+  /** 1–3650 days. */
+  valid_days: number
+}
+
+export interface CreateRedeemBatchResult {
+  batch: RedeemBatch
+  /** The one and only time the plaintext leaves the server. */
+  codes: string[]
+}
+
+export function fetchRedeemBatches(
+  params: RedeemBatchListParams = {},
+): Promise<RedeemBatchList> {
+  return api.get<RedeemBatchList>(`/api/admin/redeem-codes?${pageQuery(params)}`)
+}
+
+export function useRedeemBatches(params: RedeemBatchListParams = {}) {
+  return useQuery({
+    queryKey: ['admin', 'redeem-codes', 'list', params],
+    queryFn: () => fetchRedeemBatches(params),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function createRedeemBatch(
+  input: CreateRedeemBatchInput,
+): Promise<CreateRedeemBatchResult> {
+  return api.post<CreateRedeemBatchResult>('/api/admin/redeem-codes/batch', input)
+}
+
+export function useCreateRedeemBatch() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (input: CreateRedeemBatchInput) => createRedeemBatch(input),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin', 'redeem-codes'] })
+    },
+  })
+}

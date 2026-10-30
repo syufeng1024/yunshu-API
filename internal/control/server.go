@@ -398,7 +398,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.Handle("POST /api/admin/reviews/{id}/approve", s.authed(mw.PermFundApprove, s.reviews.Approve))
 	mux.Handle("POST /api/admin/reviews/{id}/reject", s.authed(mw.PermFundApprove, s.reviews.Reject))
 
-	// Operator fund surface: the human half of the recharge loop (B-46 A 档).
+	// Operator fund surface: the human half of the recharge loop (B-46 A 档)
+	// and redeem-code issuance (B-44 A 档).
 	//
 	// The reads are gated by fund.approve, not fund.read, and deliberately so:
 	// fund.read is account-scoped in the T15 matrix (PERSONAL holds it for
@@ -411,6 +412,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// queue nor record a payment.
 	mux.Handle("GET /api/admin/orders", s.authed(mw.PermFundApprove, s.fund.ListAdminOrders))
 	mux.Handle("POST /api/admin/orders/{id}/confirm-payment", s.authed(mw.PermFundApprove, s.fund.ConfirmOrderPayment))
+	mux.Handle("GET /api/admin/redeem-codes", s.authed(mw.PermFundApprove, s.fund.ListRedeemBatches))
+	mux.Handle("POST /api/admin/redeem-codes/batch", s.authed(mw.PermFundApprove, s.fund.CreateRedeemBatch))
 
 	// T14 request logs. Read-only by design: PRD §10.2 requires retention, so
 	// there is no delete route. The list defaults to seven days and refuses a
