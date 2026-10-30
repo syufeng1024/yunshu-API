@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { errorHint, errorMessage } from '@/api/client'
 import {
   useAdminOrders,
+  useCloseAdminOrder,
   useConfirmOrderPayment,
   type AdminOrder,
   type AdminOrderStateFilter,
@@ -28,6 +29,10 @@ const PAGE_SIZE = 20
 /** Mirrors the handler's bank_txn_no rule: 6–64 of [A-Za-z0-9_-]. */
 const BANK_TXN_NO_PATTERN = /^[A-Za-z0-9_-]{6,64}$/
 const NOTE_MAX = 255
+
+/** Mirrors the close handler's reason rule (closeReasonMin/Max). */
+const CLOSE_REASON_MIN = 2
+const CLOSE_REASON_MAX = 100
 
 const STATE_OPTIONS: { value: AdminOrderStateFilter; label: string }[] = [
   { value: 'pending', label: '待支付' },
@@ -78,6 +83,7 @@ export default function AdminOrdersPage() {
     pageSize: PAGE_SIZE,
   })
   const confirm = useConfirmOrderPayment()
+  const closeMutation = useCloseAdminOrder()
 
   const [target, setTarget] = useState<AdminOrder | null>(null)
   const [bankTxnNo, setBankTxnNo] = useState('')
@@ -98,6 +104,51 @@ export default function AdminOrdersPage() {
   const closeConfirm = () => {
     if (confirm.isPending) return
     setTarget(null)
+  }
+
+  const [closeTarget, setCloseTarget] = useState<AdminOrder | null>(null)
+  const [closeReason, setCloseReason] = useState('')
+  const [closeFieldError, setCloseFieldError] = useState<string | null>(null)
+  const [closeError, setCloseError] = useState<{ message: string; hint: string | null } | null>(
+    null,
+  )
+
+  const openClose = (order: AdminOrder) => {
+    setCloseTarget(order)
+    setCloseReason('')
+    setCloseFieldError(null)
+    setCloseError(null)
+  }
+
+  const cancelClose = () => {
+    if (closeMutation.isPending) return
+    setCloseTarget(null)
+  }
+
+  const submitClose = async () => {
+    if (!closeTarget) return
+    const reason = closeReason.trim()
+    setCloseFieldError(null)
+    setCloseError(null)
+    const length = [...reason].length
+    if (length < CLOSE_REASON_MIN) {
+      setCloseFieldError(`请填写作废原因（至少 ${CLOSE_REASON_MIN} 个字）。`)
+      return
+    }
+    if (length > CLOSE_REASON_MAX) {
+      setCloseFieldError(`作废原因最多 ${CLOSE_REASON_MAX} 个字符。`)
+      return
+    }
+    try {
+      const result = await closeMutation.mutateAsync({ id: closeTarget.id, input: { reason } })
+      toast.success(
+        result.replayed ? '该订单已处于已关闭状态，本次未重复作废' : '订单已关闭',
+        result.replayed ? undefined : `订单 ${result.order.order_no} 已作废，客户无法再支付。`,
+      )
+      setCloseTarget(null)
+    } catch (error) {
+      setCloseError({ message: errorMessage(error), hint: errorHint(error) })
+    }
   }
 
   const submit = async () => {
@@ -206,9 +257,14 @@ export default function AdminOrdersPage() {
         align: 'right',
         render: (order) =>
           order.state === 'PENDING' ? (
-            <Button variant="secondary" size="sm" onClick={() => openConfirm(order)}>
-              确认收款
-            </Button>
+            <div className="flex flex-wrap items-center justify-end gap-1">
+              <Button variant="secondary" size="sm" onClick={() => openConfirm(order)}>
+                确认收款
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => openClose(order)}>
+                关闭
+              </Button>
+            </div>
           ) : (
             <span className="text-xs text-ink-muted">—</span>
           ),
@@ -330,12 +386,90 @@ export default function AdminOrdersPage() {
             maxLength={NOTE_MAX}
           />
 
+          {target && new Date(target.expire_at).getTime() < Date.now() ? (
+            // 过期只是提示，不阻止确认：钱真到了就该入账，超时到账由财务判断。
+            <p className="rounded-lg border border-danger bg-danger-soft px-3 py-2 text-xs text-danger">
+              该订单已过期（支付截止 {formatDateTime(target.expire_at)}），请核实款项是否到账后再确认。
+            </p>
+          ) : null}
+
           <p className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-xs text-warning">
             确认后订单立即转为已支付并给用户入账，该动作会写入审计，不能撤销。
           </p>
 
           {submitError ? (
             <ErrorState compact message={submitError.message} hint={submitError.hint} />
+          ) : null}
+        </div>
+      </Modal>
+
+      <Modal
+        open={closeTarget !== null}
+        onClose={cancelClose}
+        title="关闭订单"
+        description={
+          closeTarget
+            ? `订单 ${closeTarget.order_no} · 应付 ${formatYuanFromFen(closeTarget.pay_amount_fen)} 元`
+            : undefined
+        }
+        size="md"
+        footer={
+          <>
+            <Button variant="secondary" onClick={cancelClose} disabled={closeMutation.isPending}>
+              取消
+            </Button>
+            <Button onClick={() => void submitClose()} loading={closeMutation.isPending}>
+              确认关闭
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          <dl className="space-y-2 text-sm">
+            <div className="flex justify-between gap-4">
+              <dt className="text-ink-secondary">用户</dt>
+              <dd className="break-all text-right text-ink">
+                {closeTarget ? closeTarget.user_nickname || `用户#${closeTarget.user_id}` : ''}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-ink-secondary">支付截止</dt>
+              <dd className="text-xs text-ink-secondary">
+                {closeTarget ? formatDateTime(closeTarget.expire_at) : ''}
+              </dd>
+            </div>
+          </dl>
+
+          <label className="block space-y-1.5">
+            <span className="block text-sm font-medium text-ink">
+              作废原因
+              <span className="ml-0.5 text-danger" aria-hidden="true">
+                *
+              </span>
+            </span>
+            <textarea
+              value={closeReason}
+              onChange={(event) => {
+                setCloseReason(event.target.value)
+                setCloseFieldError(null)
+              }}
+              rows={3}
+              maxLength={CLOSE_REASON_MAX}
+              placeholder="例如 客户未转账 / 客户改走其他渠道"
+              aria-label="作废原因"
+              className="w-full rounded-lg border border-border-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            />
+            {closeFieldError ? (
+              <p className="text-xs text-danger">{closeFieldError}</p>
+            ) : (
+              <p className="text-xs text-ink-muted">
+                2–100 个字符，会写入审计；关闭后客户无法再支付该订单，且不可撤销。
+              </p>
+            )}
+          </label>
+
+          {closeError ? (
+            <ErrorState compact message={closeError.message} hint={closeError.hint} />
           ) : null}
         </div>
       </Modal>

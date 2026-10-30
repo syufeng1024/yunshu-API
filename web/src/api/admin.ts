@@ -1705,6 +1705,45 @@ export function useConfirmOrderPayment() {
   })
 }
 
+export interface CloseOrderInput {
+  /** Why the order is voided; required, 2–100 characters. */
+  reason: string
+}
+
+export interface CloseOrderResult {
+  order: AdminOrder
+  closed: boolean
+  /** True when the order was already CLOSED; nothing was written. */
+  replayed: boolean
+}
+
+/**
+ * Voids a PENDING order. No money moves: a void writes one audit row and
+ * nothing else, so this is the way out of the finance queue for an order the
+ * customer never paid.
+ */
+export function closeAdminOrder(
+  id: number | string,
+  input: CloseOrderInput,
+): Promise<CloseOrderResult> {
+  return api.post<CloseOrderResult>(
+    `/api/admin/orders/${encodeURIComponent(String(id))}/close`,
+    input,
+  )
+}
+
+export function useCloseAdminOrder() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: number | string; input: CloseOrderInput }) =>
+      closeAdminOrder(id, input),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin', 'orders'] })
+      void client.invalidateQueries({ queryKey: ['console', 'orders'] })
+    },
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Redeem-code batches (internal/control/fund/redeem_batch.go)
 // ---------------------------------------------------------------------------

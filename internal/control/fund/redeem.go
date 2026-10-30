@@ -117,10 +117,17 @@ func (s *Service) redeemTx(ctx context.Context, r *http.Request, uid int64, plai
 	case status == redeemUsed:
 		// A second attempt on a consumed code is worth a trail: it is either
 		// a user re-click or code sharing.
+		//
+		// The refusal is a state conflict, not a body error: the code is spent,
+		// so no edit to the request body can make THIS code succeed (the T15
+		// rule), and answering invalid_request_body told the customer their
+		// input was malformed when the real answer is "this card is used".
+		// The message names the condition so the console can show it verbatim.
 		s.auditRedemption(ctx, uid, codeID, "REDEEM_REJECTED", map[string]any{
 			"reason": "CODE_USED",
 		})
-		return redeemResponse{}, mw.InvalidField("code")
+		return redeemResponse{}, apierr.Newf(apierr.CodeResourceStateConflict, "该兑换码已被使用").
+			WithHint("每个兑换码仅可使用一次；如需增加额度请重新购买或联系客服")
 	case status == redeemVoid, status == redeemExpired, !validTo.After(now):
 		// Expiry is state, but the caller's remedy is still "use another
 		// code", which is a body edit; the audit row below records which

@@ -136,6 +136,7 @@ var adminRoutes = []struct {
 	// FINANCE and SUPER_ADMIN only.
 	{http.MethodGet, "/api/admin/orders"},
 	{http.MethodPost, "/api/admin/orders/1/confirm-payment"},
+	{http.MethodPost, "/api/admin/orders/1/close"},
 	{http.MethodGet, "/api/admin/redeem-codes"},
 	{http.MethodPost, "/api/admin/redeem-codes/batch"},
 }

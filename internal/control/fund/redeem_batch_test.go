@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // C1: one generation call writes the batch and exactly `quantity` codes, all
@@ -225,12 +226,18 @@ func TestGeneratedRedeemCodeRedeemsThroughConsole(t *testing.T) {
 		t.Fatalf("code = %q ledger=%v, want USED with a ledger id", status, ledgerID)
 	}
 
-	// A second attempt on the same code credits nothing.
+	// A second attempt on the same code credits nothing, and the refusal says
+	// the code is used (409 conflict), not "your request body is malformed".
 	before := balanceOf(t, customer)
 	rec = call(t, svc.Redeem, http.MethodPost, "/api/console/redeem",
 		map[string]any{"code": plain}, customer)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("second redeem status = %d body=%s, want 400", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("second redeem status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	if body := errorBody(t, rec); body.Error.Code != "resource_state_conflict" ||
+		!strings.Contains(body.Error.Message, "该兑换码已被使用") {
+		t.Fatalf("second redeem code=%q message=%q, want a readable used-code conflict",
+			body.Error.Code, body.Error.Message)
 	}
 	if after := balanceOf(t, customer); after.Total != before.Total {
 		t.Fatalf("balance after reuse = %d, want %d", after.Total, before.Total)
@@ -312,5 +319,60 @@ func TestRedeemCodeShapeMatchesRedeemContract(t *testing.T) {
 		if prefix := codePrefix(code); len(prefix) != 6 {
 			t.Fatalf("prefix %q of %q is not six characters", prefix, code)
 		}
+	}
+}
+
+// C6: a spent code answers a state conflict with a message the customer can act
+// on. Before this, it answered invalid_request_body "请求体参数有误：code" — the
+// same body as "unknown code" and "bad format", so a customer re-typing the
+// same card learned nothing.
+func TestRedeemUsedCodeReportsReadableConflict(t *testing.T) {
+	svc, _ := newTestService(t)
+	uid := newTestUser(t, nil)
+	plain, _, codeID := seedRedeemBatch(t, uid, 5000, time.Now().UTC().Add(24*time.Hour))
+
+	rec := call(t, svc.Redeem, http.MethodPost, "/api/console/redeem",
+		map[string]any{"code": plain}, uid)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first redeem status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = call(t, svc.Redeem, http.MethodPost, "/api/console/redeem",
+		map[string]any{"code": plain}, uid)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("reuse status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	body := errorBody(t, rec)
+	if body.Error.Code != "resource_state_conflict" {
+		t.Fatalf("reuse code = %q, want resource_state_conflict", body.Error.Code)
+	}
+	if !strings.Contains(body.Error.Message, "该兑换码已被使用") {
+		t.Fatalf("reuse message = %q, want it to say 该兑换码已被使用", body.Error.Message)
+	}
+	if !strings.Contains(body.Error.Hint, "仅可使用一次") {
+		t.Fatalf("reuse hint = %q, want the one-use rule stated", body.Error.Hint)
+	}
+
+	// An unknown code keeps the body-error answer: the caller fixes it by
+	// typing another code, so the two conditions stay distinguishable.
+	rec = call(t, svc.Redeem, http.MethodPost, "/api/console/redeem",
+		map[string]any{"code": "NOSUCHCODE123"}, uid)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown code status = %d, want 400", rec.Code)
+	}
+	if got := errorBody(t, rec); got.Error.Code != "invalid_request_body" {
+		t.Fatalf("unknown code = %q, want invalid_request_body", got.Error.Code)
+	}
+
+	// The attempt is on the record for support.
+	var n int64
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM t_admin_audit_log
+		  WHERE action = 'REDEEM_REJECTED' AND target_id = ? AND after_json LIKE '%CODE_USED%'`,
+		itoa(codeID)).Scan(&n); err != nil {
+		t.Fatalf("reuse audit count: %v", err)
+	}
+	if n == 0 {
+		t.Fatal("no REDEEM_REJECTED / CODE_USED audit row for the re-used code")
 	}
 }

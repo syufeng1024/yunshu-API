@@ -46,6 +46,7 @@ func TestOpsCannotReachOperatorFundRoutes(t *testing.T) {
 	}{
 		{http.MethodGet, "/api/admin/orders", nil},
 		{http.MethodPost, "/api/admin/orders/1/confirm-payment", []byte(`{"bank_txn_no":"20261030001"}`)},
+		{http.MethodPost, "/api/admin/orders/1/close", []byte(`{"reason":"客户未转账"}`)},
 		{http.MethodGet, "/api/admin/redeem-codes", nil},
 		{http.MethodPost, "/api/admin/redeem-codes/batch", []byte(`{"batch_name":"x","face_value_fen":1000,"quantity":1,"valid_days":30}`)},
 	}
@@ -91,4 +92,11 @@ func TestFinanceCanReachOperatorFundRoutes(t *testing.T) {
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assertErrorCode(t, rec, http.StatusBadRequest, "invalid_request_body")
+
+	// The close path is gated the same way: a missing order is 404, not 403.
+	req = newAuthedRequest(http.MethodPost, "/api/admin/orders/99999999/close",
+		bytes.NewReader([]byte(`{"reason":"客户未转账"}`)), cookieValue, csrfToken)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assertErrorCode(t, rec, http.StatusNotFound, "resource_not_found")
 }

@@ -412,6 +412,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	// queue nor record a payment.
 	mux.Handle("GET /api/admin/orders", s.authed(mw.PermFundApprove, s.fund.ListAdminOrders))
 	mux.Handle("POST /api/admin/orders/{id}/confirm-payment", s.authed(mw.PermFundApprove, s.fund.ConfirmOrderPayment))
+	mux.Handle("POST /api/admin/orders/{id}/close", s.authed(mw.PermFundApprove, s.fund.CloseOrder))
 	mux.Handle("GET /api/admin/redeem-codes", s.authed(mw.PermFundApprove, s.fund.ListRedeemBatches))
 	mux.Handle("POST /api/admin/redeem-codes/batch", s.authed(mw.PermFundApprove, s.fund.CreateRedeemBatch))
 

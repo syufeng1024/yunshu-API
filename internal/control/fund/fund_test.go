@@ -538,9 +538,14 @@ func TestRedeemCodeSingleUse(t *testing.T) {
 		t.Fatalf("ledger biz_type = %q, want REDEEM", bizType)
 	}
 
+	// A spent code is a state conflict, not a body error: the code itself is
+	// consumed, so re-typing it can never succeed.
 	rec = call(t, svc.Redeem, http.MethodPost, "/api/console/redeem", map[string]any{"code": plain}, uid)
-	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("second redeem status = %d, want 400", rec.Code)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("second redeem status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	if got := errorBody(t, rec); got.Error.Code != "resource_state_conflict" {
+		t.Fatalf("second redeem code = %q, want resource_state_conflict", got.Error.Code)
 	}
 	if b := balanceOf(t, uid); b.Total != fenToMicro(1000) {
 		t.Fatalf("balance after double redeem = %d, want unchanged %d", b.Total, fenToMicro(1000))

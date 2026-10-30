@@ -77,6 +77,20 @@ func auditRowCount(t *testing.T, operatorID, orderID int64) int64 {
 	return n
 }
 
+// auditPayloadByAction returns the after_json of the newest audit row for one
+// action on one order.
+func auditPayloadByAction(t *testing.T, operatorID, orderID int64, action string) string {
+	t.Helper()
+	var raw []byte
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT after_json FROM t_admin_audit_log
+		  WHERE operator_id = ? AND action = ? AND target_id = ?
+		  ORDER BY id DESC LIMIT 1`, operatorID, action, itoa(orderID)).Scan(&raw); err != nil {
+		t.Fatalf("audit payload %s: %v", action, err)
+	}
+	return string(raw)
+}
+
 // auditPayload returns the after_json of the newest confirmation row.
 func auditPayload(t *testing.T, operatorID, orderID int64) string {
 	t.Helper()
@@ -414,6 +428,230 @@ func TestListAdminOrders(t *testing.T) {
 		"/api/admin/orders?state=whatever", nil, operator, "FINANCE", nil)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("bad filter status = %d body=%s, want 400", rec.Code, rec.Body.String())
+	}
+}
+
+// closeOrder posts one operator void.
+func closeOrder(t *testing.T, svc *Service, operatorID, orderID int64, reason string) *httptest.ResponseRecorder {
+	t.Helper()
+	body := map[string]any{"reason": reason}
+	return callOperator(t, svc.CloseOrder, http.MethodPost,
+		"/api/admin/orders/"+itoa(orderID)+"/close", body,
+		operatorID, "FINANCE", map[string]string{"id": itoa(orderID)})
+}
+
+// closeAuditCount counts operator voids for one order.
+func closeAuditCount(t *testing.T, operatorID, orderID int64) int64 {
+	t.Helper()
+	var n int64
+	if err := testDB.QueryRowContext(context.Background(),
+		`SELECT COUNT(*) FROM t_admin_audit_log
+		  WHERE operator_id = ? AND module = 'FUND'
+		    AND action = 'ORDER_CLOSED_BY_OPERATOR' AND target_id = ?`,
+		operatorID, itoa(orderID)).Scan(&n); err != nil {
+		t.Fatalf("close audit count: %v", err)
+	}
+	return n
+}
+
+// A8: voiding a PENDING order is the missing exit from the finance queue. It
+// moves no money — no ledger entry, no credit batch — and writes one audit row.
+func TestOperatorCloseOrderVoidsPendingWithoutMoney(t *testing.T) {
+	svc, _ := newTestService(t)
+	uid := newTestUser(t, nil)
+	operator := newTestUser(t, nil)
+
+	order, _ := createOrder(t, svc, uid, map[string]any{
+		"order_type":     OrderTypeCustom,
+		"pay_amount_fen": 5000,
+		"pay_channel":    PayChannelWechat,
+	})
+
+	rec := closeOrder(t, svc, operator, order.ID, "客户未转账")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("close status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp closeOrderResponse
+	decodeBody(t, rec, &resp)
+	if !resp.Closed || resp.Replayed {
+		t.Fatalf("closed=%v replayed=%v, want true/false", resp.Closed, resp.Replayed)
+	}
+	if resp.Order.State != OrderStateClosed {
+		t.Fatalf("response state = %q, want CLOSED", resp.Order.State)
+	}
+	if st := orderState(t, order.ID); st != OrderStateClosed {
+		t.Fatalf("stored state = %q, want CLOSED", st)
+	}
+	// No money moved: a voided order never held any.
+	if b := balanceOf(t, uid); b.Total != 0 {
+		t.Fatalf("balance = %d, want 0", b.Total)
+	}
+	if got := countLedger(t, uid); got != 0 {
+		t.Fatalf("ledger entries = %d, want 0 (a void writes no ledger row)", got)
+	}
+	if got := countBatches(t, uid); got != 0 {
+		t.Fatalf("credit batches = %d, want 0", got)
+	}
+	if got := closeAuditCount(t, operator, order.ID); got != 1 {
+		t.Fatalf("close audit rows = %d, want 1", got)
+	}
+	payload := auditPayloadByAction(t, operator, order.ID, "ORDER_CLOSED_BY_OPERATOR")
+	for _, want := range []string{order.OrderNo, "客户未转账", OrderStatePending, OrderStateClosed} {
+		if !strings.Contains(payload, want) {
+			t.Fatalf("close audit payload %s missing %q", payload, want)
+		}
+	}
+	t.Logf("order=%s CLOSED audit=%s", order.OrderNo, payload)
+}
+
+// A9: closing twice is a replay, not an error and not a second audit row.
+func TestOperatorCloseOrderIsIdempotent(t *testing.T) {
+	svc, _ := newTestService(t)
+	uid := newTestUser(t, nil)
+	operator := newTestUser(t, nil)
+
+	order, _ := createOrder(t, svc, uid, map[string]any{
+		"order_type":     OrderTypeCustom,
+		"pay_amount_fen": 1000,
+		"pay_channel":    PayChannelAlipay,
+	})
+	if rec := closeOrder(t, svc, operator, order.ID, "客户未转账"); rec.Code != http.StatusOK {
+		t.Fatalf("first close status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec := closeOrder(t, svc, operator, order.ID, "客户未转账")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("replay status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var resp closeOrderResponse
+	decodeBody(t, rec, &resp)
+	if !resp.Closed || !resp.Replayed {
+		t.Fatalf("replay closed=%v replayed=%v, want true/true", resp.Closed, resp.Replayed)
+	}
+	if got := closeAuditCount(t, operator, order.ID); got != 1 {
+		t.Fatalf("close audit rows = %d, want 1 (a replay writes nothing)", got)
+	}
+}
+
+// A10: a paid order can never be voided — the credit really exists, so voiding
+// it would orphan money. The refusal names the blocking state.
+func TestOperatorCloseOrderRefusesPaid(t *testing.T) {
+	svc, _ := newTestService(t)
+	uid := newTestUser(t, nil)
+	operator := newTestUser(t, nil)
+
+	order, _ := createOrder(t, svc, uid, map[string]any{
+		"order_type":     OrderTypeCustom,
+		"pay_amount_fen": 8000,
+		"pay_channel":    PayChannelWechat,
+	})
+	if rec := confirmOrder(t, svc, operator, order.ID, "PAID-TXN-0001", ""); rec.Code != http.StatusOK {
+		t.Fatalf("confirm status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	balanceAfterPay := balanceOf(t, uid)
+
+	rec := closeOrder(t, svc, operator, order.ID, "客户要求作废")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("close paid status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	body := errorBody(t, rec)
+	if body.Error.Code != "resource_state_conflict" {
+		t.Fatalf("code = %q, want resource_state_conflict", body.Error.Code)
+	}
+	if !strings.Contains(body.Error.Message, OrderStatePaid) {
+		t.Fatalf("message = %q, want the blocking state PAID named", body.Error.Message)
+	}
+	if st := orderState(t, order.ID); st != OrderStatePaid {
+		t.Fatalf("state = %q, want PAID (untouched)", st)
+	}
+	if got := balanceOf(t, uid); got.Total != balanceAfterPay.Total {
+		t.Fatalf("balance = %d, want %d", got.Total, balanceAfterPay.Total)
+	}
+	if got := closeAuditCount(t, operator, order.ID); got != 0 {
+		t.Fatalf("close audit rows = %d, want 0", got)
+	}
+}
+
+// A11: a closed order can no longer be settled — the confirmation CAS finds no
+// PENDING row, so late money has to be reconciled by hand.
+func TestOperatorConfirmAfterCloseIsRefused(t *testing.T) {
+	svc, _ := newTestService(t)
+	uid := newTestUser(t, nil)
+	operator := newTestUser(t, nil)
+
+	order, _ := createOrder(t, svc, uid, map[string]any{
+		"order_type":     OrderTypeCustom,
+		"pay_amount_fen": 3000,
+		"pay_channel":    PayChannelWechat,
+	})
+	if rec := closeOrder(t, svc, operator, order.ID, "超时未到账"); rec.Code != http.StatusOK {
+		t.Fatalf("close status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec := confirmOrder(t, svc, operator, order.ID, "20261030099", "")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("confirm-after-close status = %d body=%s, want 409", rec.Code, rec.Body.String())
+	}
+	body := errorBody(t, rec)
+	if body.Error.Code != "resource_state_conflict" || !strings.Contains(body.Error.Message, OrderStateClosed) {
+		t.Fatalf("code=%q message=%q, want resource_state_conflict naming CLOSED", body.Error.Code, body.Error.Message)
+	}
+	if st := orderState(t, order.ID); st != OrderStateClosed {
+		t.Fatalf("state = %q, want CLOSED", st)
+	}
+	if b := balanceOf(t, uid); b.Total != 0 {
+		t.Fatalf("balance = %d, want 0 (nothing credited)", b.Total)
+	}
+}
+
+// A12: the reason is the operator's justification, so a too-short or too-long
+// one is a body error and nothing is voided.
+func TestOperatorCloseOrderValidatesReason(t *testing.T) {
+	svc, _ := newTestService(t)
+	uid := newTestUser(t, nil)
+	operator := newTestUser(t, nil)
+
+	order, _ := createOrder(t, svc, uid, map[string]any{
+		"order_type":     OrderTypeCustom,
+		"pay_amount_fen": 1000,
+		"pay_channel":    PayChannelWechat,
+	})
+
+	cases := []struct {
+		name string
+		body map[string]any
+	}{
+		{"missing", map[string]any{}},
+		{"blank", map[string]any{"reason": "   "}},
+		{"one char", map[string]any{"reason": "x"}},
+		{"too long", map[string]any{"reason": strings.Repeat("原", closeReasonMax+1)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := callOperator(t, svc.CloseOrder, http.MethodPost,
+				"/api/admin/orders/"+itoa(order.ID)+"/close", tc.body,
+				operator, "FINANCE", map[string]string{"id": itoa(order.ID)})
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body=%s, want 400", rec.Code, rec.Body.String())
+			}
+			if body := errorBody(t, rec); body.Error.Code != "invalid_request_body" {
+				t.Fatalf("code = %q, want invalid_request_body", body.Error.Code)
+			}
+		})
+	}
+	if st := orderState(t, order.ID); st != OrderStatePending {
+		t.Fatalf("state = %q, want PENDING (nothing voided)", st)
+	}
+}
+
+// A13: an unknown order id is a 404.
+func TestOperatorCloseOrderUnknownOrder(t *testing.T) {
+	svc, _ := newTestService(t)
+	operator := newTestUser(t, nil)
+
+	rec := closeOrder(t, svc, operator, 999999999, "客户未转账")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d body=%s, want 404", rec.Code, rec.Body.String())
 	}
 }
 

@@ -40,6 +40,12 @@ const (
 	// confirmNoteMax caps the operator's remark. The note is explanatory, not
 	// accounting data: it travels in the audit payload only.
 	confirmNoteMax = 255
+
+	// closeReasonMin/Max bound the reason an operator gives for voiding an
+	// order. A one-word reason ("x") documents nothing; the ceiling matches
+	// t_recharge_order-free free text and keeps the audit payload readable.
+	closeReasonMin = 2
+	closeReasonMax = 100
 )
 
 // bankTxnNoPattern is the statement-number alphabet: letters, digits, hyphen
@@ -81,6 +87,21 @@ type confirmPaymentResponse struct {
 	Credited bool `json:"credited"`
 	// Replayed is true when this statement number had already settled this
 	// order. Nothing was written.
+	Replayed bool `json:"replayed"`
+}
+
+type closeOrderRequest struct {
+	// Reason is the operator's justification, required: a voided order with
+	// no stated reason cannot be defended to the customer or to an auditor.
+	Reason string `json:"reason"`
+}
+
+type closeOrderResponse struct {
+	Order adminOrderView `json:"order"`
+	// Closed is true once the order can no longer be paid — this response and
+	// every idempotent replay both report it.
+	Closed bool `json:"closed"`
+	// Replayed is true when the order was already CLOSED; nothing was written.
 	Replayed bool `json:"replayed"`
 }
 
@@ -479,6 +500,165 @@ func (s *Service) confirmOrderPaymentTx(ctx context.Context, r *http.Request, op
 		return confirmPaymentResponse{}, apiErr
 	}
 	return confirmPaymentResponse{Order: view, Credited: true}, nil
+}
+
+// CloseOrder implements POST /api/admin/orders/{id}/close (fund.approve).
+//
+// An order that will never be paid must be voided, or the finance queue grows
+// forever: a customer who never transfers leaves a PENDING row that nothing
+// expires until jobsd grows an auto-close job. Closing moves the order to
+// CLOSED, which is terminal for payment — no money moves, no ledger entry is
+// written, and a later confirmation is refused by its own CAS.
+func (s *Service) CloseOrder(w http.ResponseWriter, r *http.Request) {
+	operatorID, operatorRole, apiErr := actorOf(r)
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	orderID, apiErr := operatorPathID(r)
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	var req closeOrderRequest
+	if apiErr := decodeJSON(w, r, &req); apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if n := len([]rune(reason)); n < closeReasonMin || n > closeReasonMax {
+		mw.WriteError(w, r, mw.InvalidField("reason"))
+		return
+	}
+
+	resp, apiErr := s.closeOrderTx(r.Context(), r, operatorID, operatorRole, orderID, reason)
+	if apiErr != nil {
+		mw.WriteError(w, r, apiErr)
+		return
+	}
+	_ = mw.WriteJSON(w, http.StatusOK, resp)
+}
+
+// closeOrderTx voids one PENDING order.
+//
+// The transaction is deliberately small: a state CAS and one audit row. No
+// ledger, no balance, no batch — a voided order never held money. The lock and
+// the CAS together mean a confirmation racing this close either wins (order is
+// PAID and this close is refused) or loses (order is CLOSED and the
+// confirmation's CAS finds no PENDING row).
+func (s *Service) closeOrderTx(ctx context.Context, r *http.Request, operatorID int64, operatorRole string, orderID int64, reason string) (closeOrderResponse, *apierr.APIError) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		s.logError(ctx, "fund_close_begin_failed: "+err.Error())
+		return closeOrderResponse{}, apierr.New(apierr.CodeInternalError)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after commit
+
+	var (
+		orderNo string
+		userID  int64
+		state   string
+	)
+	err = tx.QueryRowContext(ctx, `
+		SELECT order_no, user_id, state
+		  FROM t_recharge_order
+		 WHERE id = ?
+		 FOR UPDATE`, orderID).Scan(&orderNo, &userID, &state)
+	if errors.Is(err, sql.ErrNoRows) {
+		s.logWarn(ctx, "fund_close_unknown_order id="+itoa(orderID))
+		return closeOrderResponse{}, apierr.New(apierr.CodeResourceNotFound)
+	}
+	if err != nil {
+		s.logError(ctx, "fund_close_order_read_failed: "+err.Error())
+		return closeOrderResponse{}, apierr.New(apierr.CodeInternalError)
+	}
+
+	switch state {
+	case OrderStatePending:
+		// The only state that may be voided.
+	case OrderStateClosed:
+		// Idempotent replay: already voided, nothing to write.
+		view, apiErr := s.adminOrderByID(ctx, orderID)
+		if apiErr != nil {
+			return closeOrderResponse{}, apiErr
+		}
+		return closeOrderResponse{Order: view, Closed: true, Replayed: true}, nil
+	default:
+		// PAID / REFUNDING / REFUNDED / PARTIAL_REFUNDED: money has moved on
+		// this order. Voiding it would orphan a credit that really exists, so
+		// refuse and name the state.
+		s.logWarn(ctx, "fund_close_state_refused order="+orderNo+" state="+state)
+		return closeOrderResponse{}, confirmConflict("订单当前状态为 %s", state)
+	}
+
+	now := s.now()
+	res, err := tx.ExecContext(ctx, `
+		UPDATE t_recharge_order
+		   SET state = 'CLOSED', updated_at = ?
+		 WHERE id = ? AND state = 'PENDING'`, now, orderID)
+	if err != nil {
+		s.logError(ctx, "fund_close_state_cas_failed: "+err.Error())
+		return closeOrderResponse{}, apierr.New(apierr.CodeInternalError)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		s.logError(ctx, "fund_close_cas_rows_failed: "+err.Error())
+		return closeOrderResponse{}, apierr.New(apierr.CodeInternalError)
+	}
+	if affected != 1 {
+		// The row was PENDING under the lock, so a concurrent writer moved it
+		// between the lock release and the CAS.
+		var currentState string
+		if err := tx.QueryRowContext(ctx,
+			`SELECT state FROM t_recharge_order WHERE id = ?`, orderID).Scan(&currentState); err != nil {
+			s.logError(ctx, "fund_close_cas_reread_failed: "+err.Error())
+			return closeOrderResponse{}, apierr.New(apierr.CodeInternalError)
+		}
+		if currentState == OrderStateClosed {
+			view, apiErr := s.adminOrderByID(ctx, orderID)
+			if apiErr != nil {
+				return closeOrderResponse{}, apiErr
+			}
+			return closeOrderResponse{Order: view, Closed: true, Replayed: true}, nil
+		}
+		return closeOrderResponse{}, confirmConflict("订单当前状态为 %s", currentState)
+	}
+
+	if aerr := s.Audit.Insert(ctx, tx, audit.Entry{
+		OperatorID:   operatorID,
+		OperatorRole: operatorRole,
+		OperatorIP:   audit.IPBytes(r),
+		Module:       "FUND",
+		Action:       "ORDER_CLOSED_BY_OPERATOR",
+		TargetType:   "t_recharge_order",
+		TargetID:     itoa(orderID),
+		Before:       mustJSON(map[string]any{"state": OrderStatePending}),
+		After: mustJSON(map[string]any{
+			"state":          OrderStateClosed,
+			"previous_state": OrderStatePending,
+			"order_no":       orderNo,
+			"reason":         reason,
+			"user_id":        userID,
+		}),
+		Reason: reason,
+		Result: "OK",
+	}); aerr != nil {
+		// Voiding an order changes what the customer can do next; an
+		// unauditable void is not worth keeping.
+		s.logError(ctx, "fund_close_audit_failed: "+aerr.Error())
+		return closeOrderResponse{}, apierr.New(apierr.CodeInternalError)
+	}
+
+	if err := tx.Commit(); err != nil {
+		s.logError(ctx, "fund_close_commit_failed: "+err.Error())
+		return closeOrderResponse{}, apierr.New(apierr.CodeInternalError)
+	}
+
+	view, apiErr := s.adminOrderByID(ctx, orderID)
+	if apiErr != nil {
+		return closeOrderResponse{}, apiErr
+	}
+	return closeOrderResponse{Order: view, Closed: true}, nil
 }
 
 // orderBonusDays resolves how long the bonus part of an order stays valid.
