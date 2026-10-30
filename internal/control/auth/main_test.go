@@ -80,8 +80,13 @@ func newAuthUser(t *testing.T, email string) int64 {
 		t.Fatalf("hash password: %v", err)
 	}
 	now := time.Now().UTC()
-	n := atomic.AddInt64(&authUserSeq, 1)
-	userNo := fmt.Sprintf("P%s%03d", now.Format("20060102"), n%1000)
+	// Test user_no must be unique across processes AND across runs. A
+	// per-process counter restarts at 1 on every run, so the Nth account of
+	// the day always got the same `P<date><seq>` — a row left behind by a
+	// failed earlier run then collided on uk_user_no and failed this package
+	// for the rest of the day. Deriving it from the nanosecond clock keeps it
+	// 12 chars (char(12) column) and unique without a retry loop.
+	userNo := fmt.Sprintf("P%011d", now.UnixNano()%100000000000)
 	res, err := testDB.ExecContext(context.Background(), `
 		INSERT INTO t_user
 			(user_no, email, password_hash, password_algo, password_updated_at,
