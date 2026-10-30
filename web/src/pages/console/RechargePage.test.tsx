@@ -265,6 +265,33 @@ describe('RechargePage', () => {
     expect(screen.getByText('每个兑换码仅可使用一次')).toBeInTheDocument()
   })
 
+  it('B-44: a 50 元 voucher shows 5,000 积分 — the 元 figure must never be formatted as credits', async () => {
+    installMock()
+    // The real handler answers amount = microToFen(amount_micro) ÷ 100, i.e. 元:
+    // a 50 元 code carries amount 50 while it credits 5 000 积分. Rendering
+    // `amount` understated the arrival by 100×.
+    mockedPost.mockResolvedValue({
+      batch_name: '2026 双十一 · 50 元券',
+      amount_micro: 50_000_000,
+      amount: 50,
+      credit_target: 'BONUS',
+      expire_at: '2027-01-28T07:41:32.079Z',
+      balance_after_micro: 878_564_765,
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<RechargePage />)
+
+    await screen.findByText('20261027120000abcdefghijklmn')
+    await user.type(screen.getByLabelText('兑换码'), 'ABC123XYZ')
+    await user.click(screen.getByRole('button', { name: '兑换' }))
+
+    expect(await screen.findByText('兑换成功：2026 双十一 · 50 元券')).toBeInTheDocument()
+    expect(screen.getByText('到账 5,000 积分')).toBeInTheDocument()
+    // The regression: 50 is the 元 amount, not the credit count.
+    expect(screen.queryByText('到账 50 积分')).not.toBeInTheDocument()
+    expect(screen.getByText(/当前余额 87856\.4765 积分/)).toBeInTheDocument()
+  })
+
   it('shows the backend resource_state_conflict reason when a refund is rejected', async () => {
     installMock()
     mockedPost.mockRejectedValue(

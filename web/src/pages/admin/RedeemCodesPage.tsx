@@ -37,6 +37,14 @@ const TARGET_OPTIONS: { value: RedeemCreditTarget; label: string }[] = [
   { value: 'RECHARGE', label: '充值积分（计入退款额度）' },
 ]
 
+/**
+ * BONUS is the default on purpose: B-44 A 档 fixed redeemed credit as bonus
+ * credit, which cannot be refunded or cashed out. RECHARGE stays reachable
+ * (the handler accepts both) but must be a deliberate choice, not a default —
+ * it moves the amount into the refundable balance.
+ */
+const DEFAULT_CREDIT_TARGET: RedeemCreditTarget = 'BONUS'
+
 function creditTargetLabel(target: string): string {
   return target === 'RECHARGE' ? '充值积分' : '赠送积分'
 }
@@ -55,7 +63,7 @@ export default function AdminRedeemCodesPage() {
   const [batchName, setBatchName] = useState('')
   const [faceValueYuan, setFaceValueYuan] = useState('')
   const [quantity, setQuantity] = useState('10')
-  const [creditTarget, setCreditTarget] = useState<RedeemCreditTarget>('BONUS')
+  const [creditTarget, setCreditTarget] = useState<RedeemCreditTarget>(DEFAULT_CREDIT_TARGET)
   const [validDays, setValidDays] = useState('90')
   const [formError, setFormError] = useState<string | null>(null)
   const [formField, setFormField] = useState<string | null>(null)
@@ -72,7 +80,7 @@ export default function AdminRedeemCodesPage() {
     setBatchName('')
     setFaceValueYuan('')
     setQuantity('10')
-    setCreditTarget('BONUS')
+    setCreditTarget(DEFAULT_CREDIT_TARGET)
     setValidDays('90')
   }
 

@@ -496,8 +496,14 @@ export interface CreatedOrder {
 
 export interface RedeemResult {
   batch_name: string
+  /** Exact credited amount. Always render the credit count from this field. */
   amount_micro: number
-  /** Whole credits, not micro-credits. */
+  /**
+   * The same amount expressed in 元, not credits: the handler computes
+   * `microToFen(amount_micro) / 100`. A 50 元 code carries amount 50 while it
+   * credits 5 000 积分, so never format this as 积分 — use amount_micro with
+   * formatCreditAmount().
+   */
   amount: number
   credit_target: 'BONUS' | 'RECHARGE'
   expire_at: string

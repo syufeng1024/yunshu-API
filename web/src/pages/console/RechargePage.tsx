@@ -595,7 +595,10 @@ export default function RechargePage() {
               className="space-y-1 rounded-lg border border-success bg-success-soft px-4 py-3 text-xs text-success"
             >
               <p className="text-sm font-medium">兑换成功：{redeemResult.batch_name}</p>
-              <p>到账 {formatInteger(redeemResult.amount)} 积分</p>
+              {/* 到账积分必须从 amount_micro 换算：接口里的 amount 是"元"
+                  （microToFen/100），拿它当积分渲染会把 50 元券显示成
+                  "到账 50 积分"，实际入账 5000 积分（100 倍差）。 */}
+              <p>到账 {formatCreditAmount(redeemResult.amount_micro)} 积分</p>
               <p className="text-ink-secondary">
                 {redeemResult.credit_target === 'BONUS'
                   ? '赠送积分，不可退款'
