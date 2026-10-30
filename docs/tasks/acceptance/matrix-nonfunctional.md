@@ -5,6 +5,7 @@
 | 数据来源 | PRD §9.3–§9.6、§9.8–§9.11；T23 §3 第 5 项 |
 | 生成日期 | 2026-10-29 |
 | 测量环境 | 本机 Docker 栈：gatewayd `127.0.0.1:18080`、controld `127.0.0.1:18081`、web `127.0.0.1:8088`；业务库 `yunshu`（`yunshu-stack-mysql`）；测试库 `yunshu_test`（原生 MySQL `127.0.0.1:3306`，`scripts/test-env.sh` 解析）；Redis 容器与测试实例 `127.0.0.1:16379` |
+| **版本注记（2026-10-30 补，不改上格原文）** | 上格「原生 MySQL `127.0.0.1:3306`」在本机实测为 **MySQL 8.4.11**，而 GR-01 把项目钉在 **8.0**（容器 `yunshu-mysql` = 8.0.46）。即 2026-10-29 本表的测量实例版本与项目钉版**不一致**。影响范围：① 本表依赖 Go 后端用例的 ✅ 项，已于 2026-10-30 在 8.0.46 上全量复跑通过（`go test ./...` = 45 包 ok / 0 fail，见 `BACKLOG.md` G18）；② 依赖前端用例的 ✅ 项（如 §4 F6-3 的 `KeySecretOnce.test.tsx`、`KeysPage.test.tsx`）本机未复跑，仍沿用 10-29 记录；③ ⚠️/❌ 项的探针口径见 §1–§2：探针链路虽经鉴权/预扣/限流（确实读写业务库与 Redis），但其判定口径是网关侧 HTTP 延迟与状态码，MySQL 8.0/8.4 的差异不改变 200/429/502 的判定，故这些结论不受版本影响。收口方式登记在 `BACKLOG.md` G18 |
 | 探针账号与 Key | 控制台 `demo@yunshu.test`；延迟探针临时建 Key `latency-probe`（`id=3`，`sk-6EKEM…AEBW`），测完已走 `DELETE /api/console/keys/3` 软删，`{"id":3,"deleted":true}` |
 | 上游现场 | demo 渠道 `base_url=https://local.invalid/v1`（保留域名，DNS 必然失败），因此网关请求全部止于 P15 |
 | 结论口径 | T23 §4：有自动化用例且通过 = ✅；用例通过但覆盖不全或指标口径受限 = ⚠️；无证据、未执行、用例被跳过 = ❌。「未验证」不折算为通过 |
@@ -116,6 +117,6 @@ sort -n /tmp/times.txt | awk '{a[NR]=$1*1000} END {n=NR; printf "n=%d min=%.1fms
 | `go test ./internal/obs/metrics -run TestA8` | PASS | 0.018s |
 | `TestReviewApproveIsIdempotent` / `TestBalanceAdjustApproveKeepsLedgerBalanced` | PASS | 0.09s / 0.08s |
 
-复跑前置处置（只影响测试库）：原生 MySQL `127.0.0.1:3306` 的 `yunshu_test.schema_migrations` 残留 `0022 success=0` 且 `t_request_body` 已建，导致所有引用该库的 TestMain 在迁移阶段直接退出。按 `open-issues.md` OI-10 的处置删行并 `DROP TABLE yunshu_test.t_request_body`，0022 重放成功；此后上述用例才可执行。
+复跑前置处置（只影响测试库；以下为 **2026-10-29 当时**的情形，该库现已改为容器 13306）：原生 MySQL `127.0.0.1:3306` 的 `yunshu_test.schema_migrations` 残留 `0022 success=0` 且 `t_request_body` 已建，导致所有引用该库的 TestMain 在迁移阶段直接退出。按 `open-issues.md` OI-10 的处置删行并 `DROP TABLE yunshu_test.t_request_body`，0022 重放成功；此后上述用例才可执行。
 
 用例隔离缺陷（未改代码）：单独执行 `go test ./internal/acceptance -run TestGWT_G10_429Contract` 会因 `testRedis` 只在 `server(t)` 的 `sync.Once` 中初始化而在 `gwt_test.go:1015`（`ratelimit.New(testRedis, …)`）→ `redisx/client.go:96` 触发 nil panic。G-10 的可重复命令必须是完整的 `bash scripts/test-gwt.sh`，不能只跑单条。
