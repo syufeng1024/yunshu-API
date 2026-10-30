@@ -125,6 +125,23 @@ beforeEach(() => {
   mockedPost.mockReset()
 })
 
+/**
+ * 自动选中档位发生在 plans 到达之后的 effect 里，而档位按钮在首帧就已渲染。
+ * 因此 `findByRole` 一 resolve 就同步断言 `aria-pressed` 是竞态：满负载并行跑
+ * 时 effect 还没跑完就断言，测试会随机红。统一等 UI 落定再断言。
+ */
+async function expectTierPressed(
+  name: string,
+  pressed: 'true' | 'false' = 'true',
+): Promise<void> {
+  await waitFor(
+    () => {
+      expect(screen.getByRole('button', { name })).toHaveAttribute('aria-pressed', pressed)
+    },
+    { timeout: 3_000 },
+  )
+}
+
 afterEach(cleanup)
 
 describe('RechargePage', () => {
@@ -132,8 +149,8 @@ describe('RechargePage', () => {
     installMock()
     renderWithProviders(<RechargePage />)
 
-    const standard = await screen.findByRole('button', { name: '选择套餐 标准版' })
-    expect(standard).toHaveAttribute('aria-pressed', 'true')
+    await screen.findByRole('button', { name: '选择套餐 标准版' })
+    await expectTierPressed('选择套餐 标准版')
     expect(screen.getByRole('button', { name: '选择套餐 默认档' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '选择套餐 体验版' })).toBeDisabled()
     expect(screen.getAllByText('不可购买')).toHaveLength(2)
@@ -145,12 +162,9 @@ describe('RechargePage', () => {
     installMock()
     renderWithProviders(<RechargePage />, { route: '/console/recharge?plan=Pro' })
 
-    const pro = await screen.findByRole('button', { name: '选择套餐 专业版' })
-    expect(pro).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: '选择套餐 标准版' })).toHaveAttribute(
-      'aria-pressed',
-      'false',
-    )
+    await screen.findByRole('button', { name: '选择套餐 专业版' })
+    await expectTierPressed('选择套餐 专业版')
+    await expectTierPressed('选择套餐 标准版', 'false')
     expect(screen.queryByTestId('plan-notice')).not.toBeInTheDocument()
   })
 
@@ -158,8 +172,8 @@ describe('RechargePage', () => {
     installMock()
     renderWithProviders(<RechargePage />, { route: '/console/recharge?plan=nope' })
 
-    const standard = await screen.findByRole('button', { name: '选择套餐 标准版' })
-    expect(standard).toHaveAttribute('aria-pressed', 'true')
+    await screen.findByRole('button', { name: '选择套餐 标准版' })
+    await expectTierPressed('选择套餐 标准版')
     expect(await screen.findByTestId('plan-notice')).toHaveTextContent(
       '未找到目标档位「nope」，已为你选择第一个可购买档位。',
     )
@@ -169,12 +183,9 @@ describe('RechargePage', () => {
     installMock()
     renderWithProviders(<RechargePage />, { route: '/console/recharge?plan=free_default' })
 
-    const standard = await screen.findByRole('button', { name: '选择套餐 标准版' })
-    expect(standard).toHaveAttribute('aria-pressed', 'true')
-    expect(screen.getByRole('button', { name: '选择套餐 默认档' })).toHaveAttribute(
-      'aria-pressed',
-      'false',
-    )
+    await screen.findByRole('button', { name: '选择套餐 标准版' })
+    await expectTierPressed('选择套餐 标准版')
+    await expectTierPressed('选择套餐 默认档', 'false')
     expect(await screen.findByTestId('plan-notice')).toHaveTextContent(
       '目标档位 FREE_DEFAULT 不可直接购买，已为你选择第一个可购买档位。',
     )

@@ -25,6 +25,22 @@ import { resolveApiBaseUrl } from '@/lib/apiBase'
 import { cn } from '@/lib/cn'
 import { usePageTitle } from '@/lib/usePageTitle'
 
+/**
+ * 在线调试台（对话式单栏）。
+ *
+ * 结构：工具条（密钥 / 模型 / 高级参数折叠）→ 计费与快捷键提示 → 对话区
+ * （flex-1 内部滚动）→ 底部 composer（Enter 发送、Shift+Enter 换行）→ 默认收起
+ * 的「请求预览与调用代码」。
+ *
+ * 两处刻意的取舍，别当成漏做：
+ *  1. **不再提供逐条消息的 role 下拉和单条删除**。这里是「一条条聊」的对话台，
+ *     不是请求体编辑器；需要拼 few-shot 的用户应该复制「调用代码」去自己的脚本里
+ *     改。整段「清空对话」是唯一的撤回手段。
+ *  2. **空输入不允许发送**（`发送` 在 composer trim 后为空时禁用），但「无可用
+ *     密钥」「余额不足」的提示优先级仍排在输入判断之前——否则空输入会把真正的
+ *     阻断原因盖掉。
+ */
+
 type MessageRole = 'user' | 'assistant'
 
 /** One rendered turn of the conversation, in send order. */
@@ -307,12 +323,14 @@ export default function PlaygroundPage() {
   const keysError = keys.isError ? errorMessage(keys.error) : null
   const keysHint = keys.isError ? errorHint(keys.error) : null
 
+  // 空输入不允许发送（纯空格也算空）；生成中由「停止」接管，不走这个条件。
   const canSend =
     !pending &&
     selectedKey !== null &&
     isUsableKey(selectedKey) &&
     !insufficient &&
-    model.trim() !== ''
+    model.trim() !== '' &&
+    draftText !== ''
 
   const hasConversation = messages.length > 0
 
@@ -381,6 +399,12 @@ export default function PlaygroundPage() {
     }
     if (!requestBody.model) {
       setSendError('请先选择模型。')
+      return
+    }
+    // 空输入排在密钥 / 余额 / 模型之后：真正的阻断原因不能被「请输入内容」盖掉。
+    if (!draftText) {
+      setSendError('请输入消息内容后再发送。')
+      setSendHint('Enter 发送，Shift+Enter 换行。')
       return
     }
 

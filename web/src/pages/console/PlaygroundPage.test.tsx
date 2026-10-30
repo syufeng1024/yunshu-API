@@ -215,6 +215,8 @@ describe('PlaygroundPage', () => {
     renderWithProviders(<PlaygroundPage />)
     await waitForReady()
 
+    // 空输入不允许发送，先写入一轮提问。
+    await user.type(composer(), '测试问题')
     await user.click(screen.getByRole('button', { name: '发送' }))
 
     await waitFor(() =>
@@ -239,7 +241,7 @@ describe('PlaygroundPage', () => {
     expect(request.keyId).toBe(31)
     expect(request.body).toEqual({
       model: 'text-large',
-      messages: [],
+      messages: [{ role: 'user', content: '测试问题' }],
       temperature: 0.7,
       max_tokens: 1024,
       stream: true,
@@ -345,6 +347,37 @@ describe('PlaygroundPage', () => {
     ).toBeInTheDocument()
   })
 
+  it('keeps 发送 disabled while the composer is empty or whitespace only', async () => {
+    installMock()
+    const user = userEvent.setup()
+    renderWithProviders(<PlaygroundPage />)
+    await waitForReady()
+
+    // 空输入：禁用。
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+
+    // 纯空格也算空。
+    await user.type(composer(), '   ')
+    expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+
+    // 有实际内容才启用。
+    await user.type(composer(), '你好')
+    expect(screen.getByRole('button', { name: '发送' })).toBeEnabled()
+
+    // 生成中不显示「发送」，改由「停止」接管。
+    mockedChat.mockResolvedValue({
+      creditsRemaining: 1,
+      payload: null,
+      content: '好',
+      streamed: false,
+    })
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(mockedChat).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: '清空对话' })).toBeInTheDocument()
+    // 返回空输入状态后仍然禁用。
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeDisabled())
+  })
+
   it('F12-3: a zero balance blocks the request and links to recharge', async () => {
     installMock({
       overview: {
@@ -403,6 +436,7 @@ describe('PlaygroundPage', () => {
     renderWithProviders(<PlaygroundPage />)
     await waitForReady()
 
+    await user.type(composer(), '余额不足时会怎样')
     await user.click(screen.getByRole('button', { name: '发送' }))
 
     expect(await screen.findByText('余额不足，无法完成本次请求。')).toBeInTheDocument()
@@ -431,6 +465,7 @@ describe('PlaygroundPage', () => {
     renderWithProviders(<PlaygroundPage />)
     await waitForReady()
 
+    await user.type(composer(), '这个模型能调吗')
     await user.click(screen.getByRole('button', { name: '发送' }))
 
     expect(await screen.findByText('该密钥无权调用此模型。')).toBeInTheDocument()
@@ -456,6 +491,7 @@ describe('PlaygroundPage', () => {
     renderWithProviders(<PlaygroundPage />)
     await waitForReady()
 
+    await user.type(composer(), '写一段长文本')
     await user.click(screen.getByRole('button', { name: '发送' }))
     await waitFor(() =>
       expect(screen.getByTestId('playground-reply-content')).toHaveTextContent('半'),
@@ -483,6 +519,7 @@ describe('PlaygroundPage', () => {
     renderWithProviders(<PlaygroundPage />)
     await waitForReady()
 
+    await user.type(composer(), '这次花了多少')
     await user.click(screen.getByRole('button', { name: '发送' }))
 
     expect(await screen.findByText('本次消耗以用量页为准。')).toBeInTheDocument()
