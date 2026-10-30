@@ -30,8 +30,11 @@ import (
 	"yunshu.dev/core/internal/platform/clock"
 )
 
-// 与 scripts/test-env.sh 的候选顺序一致：本机原生 MySQL 在 3306，compose
-// 覆盖层在 13306。TEST_DB_DSN 一旦设置就只认它，不再回退。
+// 候选顺序与 scripts/test-env.sh 保持一致：13306（compose 覆盖层）优先，
+// 3306（本机原生安装）只作兜底。原因不是端口习惯而是版本基线——GR-01 把项目
+// 钉在 MySQL 8.0，容器里跑的就是 8.0；而开发者机器 3306 上的原生 MySQL 常是
+// 8.4，字符集/排序规则与 DDL 行为都不同，会产出「假绿」。
+// TEST_DB_DSN 一旦设置就只认它，不再回退，也不探测任何端口。
 const (
 	localDSN3306  = "root:123456@tcp(127.0.0.1:3306)/?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
 	localDSN13306 = "root:root@tcp(127.0.0.1:13306)/?parseTime=true&loc=UTC&charset=utf8mb4&multiStatements=true"
@@ -46,7 +49,7 @@ func serverDSN(t *testing.T) *mysql.Config {
 	if dsn := os.Getenv("TEST_DB_DSN"); dsn != "" {
 		candidates = append(candidates, dsn)
 	} else {
-		candidates = append(candidates, localDSN3306, localDSN13306)
+		candidates = append(candidates, localDSN13306, localDSN3306)
 	}
 
 	var lastErr error
@@ -77,7 +80,7 @@ func serverDSN(t *testing.T) *mysql.Config {
 		}
 		lastErr = fmt.Errorf("连接 %s 失败: %w", cfg.Addr, err)
 	}
-	t.Fatalf("MySQL 不可用（TEST_DB_DSN 未设置时依次尝试 3306 root/123456 与 13306 root/root）：%v", lastErr)
+	t.Fatalf("MySQL 不可用（TEST_DB_DSN 未设置时依次尝试 13306 root/root 与 3306 root/123456）：%v", lastErr)
 	return nil
 }
 
