@@ -69,8 +69,12 @@ export default function DocsPage() {
       ) : null}
 
       <div className="mt-8 grid gap-8 lg:grid-cols-[16rem_minmax(0,1fr)]">
-        <nav aria-label="文档章节" className="lg:sticky lg:top-24 lg:self-start">
-          <ol className="flex gap-1 overflow-x-auto pb-2 lg:flex-col lg:overflow-visible lg:pb-0">
+        <nav aria-label="文档章节" className="min-w-0 lg:sticky lg:top-24 lg:self-start">
+          {/* G19: nav 是 grid 子项，自动最小尺寸会取 <ol> 的 min-content——12 个
+              whitespace-nowrap 章节按钮横向排开约 1017px 宽，把整页视口撑破。
+              min-w-0 让 nav 回落到列宽，<ol> 的 overflow-x-auto 才真正生效，
+              手机端变成可横向滑动的章节条。 */}
+          <ol className="flex min-w-0 gap-1 overflow-x-auto pb-2 lg:flex-col lg:overflow-visible lg:pb-0">
             {chapters.map((chapter, index) => {
               const selected = chapter.id === active.id
               return (

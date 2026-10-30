@@ -117,7 +117,11 @@ export default function LandingPage() {
           className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,var(--primary-soft),transparent_58%)]"
         />
         <div className="relative mx-auto grid w-full max-w-6xl gap-10 px-4 py-16 sm:px-6 lg:grid-cols-[1.1fr_0.9fr] lg:items-center lg:py-24">
-          <div className="max-w-2xl">
+          {/* G19: 两个列子项都要 min-w-0。grid 子项的自动最小尺寸默认是
+              min-content，右侧代码块的 <pre> 是 510px 的不可断行内容，会把整列
+              撑到 546px；外层 hero section 的 overflow-hidden（裁径向渐变用）
+              随后把溢出部分静默裁掉，表现成「h1 和正文右侧被切」。 */}
+          <div className="min-w-0 max-w-2xl">
             <Badge variant="primary" dot>
               V1.0 · 境内模型统一接入
             </Badge>
@@ -183,7 +187,7 @@ export default function LandingPage() {
             </dl>
           </div>
 
-          <div className="rounded-2xl border border-border bg-canvas p-4 shadow-pop sm:p-5">
+          <div className="min-w-0 rounded-2xl border border-border bg-canvas p-4 shadow-pop sm:p-5">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <Badge variant="neutral">OpenAI 兼容</Badge>
