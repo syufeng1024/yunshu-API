@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { Icon } from '@/components/Icon'
 import { Logo } from '@/components/Logo'
 import { ScrollRestorer } from '@/components/ScrollRestorer'
@@ -52,6 +52,14 @@ export function ConsoleLayout() {
           ))}
         </nav>
 
+        <Link
+          to={ROUTES.home}
+          className="inline-flex items-center gap-2 rounded-md px-2 py-2 text-xs text-sidebar-muted transition-colors duration-fast hover:bg-sidebar-hover hover:text-sidebar-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary md:hidden"
+          aria-label="返回官网首页"
+        >
+          <Icon name="home" className="h-5 w-5" />
+        </Link>
+
         <button
           type="button"
           onClick={handleLogout}
@@ -63,6 +71,15 @@ export function ConsoleLayout() {
 
         <div className="mt-auto hidden border-t border-sidebar-border pt-4 md:block">
           <p className="truncate text-xs text-sidebar-muted">{user?.email ?? ''}</p>
+          {/* 登录后 Logo 指向控制台自身，控制台里没有任何出口通向官网：
+              用户想回首页看价格/文档只能改地址栏。这里补一个显式入口。 */}
+          <Link
+            to={ROUTES.home}
+            className="mt-2 inline-flex items-center gap-2 rounded-md px-1 py-1 text-xs text-sidebar-muted transition-colors duration-fast hover:text-sidebar-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          >
+            <Icon name="home" className="h-4 w-4" />
+            返回官网
+          </Link>
           <button
             type="button"
             onClick={handleLogout}

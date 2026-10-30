@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { Badge } from '@/components/Badge'
 import { Icon } from '@/components/Icon'
 import { Logo } from '@/components/Logo'
@@ -59,6 +59,14 @@ export function AdminLayout() {
           ))}
         </nav>
 
+        <Link
+          to={ROUTES.home}
+          className="inline-flex items-center gap-2 rounded-md px-2 py-2 text-xs text-sidebar-muted transition-colors duration-fast hover:bg-sidebar-hover hover:text-sidebar-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary md:hidden"
+          aria-label="返回官网首页"
+        >
+          <Icon name="home" className="h-5 w-5" />
+        </Link>
+
         <button
           type="button"
           onClick={handleLogout}
@@ -70,6 +78,15 @@ export function AdminLayout() {
 
         <div className="mt-auto hidden border-t border-sidebar-border pt-4 md:block">
           <p className="truncate text-xs text-sidebar-muted">{user?.email ?? ''}</p>
+          {/* 运营后台同样没有回官网的出口：Logo 指向后台自身。补一个显式入口，
+              方便运营在核价/看公告时直接对照官网页面。 */}
+          <Link
+            to={ROUTES.home}
+            className="mt-2 inline-flex items-center gap-2 rounded-md px-1 py-1 text-xs text-sidebar-muted transition-colors duration-fast hover:text-sidebar-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          >
+            <Icon name="home" className="h-4 w-4" />
+            返回官网
+          </Link>
           <button
             type="button"
             onClick={handleLogout}
