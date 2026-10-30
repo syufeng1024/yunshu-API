@@ -102,6 +102,20 @@ else
   fail=1
 fi
 
+# 11. The test DSN/Redis resolver must probe the container ports (13306/16379)
+#     before a native local install (3306/6379). GR-01 pins this project to
+#     MySQL 8.0 and the container runs exactly that, while a developer machine's
+#     3306 is commonly 8.4: probing it first puts the whole suite on the wrong
+#     baseline and reports false green. The guard stubs the port prober, so it
+#     needs neither live ports, nor MySQL, nor Docker — safe in CI's static job.
+if guard_out="$(bash scripts/test-env_test.sh 2>&1)"; then
+  echo "ok: test-env 端口优先级（容器 13306/16379 优先）"
+else
+  printf '%s\n' "$guard_out" | grep -E '^(FAIL  |guard:)' || true
+  echo "    -> fix scripts/test-env.sh; do not probe 3306/6379 before 13306/16379"
+  fail=1
+fi
+
 if [ "$fail" -ne 0 ]; then
   echo
   echo "lint: FAILED"
