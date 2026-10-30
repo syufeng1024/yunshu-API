@@ -69,7 +69,13 @@ func (f *fakeLedger) lastSettle() ledger.SettleParams {
 type fakeIdem struct {
 	completes []idemstore.State
 	bodies    [][]byte
+	// window is idem.duplicate_window_seconds (T41). The zero value disables
+	// the T41 auto-dedup path for requests without an Idempotency-Key, so the
+	// existing dispatch fixtures keep their exact behaviour.
+	window time.Duration
 }
+
+func (f *fakeIdem) DuplicateWindow() time.Duration { return f.window }
 
 func (f *fakeIdem) Begin(context.Context, idemstore.BeginInput) (idemstore.BeginResult, error) {
 	return idemstore.BeginResult{}, nil
