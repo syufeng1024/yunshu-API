@@ -1,0 +1,85 @@
+package control
+
+import (
+	"bytes"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"yunshu.dev/core/internal/control/mw"
+	"yunshu.dev/core/internal/platform/clock"
+	"yunshu.dev/core/internal/redisx"
+	"yunshu.dev/core/internal/redisx/redistest"
+)
+
+// newRouteMux builds the real control mux so these tests exercise the
+// permission middleware, not the handlers in isolation.
+func newRouteMux(t *testing.T) (*http.ServeMux, *mw.SessionManager) {
+	t.Helper()
+	rdb := redisx.New(redisx.Options{Addr: redistest.Addr(), DB: redistest.DB(), PoolSize: 5})
+	t.Cleanup(func() { _ = rdb.Close() })
+	sessMgr, err := mw.NewSessionManager(testDB, rdb, "0123456789abcdef")
+	if err != nil {
+		t.Fatalf("session manager: %v", err)
+	}
+	srv, err := New(Deps{DB: testDB, Redis: rdb, Sessions: sessMgr, Now: clock.Real{}})
+	if err != nil {
+		t.Fatalf("control server: %v", err)
+	}
+	mux := http.NewServeMux()
+	srv.Register(mux)
+	return mux, sessMgr
+}
+
+// The operator fund surface is money: OPS holds neither fund.read nor
+// fund.approve, so recording a payment or issuing credit must be refused
+// before the handler runs.
+func TestOpsCannotReachOperatorFundRoutes(t *testing.T) {
+	mux, sessMgr := newRouteMux(t)
+	uid := newRoleUser(t, "OPS")
+	cookieValue, csrfToken := issueSession(t, sessMgr, uid)
+
+	routes := []struct {
+		method string
+		path   string
+		body   []byte
+	}{
+		{http.MethodGet, "/api/admin/orders", nil},
+		{http.MethodPost, "/api/admin/orders/1/confirm-payment", []byte(`{"bank_txn_no":"20261030001"}`)},
+	}
+	for _, route := range routes {
+		t.Run(route.method+" "+route.path, func(t *testing.T) {
+			req := newAuthedRequest(route.method, route.path, bytes.NewReader(route.body), cookieValue, csrfToken)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+			assertErrorCode(t, rec, http.StatusForbidden, "permission_denied")
+		})
+	}
+}
+
+// Positive control: FINANCE reaches all four routes. The confirm and generate
+// calls are refused for their own reasons (no such order / no body), which is
+// exactly the proof that the permission layer let them through.
+func TestFinanceCanReachOperatorFundRoutes(t *testing.T) {
+	mux, sessMgr := newRouteMux(t)
+	uid := newRoleUser(t, "FINANCE")
+	cookieValue, csrfToken := issueSession(t, sessMgr, uid)
+
+	// Reads answer 200 with an empty or full page.
+	for _, path := range []string{"/api/admin/orders"} {
+		req := newAuthedRequest(http.MethodGet, path, nil, cookieValue, csrfToken)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("FINANCE GET %s status=%d body=%s, want 200", path, rec.Code, rec.Body.String())
+		}
+	}
+
+	// A missing order is 404, which can only be reached past the permission
+	// check.
+	req := newAuthedRequest(http.MethodPost, "/api/admin/orders/99999999/confirm-payment",
+		bytes.NewReader([]byte(`{"bank_txn_no":"20261030001"}`)), cookieValue, csrfToken)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assertErrorCode(t, rec, http.StatusNotFound, "resource_not_found")
+}

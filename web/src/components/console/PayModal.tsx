@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { errorHint, errorMessage } from '@/api/client'
 import {
   useCreateOrder,
@@ -7,6 +8,7 @@ import {
   type Plan,
 } from '@/api/console'
 import { Badge, Button, ErrorState, Modal, Select } from '@/components'
+import { ROUTES } from '@/lib/constants'
 import { payChannelLabel } from '@/lib/consoleLabels'
 import { formatDateTime, formatPlanPrice, formatYuanFromFen } from '@/lib/format'
 
@@ -132,6 +134,24 @@ export function PayModal({ open, target, onClose }: PayModalProps) {
           <p className="rounded-lg border border-warning bg-warning-soft px-3 py-2 text-xs text-warning">
             当前状态为待支付。支付渠道回调确认后系统才会入账，请在本页刷新订单状态核实。
           </p>
+
+          {/* 线下付款通道：客户对公转账不会触发任何支付回调，只能由财务在后台
+              核对银行流水后手工确认到账。这里不写银行账号、也不写客服联系方式
+              —— 那些由商务在合同/工单里给出，代码里编造会误导客户。 */}
+          <div className="space-y-1 rounded-lg border border-border bg-canvas px-3 py-2 text-xs text-ink-secondary">
+            <p className="font-medium text-ink">对公转账 / 人工确认</p>
+            <p>
+              若走对公转账，请保留上面的订单号并<b>在转账备注里填写订单号</b>。财务核对银行流水后会在
+              后台确认到账，订单随后转为已支付并自动入账；到账时间以财务确认为准，不会实时到账。
+            </p>
+            <p>
+              转账信息与到账进度请通过{' '}
+              <Link to={ROUTES.consoleTickets} className="text-primary hover:underline">
+                工单中心
+              </Link>{' '}
+              提交，注明订单号。
+            </p>
+          </div>
         </div>
       ) : (
         <div className="space-y-4">

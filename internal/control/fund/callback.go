@@ -260,21 +260,9 @@ func (s *Service) settleCallback(ctx context.Context, r *http.Request, channel, 
 			Credited: true, Replayed: true}, nil
 	}
 
-	bonusDays := int64(0)
-	if bonusMicro > 0 {
-		if planID.Valid {
-			var planBonusDays sql.NullInt64
-			if err := tx.QueryRowContext(ctx,
-				`SELECT bonus_valid_days FROM t_plan WHERE id = ?`, planID.Int64).
-				Scan(&planBonusDays); err != nil && !errors.Is(err, sql.ErrNoRows) {
-				s.logError(ctx, "fund_callback_plan_bonus_days_failed: "+err.Error())
-				return callbackResponse{}, apierr.New(apierr.CodeInternalError)
-			}
-			if planBonusDays.Valid {
-				bonusDays = planBonusDays.Int64
-			}
-		}
-		bonusDays = s.bonusExpireDays(ctx, bonusDays)
+	bonusDays, apiErr := s.orderBonusDays(ctx, tx, planID, bonusMicro)
+	if apiErr != nil {
+		return callbackResponse{}, apiErr
 	}
 
 	grant, apiErr := s.grantOrderPaid(ctx, tx, orderID, userID, rechargeMicro, bonusMicro, bonusDays, now)

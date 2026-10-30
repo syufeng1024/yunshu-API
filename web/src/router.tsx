@@ -33,6 +33,7 @@ const AnnouncementsPage = lazy(() => import('@/pages/admin/AnnouncementsPage'))
 const ReviewsPage = lazy(() => import('@/pages/admin/ReviewsPage'))
 const AdminTicketsPage = lazy(() => import('@/pages/admin/TicketsPage'))
 const AdminModelsPage = lazy(() => import('@/pages/admin/ModelsPage'))
+const AdminOrdersPage = lazy(() => import('@/pages/admin/OrdersPage'))
 
 export const router = createBrowserRouter([
   {
@@ -84,6 +85,7 @@ export const router = createBrowserRouter([
       { path: 'reviews', element: <ReviewsPage /> },
       { path: 'tickets', element: <AdminTicketsPage /> },
       { path: 'models', element: <AdminModelsPage /> },
+      { path: 'orders', element: <AdminOrdersPage /> },
     ],
   },
 ])

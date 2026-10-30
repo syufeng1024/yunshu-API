@@ -5,7 +5,15 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 import { api } from './client'
-import type { Page, TicketReply, TicketSLA, TicketState, TicketType } from './console'
+import type {
+  OrderState,
+  OrderStatusFilter,
+  Page,
+  TicketReply,
+  TicketSLA,
+  TicketState,
+  TicketType,
+} from './console'
 
 /**
  * Operator console contracts, transcribed from the Go handlers in
@@ -19,7 +27,7 @@ import type { Page, TicketReply, TicketSLA, TicketState, TicketType } from './co
  * params types below narrow sort per resource.
  */
 
-export type { Page, TicketReply, TicketSLA, TicketState, TicketType }
+export type { OrderState, OrderStatusFilter, Page, TicketReply, TicketSLA, TicketState, TicketType }
 
 export type SortOrder = 'asc' | 'desc'
 export type Region = 'DOMESTIC' | 'OVERSEAS'
@@ -1598,5 +1606,101 @@ export function useAuditLogs(params: AuditLogParams = {}, enabled = true) {
     queryFn: () => fetchAuditLogs(params),
     enabled,
     placeholderData: keepPreviousData,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Operator orders and manual payment confirmation (internal/control/fund/confirm.go)
+// ---------------------------------------------------------------------------
+
+/**
+ * adminOrderView: the account's own order plus the identity finance needs to
+ * match a bank statement to a customer.
+ */
+export interface AdminOrder {
+  id: number
+  order_no: string
+  order_type: 'CUSTOM' | 'PLAN'
+  plan_code?: string
+  pay_amount_fen: number
+  pay_amount_yuan: number
+  recharge_micro: number
+  bonus_micro: number
+  recharge: number
+  bonus: number
+  pay_channel: 'WECHAT' | 'ALIPAY'
+  state: OrderState
+  paid_at: string | null
+  expire_at: string
+  created_at: string
+  user_id: number
+  user_email: string
+  user_nickname: string
+  /** Channel trade_no, or the bank statement number an operator typed. */
+  pay_txn_id?: string
+}
+
+export type AdminOrderList = Page<AdminOrder>
+
+/** `state=all` is the server's "no filter" value; the console shows it as 全部. */
+export type AdminOrderStateFilter = 'ALL' | OrderStatusFilter
+
+export interface AdminOrderListParams extends PageParams {
+  state?: AdminOrderStateFilter
+  q?: string
+}
+
+export interface ConfirmPaymentInput {
+  /** Proof of payment: 6–64 of [A-Za-z0-9_-], required by the server. */
+  bank_txn_no: string
+  note?: string
+}
+
+export interface ConfirmPaymentResult {
+  order: AdminOrder
+  credited: boolean
+  /** True when this statement number had already settled the order. */
+  replayed: boolean
+}
+
+function adminOrderQuery(params: AdminOrderListParams): string {
+  const search = sortedPageQuery(params)
+  if (params.state && params.state !== 'ALL') search.set('state', params.state)
+  if (params.q) search.set('q', params.q)
+  return search.toString()
+}
+
+export function fetchAdminOrders(params: AdminOrderListParams = {}): Promise<AdminOrderList> {
+  return api.get<AdminOrderList>(`/api/admin/orders?${adminOrderQuery(params)}`)
+}
+
+export function useAdminOrders(params: AdminOrderListParams = {}) {
+  return useQuery({
+    queryKey: ['admin', 'orders', 'list', params],
+    queryFn: () => fetchAdminOrders(params),
+    placeholderData: keepPreviousData,
+  })
+}
+
+export function confirmOrderPayment(
+  id: number | string,
+  input: ConfirmPaymentInput,
+): Promise<ConfirmPaymentResult> {
+  return api.post<ConfirmPaymentResult>(
+    `/api/admin/orders/${encodeURIComponent(String(id))}/confirm-payment`,
+    input,
+  )
+}
+
+export function useConfirmOrderPayment() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, input }: { id: number | string; input: ConfirmPaymentInput }) =>
+      confirmOrderPayment(id, input),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ['admin', 'orders'] })
+      // The customer's own order list must show the new state too.
+      void client.invalidateQueries({ queryKey: ['console', 'orders'] })
+    },
   })
 }

@@ -38,6 +38,7 @@ export const ROUTES = {
   adminPricing: '/admin/pricing',
   adminAnnouncements: '/admin/announcements',
   adminReviews: '/admin/reviews',
+  adminOrders: '/admin/orders',
   adminTickets: '/admin/tickets',
   adminModels: '/admin/models',
 } as const
@@ -72,6 +73,7 @@ export const ROUTE_TITLES = {
   [ROUTES.adminPricing]: '倍率与定价',
   [ROUTES.adminAnnouncements]: '公告与风控',
   [ROUTES.adminReviews]: '审核中心',
+  [ROUTES.adminOrders]: '订单与收款',
   [ROUTES.adminTickets]: '工单处理',
   [ROUTES.adminModels]: '模型主数据',
 } as const
@@ -175,6 +177,12 @@ export const ADMIN_NAV: readonly AdminNavItem[] = [
     label: '公告与风控',
     icon: 'megaphone',
     roles: ['OPS', 'SUPER_ADMIN'],
+  },
+  {
+    to: ROUTES.adminOrders,
+    label: '订单与收款',
+    icon: 'wallet',
+    roles: ['FINANCE', 'SUPER_ADMIN'],
   },
   {
     to: ROUTES.adminReviews,
