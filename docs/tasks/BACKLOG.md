@@ -30,6 +30,9 @@
 
 | G20 | `npm run check:copy` 在 main 上**恒红**：`web/src/components/ScrollRestorer.test.tsx:74` 的 `sessionStorage.clear()` 命中脚本的 "browser storage reference" 规则（该文件来自 `9d3d9ba`）。已用 `git archive HEAD` 导出 pristine 树复核：pristine 与工作区输出**逐字相同、唯一 1 条**，即非近期改动引入 | 合规占位收口时发现 | 工程守卫（规则过宽） | 二选一：① 给 `src/**/*.test.*` 加豁免（该规则本质是防生产代码裸用 storage，测试里为验证 G10 复位行为调用 `sessionStorage.clear()` 属合理）；② 让该断言改为只观察 `ScrollRestoration` 行为、不直接碰 storage。注意 `npm run verify` 含 `check:copy`，红着等于本地 verify 不可用 | ⬜ |
 
+| G21 | 订单队列只增不减：`78a005d` 只做了**人工**关单，客户下单不转账的订单会一直停在 `PENDING`，财务队列无法自动清空 | 人工充值闭环（`78a005d`） | 功能缺口 · 运维 | 给 jobsd 加定时任务：`expire_at` 已过且仍 `PENDING` → `CLOSED` + 审计（动作名沿用 `ORDER_CLOSED_BY_OPERATOR` 风格，不要造第二套）。注意与既有 `expired` 读过滤口径对齐 | ⬜ |
+| G22 | 资金可追溯性两处空缺：① `t_ledger_entry.operator_id` 在人工确认入账时为空（`grantOrderPaid` 不传 operator），追责只能靠同事务的 `t_admin_audit_log` join；② `t_user.plan_purchased_at` 全仓无写入点，PLAN 订单确认后仍为 NULL | QA 复核人工充值 | 可追溯性 | ① 给 `grantOrderPaid` 增 operator 参数并落库（注意 callback 路径的 operator 是 SYSTEM，语义要分清）；② PLAN 入账时写 `plan_purchased_at`，并补一条断言 | ⬜ |
+
 ## 状态图例
 
 | 标记 | 含义 |
