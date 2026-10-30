@@ -4,7 +4,7 @@
 >
 > 更新规矩：新增项用下一个 G 编号（不重用已关闭编号）；关闭项**不要删行**，把状态改成 ✅ 并在「关闭方式」里写提交号或后续卡号，保留追溯。
 >
-> 最后更新：2026-10-29
+> 最后更新：2026-10-30
 
 | # | 项 | 来源 | 性质 | 建议 / 关闭方式 | 状态 |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -23,6 +23,9 @@
 | G13 | **A 项（P0 布局空白带）四次测量均未复现**：PageDown 后上方约 500px 全白；`/pricing` 标题与卡片间约 90px 空白 | T28 §9 / T29 §8 | **待外部信息** | 四次独立测量（T28 ×2、T29 ×2，含生产包、1408×672 与 1408×585 两档）空白带均 ≤24px；已排除 G10 滚动残留这条解释。**等用户提供**：Chrome 版本、页面缩放是否 100%、是否从已滚动页面点进来、可否录屏。信息到位再开卡，禁止无证据加 padding | ⏸ |
 | G14 | `plan_grant.go` 捕获在效提额行时把 `daily_quota_micro` 直接 `Scan` 进 `int64`，历史数据若该列为 NULL 会 500 | T30 §8 遗留 #1 | 健壮性（低风险） | 改 `sql.NullInt64` 兜底 + 一条 NULL 用例；`EffectiveQuotaApply` 要求 approved 非空，实际触发概率极低 | ⬜ |
 | G15 | 请求日志 `obslog.Record.ConfigVersion`（`internal/obs/log/record.go:72`）同样无生产者：全仓无 `obslog.Record{` 构造点，P30 日志行的该字段恒为 0 | T40-a §8 遗留 #2 | 可观测缺口（非资金，非门槛） | 与 P30 请求日志落地一并处理：构造 `obslog.Record` 时复用 `gw.Ctx.ConfigVersion`（T40-a 已在两个入口盖章，取现成值即可）。**不要另起一条 Redis 读取路径** | ⬜ |
+| G16 | `scripts/dev.sh` 的 `check)` 目标里三条内联 grep 是 `scripts/lint.sh` 的过期副本，口径已漂移：`encoding/json` check 扫 `.` 且不排 `_test.go` → 17 命中（lint.sh 0）、`context.Background()` check 只排 `^cmd/` → 537 命中（lint.sh 0），该目标长期恒红而无人察觉（CI 真正跑的是 `lint.sh`） | 本次端口优先级收口（A1） | 工程守卫 | ✅ 2026-10-30（`2f73e1d`）：`check` 改为委派 `bash "$ROOT/scripts/lint.sh"`，删掉第二份口径与上轮的 `test-env_test.sh` 重复执行（lint.sh 第 11 条已调用），一处实现 | ✅ |
+| G17 | `.gitattributes` 缺 `*.go text eol=lf`：本机 `core.autocrlf=true` 使 93 个 `.go` 为 `w/crlf`，`gofmt -l` 恰好只报这 93 个、零处真实格式问题（`git archive` 导出树 440 个 `.go` 的 gofmt 全干净）；另有 `scripts/check-eol.sh` 自身也是 `w/crlf`（index 是 LF，规范化后零 diff） | 本次端口优先级收口（顺带发现） | 工程守卫 | 加规则后 `git add --renormalize .`。**必须单独派卡**：改动 93 个文件行尾 + 全量回归 + 通知所有人重拉，不得塞进本次 bugfix | ⬜ |
+| G18 | `docs/tasks/acceptance/matrix-nonfunctional.md:7` 记录那批非功能验收的测试库是「原生 MySQL `127.0.0.1:3306`」。实测该端口是 **MySQL 8.4.11**，而 GR-01 钉 8.0（容器 13306 = 8.0.46），故该批证据的版本基线存疑 | 本次端口优先级收口（顺带发现） | **举证有效性（高优先）** | ① **不要直接改写那条历史记录**——它是 2026-10-29 的实测事实，改写等于篡改证据；应改为**加注**说明测量时所用实例与版本；② 评估是否在 8.0 容器上复测并更新结论 | ⬜ |
 
 ## 状态图例
 
