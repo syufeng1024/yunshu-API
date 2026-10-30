@@ -1,6 +1,16 @@
 // Command fakeupstream is a development-only OpenAI-compatible upstream used
 // by T08's end-to-end checks. It is not part of the production build path; no
 // other command imports it.
+//
+// Three facts QA learned the hard way while wiring this up (2026-10 联调):
+//  1. Inside the gateway container `host.docker.internal` does not resolve; the
+//     channel base_url must use the host's real LAN IP (or a reachable alias).
+//  2. After editing t_channel.base_url, controld must republish the snapshot.
+//     Restarting gatewayd alone does nothing; the Refresher picks changes up on
+//     its own cycle (4 minutes), so wait for it or trigger a republish.
+//  3. The default `-mode ok` emits both frames <40ms apart, so a char-by-char
+//     streaming effect is invisible — that is expected. Use an upstream with a
+//     per-frame delay (e.g. `-mode slow`) when you need to see deltas arrive.
 package main
 
 import (

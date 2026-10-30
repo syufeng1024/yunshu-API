@@ -320,6 +320,65 @@ describe('PlaygroundPage', () => {
     })
   })
 
+  /**
+   * 守卫顺序（密钥 → 余额 → 模型 → 空输入）只能靠用例钉住：一旦有人把空输入
+   * 的判断提到最前，用户在零余额/无密钥时就会先被告知「请输入内容」，真正拦住
+   * 他的原因被盖掉。
+   *
+   * 这里的发送路径只能走 form 的 submit：发送按钮在空输入时是 disabled，
+   * Enter 也被 onKeyDown 拦下，两者都不会进 handleSend。用 submit 事件直接驱动
+   * 表单，才能观察到 handleSend 内部的判断顺序。
+   */
+  it('keeps the balance guard ahead of the empty-input guard', async () => {
+    installMock({
+      overview: {
+        ...overview,
+        balance: { ...overview.balance, micro: 0, credits: '0', cny: '0.00' },
+      },
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<PlaygroundPage />)
+
+    expect(await screen.findByText(/余额不足/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '充值' })).toHaveAttribute(
+      'href',
+      '/console/recharge',
+    )
+
+    // 空输入按 Enter：不发请求，也不该冒出「请输入内容」这种无关提示。
+    await user.click(composer())
+    await user.keyboard('{Enter}')
+    expect(mockedChat).not.toHaveBeenCalled()
+    expect(screen.queryByText('请输入消息内容后再发送。')).not.toBeInTheDocument()
+
+    // 直接提交表单，走到 handleSend：余额守卫必须先命中。
+    fireEvent.submit(composer().closest('form') as HTMLFormElement)
+    await waitFor(() => expect(screen.getByText(/余额不足/)).toBeInTheDocument())
+
+    expect(mockedChat).not.toHaveBeenCalled()
+    expect(screen.queryByText('请输入消息内容后再发送。')).not.toBeInTheDocument()
+  })
+
+  it('keeps the missing-key guard ahead of the empty-input guard', async () => {
+    installMock({ keys: { items: [], page: 1, page_size: 50, total: 0 } })
+    const user = userEvent.setup()
+    renderWithProviders(<PlaygroundPage />)
+
+    expect(await screen.findByText(/请先在/)).toBeInTheDocument()
+
+    await user.click(composer())
+    await user.keyboard('{Enter}')
+    expect(mockedChat).not.toHaveBeenCalled()
+    expect(screen.queryByText('请输入消息内容后再发送。')).not.toBeInTheDocument()
+
+    fireEvent.submit(composer().closest('form') as HTMLFormElement)
+
+    expect(await screen.findByText('请先选择可用的密钥。')).toBeInTheDocument()
+    expect(screen.getByText('在密钥管理页创建或启用一个密钥后再发送。')).toBeInTheDocument()
+    expect(mockedChat).not.toHaveBeenCalled()
+    expect(screen.queryByText('请输入消息内容后再发送。')).not.toBeInTheDocument()
+  })
+
   it('clears the conversation back to the empty state', async () => {
     installMock()
     mockedChat.mockResolvedValue({
