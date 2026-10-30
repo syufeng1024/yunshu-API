@@ -4,8 +4,10 @@ import { buttonVariants } from '@/components/Button'
 import { Copyright } from '@/components/layout-parts'
 import { Logo } from '@/components/Logo'
 import { ScrollRestorer } from '@/components/ScrollRestorer'
-import { BRAND_DESCRIPTION, ROUTES, SITE_NAV } from '@/lib/constants'
+import { SERVICE_TERMS_SECTION_ID } from '@/content/legal'
 import { cn } from '@/lib/cn'
+import { BRAND_DESCRIPTION, ROUTES, SITE_NAV } from '@/lib/constants'
+import { PENDING_BEFORE_LAUNCH } from '@/lib/placeholders'
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {
   return cn(
@@ -37,6 +39,13 @@ const DOC_LINKS = [
   { label: '快速开始', to: `${ROUTES.docs}?chapter=quickstart` },
   { label: '错误码与限流', to: `${ROUTES.docs}?chapter=errors` },
   { label: '工具集成配置', to: `${ROUTES.docs}?chapter=tools` },
+] as const
+
+const AGREEMENT_LINKS = [
+  { label: '用户协议', to: ROUTES.terms },
+  { label: '隐私政策', to: ROUTES.privacy },
+  // 服务条款是用户协议中的一节，锚点 id 定义在 src/content/legal.ts。
+  { label: '服务条款', to: `${ROUTES.terms}#${SERVICE_TERMS_SECTION_ID}` },
 ] as const
 
 export function SiteLayout() {
@@ -118,14 +127,23 @@ export function SiteLayout() {
               </FooterGroup>
 
               <FooterGroup title="协议">
-                <li>用户协议</li>
-                <li>隐私政策</li>
-                <li>服务条款</li>
+                {AGREEMENT_LINKS.map((item) => (
+                  <li key={item.label}>
+                    <Link to={item.to} className="hover:text-ink">
+                      {item.label}
+                    </Link>
+                  </li>
+                ))}
               </FooterGroup>
 
               <FooterGroup title="备案信息">
+                {/* 资质材料需求方尚未提供：只说明「待补什么」，不写任何具体
+                    号码——编造 ICP / 许可证号等于伪造证照。 */}
+                <li className="text-xs leading-relaxed text-ink-secondary">
+                  证照与备案信息：{PENDING_BEFORE_LAUNCH}
+                </li>
                 <li className="text-xs leading-relaxed text-ink-muted">
-                  证照与备案信息在正式上线前补充。
+                  （ICP 备案号 / 增值电信业务许可证 / 软件著作权）
                 </li>
               </FooterGroup>
             </div>

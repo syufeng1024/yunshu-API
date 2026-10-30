@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 
 /**
- * G19: 官网五个公开页面在移动/平板宽度下不得产生横向溢出。
+ * G19: 官网七个公开页面在移动/平板宽度下不得产生横向溢出。
  *
  * 回归背景：首页 hero 与文档页两处 grid/flex 子项缺少 `min-w-0`，被内部的
  * `<pre>` 代码块与 `whitespace-nowrap` 章节列表的 min-content 宽度撑破列宽，
@@ -22,7 +22,7 @@ import { expect, test } from '@playwright/test'
  *
  * 这些用例在 CI 里也必须真的执行，因此**没有** skip 条件：
  * `playwright.config.ts` 在非外部栈模式下会自起 5180 的 vite dev server 与
- * 8081 的 controld（CI 有 MySQL/Redis service），五个路由都是公开可渲染页面，
+ * 8081 的 controld（CI 有 MySQL/Redis service），七个路由都是公开可渲染页面，
  * 数据接口不可用时也只是走 ErrorState，不改变布局断言的有效性。设置
  * E2E_BASE_URL 时则直连已启动的完整栈（如 8088 的 nginx + 生产构建）。
  */
@@ -40,7 +40,17 @@ const VIEWPORTS: readonly ViewportSpec[] = [
 ] as const
 
 // 官网全部公开页面；控制台/后台按产品决策只做桌面端，不在本用例范围内。
-const PUBLIC_ROUTES = ['/', '/pricing', '/docs', '/integrations', '/login'] as const
+// /terms 与 /privacy 是法律条款占位页（页脚协议三项的落地页），同样是公开页面，
+// 章节导航在移动端是横向滑动的 `whitespace-nowrap` 列表，属于 G19 的高风险结构。
+const PUBLIC_ROUTES = [
+  '/',
+  '/pricing',
+  '/docs',
+  '/integrations',
+  '/login',
+  '/terms',
+  '/privacy',
+] as const
 
 interface LayoutProbe {
   /** 文档根元素的滚动宽度，即「整页真实内容宽度」。 */

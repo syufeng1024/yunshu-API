@@ -11,6 +11,8 @@ const PricingPage = lazy(() => import('@/pages/site/PricingPage'))
 const DocsPage = lazy(() => import('@/pages/site/DocsPage'))
 const LoginPage = lazy(() => import('@/pages/site/LoginPage'))
 const IntegrationsPage = lazy(() => import('@/pages/site/IntegrationsPage'))
+const TermsPage = lazy(() => import('@/pages/site/TermsPage'))
+const PrivacyPage = lazy(() => import('@/pages/site/PrivacyPage'))
 const NotFoundPage = lazy(() => import('@/pages/site/NotFoundPage'))
 
 const ConsoleOverviewPage = lazy(() => import('@/pages/console/OverviewPage'))
@@ -41,6 +43,9 @@ export const router = createBrowserRouter([
       { path: 'docs', element: <DocsPage /> },
       { path: 'login', element: <LoginPage /> },
       { path: 'integrations', element: <IntegrationsPage /> },
+      // 法律条款占位页：挂在 SiteLayout 之下，自动获得页头页脚。
+      { path: 'terms', element: <TermsPage /> },
+      { path: 'privacy', element: <PrivacyPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

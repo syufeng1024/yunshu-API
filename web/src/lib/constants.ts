@@ -18,6 +18,9 @@ export const ROUTES = {
   docs: '/docs',
   login: '/login',
   integrations: '/integrations',
+  // 法律条款占位页（正文待法务定稿）；页脚与登录页的协议名都指向这里。
+  terms: '/terms',
+  privacy: '/privacy',
 
   console: '/console',
   consoleKeys: '/console/keys',
@@ -51,6 +54,8 @@ export const ROUTE_TITLES = {
   [ROUTES.docs]: '开发者文档',
   [ROUTES.login]: '登录 / 注册',
   [ROUTES.integrations]: '工具集成',
+  [ROUTES.terms]: '用户协议',
+  [ROUTES.privacy]: '隐私政策',
 
   [ROUTES.console]: '控制台 · 概览',
   [ROUTES.consoleKeys]: '密钥管理',

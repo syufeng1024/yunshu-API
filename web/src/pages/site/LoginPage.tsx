@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { api, errorHint, errorMessage } from '@/api/client'
@@ -48,7 +48,9 @@ export default function LoginPage() {
   const [sendingCode] = useState(false)
   const [codeSent] = useState(false)
   const [resetOpen, setResetOpen] = useState(false)
-  const [resetSent] = useState(false)
+  // 面板展开后把焦点交到真实可用的下一步（开发者文档）上；点击「发送重置链接」
+  // 不会编造「已发送」，只会把用户带到真能继续的地方。
+  const resetDocsRef = useRef<HTMLAnchorElement>(null)
   const [claimNotice, setClaimNotice] = useState(false)
 
   const clearFeedback = () => {
@@ -159,7 +161,10 @@ export default function LoginPage() {
       setError('请先填写邮箱或手机号。')
       return
     }
-    setError('找回密码暂未开放，请联系客服协助重置。')
+    // 重置链路需要邮件/短信通道，V1.0 没有（面板文案已常显说明）。这里既不
+    // 伪造「已发送」，也不留一个点了毫无反应的按钮：把焦点交到真实可用的
+    // 下一步——开发者文档，键盘与读屏用户也能顺着往下走。
+    resetDocsRef.current?.focus()
   }
 
   const handleClaim = () => {
@@ -265,8 +270,11 @@ export default function LoginPage() {
 
       {resetOpen ? (
         <div className="space-y-3 rounded-lg border border-border bg-surface-muted p-3">
-          <p className="text-xs text-ink-secondary">
-            填写注册邮箱或手机号，重置链接会发送到账号绑定的联系方式。
+          {/* 这里只描述状态，不能写成正在发生的动作（「链接会发送到你的邮箱」）：
+              重置链路需要邮件/短信通道，V1.0 没有接入，承诺一个不会发生的动作
+              与「标注清楚」的要求冲突。 */}
+          <p className="text-xs leading-relaxed text-ink-secondary">
+            密码重置功能暂未开放；上线后此处会把重置链接发送到账号绑定的联系方式。
           </p>
           <Button
             type="button"
@@ -276,13 +284,21 @@ export default function LoginPage() {
               void handleReset()
             }}
           >
-            发送重置链接
+            发送重置链接（暂未开放）
           </Button>
-          {resetSent ? (
-            <p role="status" className="text-xs text-success">
-              如果账号存在，重置邮件已发送。
-            </p>
-          ) : null}
+          {/* 「暂未开放」必须一进面板就能看到，不能藏在点击之后：先承诺
+              「会发送」、点了才告知不可用，等于骗用户填完再拒绝。 */}
+          <p role="status" className="text-xs leading-relaxed text-ink-secondary">
+            当前可先查阅
+            <Link
+              ref={resetDocsRef}
+              to={ROUTES.docs}
+              className="font-medium text-primary hover:text-primary-hover"
+            >
+              文档
+            </Link>
+            ，或联系客服协助处理。
+          </p>
         </div>
       ) : null}
     </form>
@@ -344,7 +360,29 @@ export default function LoginPage() {
           onChange={(event) => setAgreed(event.target.checked)}
           className="mt-0.5 h-4 w-4 rounded border-border-strong text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
         />
-        <span>我已阅读并同意用户协议与隐私政策。</span>
+        <span>
+          我已阅读并同意
+          {/* 注册必须勾选，协议名必须是能点的链接，否则等于「同意一份看不到的
+              文件」。target=_blank 是为了不丢掉已填的注册表单。 */}
+          <Link
+            to={ROUTES.terms}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-primary hover:text-primary-hover"
+          >
+            用户协议
+          </Link>
+          与
+          <Link
+            to={ROUTES.privacy}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-primary hover:text-primary-hover"
+          >
+            隐私政策
+          </Link>
+          。
+        </span>
       </label>
 
       {feedback}
