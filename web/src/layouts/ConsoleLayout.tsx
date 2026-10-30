@@ -1,7 +1,10 @@
+import { useEffect, useRef, useState } from 'react'
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { Icon } from '@/components/Icon'
 import { Logo } from '@/components/Logo'
 import { ScrollRestorer } from '@/components/ScrollRestorer'
+import { resolveGatewayBaseUrl } from '@/lib/apiBase'
+import { writeClipboard } from '@/lib/clipboard'
 import { CONSOLE_NAV, ROUTES } from '@/lib/constants'
 import { cn } from '@/lib/cn'
 import { useAuthStore } from '@/stores/auth'
@@ -12,6 +15,67 @@ function navClass({ isActive }: { isActive: boolean }): string {
     isActive
       ? 'bg-sidebar-active text-sidebar-text'
       : 'text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-text',
+  )
+}
+
+/**
+ * 常驻的「调用地址」条。
+ *
+ * 控制台里任何页面都看不到自己的网关地址，用户要写代码只能去猜或翻文档，
+ * 所以这里把它钉在内容区最上方并支持一键复制。
+ *
+ * 地址来源：`VITE_API_BASE_URL`（构建期注入，生产必须注入，见 OI-12 / G9）；
+ * 未注入时回落到站点自身域名（本地/容器同源部署即如此）。**不硬编码任何域名**，
+ * 否则换环境就会把流量指到别人的服务器。
+ */
+function ApiBaseBar() {
+  const gatewayUrl = resolveGatewayBaseUrl()
+  const [copied, setCopied] = useState(false)
+  const [failed, setFailed] = useState(false)
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (resetTimer.current) clearTimeout(resetTimer.current)
+    }
+  }, [])
+
+  if (!gatewayUrl) return null
+
+  const handleCopy = async () => {
+    try {
+      await writeClipboard(gatewayUrl)
+      setFailed(false)
+      setCopied(true)
+      if (resetTimer.current) clearTimeout(resetTimer.current)
+      resetTimer.current = setTimeout(() => setCopied(false), 2_000)
+    } catch {
+      setCopied(false)
+      setFailed(true)
+    }
+  }
+
+  return (
+    <div className="border-b border-border bg-surface">
+      <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-x-2 gap-y-1 px-4 py-1.5 sm:px-6 sm:py-2 lg:px-8">
+        <span className="text-xs font-medium text-ink-muted">调用地址</span>
+        <code className="min-w-0 flex-1 truncate font-mono text-xs text-ink">{gatewayUrl}</code>
+        <button
+          type="button"
+          onClick={() => void handleCopy()}
+          className="inline-flex shrink-0 items-center gap-1 rounded-sm px-2 py-1 text-xs text-ink-secondary transition-colors duration-fast hover:bg-surface-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          aria-label={copied ? '已复制调用地址' : '复制调用地址'}
+        >
+          <Icon name={copied ? 'check' : 'copy'} className="h-3.5 w-3.5" />
+          {copied ? '已复制' : '复制'}
+        </button>
+        {failed ? (
+          <span role="alert" className="text-xs text-danger">
+            复制失败，请手动选择地址复制。
+          </span>
+        ) : null}
+      </div>
+    </div>
   )
 }
 
@@ -92,6 +156,8 @@ export function ConsoleLayout() {
       </aside>
 
       <div className="min-w-0 flex-1">
+        {/* 内容区最上方常驻调用地址：运营后台不加（运营不用自己的 Key 调模型）。 */}
+        <ApiBaseBar />
         <main className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
           {/* The announcement strip lives on the overview (T19): the ops
               announcement API is not exposed to console users yet, so it
