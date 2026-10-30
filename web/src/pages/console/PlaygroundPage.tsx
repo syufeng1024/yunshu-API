@@ -1,5 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { ApiError, errorHint, errorMessage } from '@/api/client'
 import {
   playgroundChat,
@@ -13,15 +14,20 @@ import {
   Badge,
   Button,
   CopyBlock,
+  EmptyState,
   ErrorState,
+  Icon,
   Input,
   PageHeader,
   Select,
 } from '@/components'
+import { resolveApiBaseUrl } from '@/lib/apiBase'
+import { cn } from '@/lib/cn'
 import { usePageTitle } from '@/lib/usePageTitle'
 
 type MessageRole = 'user' | 'assistant'
 
+/** One rendered turn of the conversation, in send order. */
 interface PlaygroundMessage {
   id: string
   role: MessageRole
@@ -40,18 +46,21 @@ interface Example {
 type CodeLanguage = 'curl' | 'python' | 'node'
 type ReplyState = 'streaming' | 'done' | 'aborted'
 
+/** Tracks the turn that is currently streaming so only it shows the caret. */
 interface AssistantReply {
   id: string
-  content: string
   state: ReplyState
 }
 
 /** The selected key list: one page is enough for the debug console. */
 const KEY_LIST_PARAMS: KeyListParams = { page: 1, pageSize: 50 }
 
+/** Composer stops growing after ~6 lines; beyond that it scrolls. */
+const COMPOSER_MAX_HEIGHT = 144
+
 /**
- * Virtual prompts for guidance (F12-2): clicking one only fills the form. It
- * never sends a request and never touches billing.
+ * Virtual prompts for guidance (F12-2): clicking one only fills the composer
+ * and the advanced parameters. It never sends a request and never bills.
  */
 const EXAMPLES: readonly Example[] = [
   {
@@ -171,12 +180,6 @@ function buildSnippet(
   ].join('\n')
 }
 
-function apiBaseUrl(): string {
-  const configured = (import.meta.env.VITE_API_BASE_URL ?? '').replace(/\/+$/, '')
-  if (configured) return configured
-  return typeof window === 'undefined' ? 'https://api.example.com' : window.location.origin
-}
-
 export default function PlaygroundPage() {
   usePageTitle('在线调试台')
 
@@ -184,23 +187,27 @@ export default function PlaygroundPage() {
 
   const [model, setModel] = useState('')
   const [system, setSystem] = useState('')
-  const [messages, setMessages] = useState<PlaygroundMessage[]>(() => [
-    newMessage('user'),
-  ])
+  const [messages, setMessages] = useState<PlaygroundMessage[]>([])
   const [temperature, setTemperature] = useState('0.7')
   const [maxTokens, setMaxTokens] = useState('1024')
   const [stream, setStream] = useState(true)
 
   const [keyId, setKeyId] = useState<number | null>(null)
+  const [draft, setDraft] = useState('')
   const [reply, setReply] = useState<AssistantReply | null>(null)
   const [pending, setPending] = useState(false)
+  const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [devOpen, setDevOpen] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
   const [sendHint, setSendHint] = useState<string | null>(null)
   const [insufficientError, setInsufficientError] = useState(false)
   const [creditsUnknown, setCreditsUnknown] = useState(false)
   const [lastRemaining, setLastRemaining] = useState<number | null>(null)
   const [codeLanguage, setCodeLanguage] = useState<CodeLanguage>('curl')
+
   const abortRef = useRef<AbortController | null>(null)
+  const logRef = useRef<HTMLDivElement | null>(null)
+  const composerRef = useRef<HTMLTextAreaElement | null>(null)
 
   const models = useConsoleModels()
   const overview = useConsoleOverview({ poll: false })
@@ -226,6 +233,13 @@ export default function PlaygroundPage() {
     setKeyId(usableKeys[0]?.id ?? null)
   }, [keyId, keyItems, usableKeys])
 
+  // A refetch after a recharge must clear the sticky 402 banner.
+  const balance = overview.data?.balance
+  const balanceMicro = balance?.micro
+  useEffect(() => {
+    if (balanceMicro !== undefined && balanceMicro > 0) setInsufficientError(false)
+  }, [balanceMicro])
+
   const modelOptions = useMemo(
     () => [
       { value: '', label: '请选择模型' },
@@ -250,14 +264,21 @@ export default function PlaygroundPage() {
     [keyItems, keys.isLoading],
   )
 
+  const draftText = draft.trim()
+
+  /**
+   * Conversation sent to the gateway: the finished turns plus the composer
+   * text (which has not been moved into `messages` yet).
+   */
   const payloadMessages = useMemo(
     () => [
       ...(system.trim() ? [{ role: 'system', content: system }] : []),
       ...messages
         .filter((message) => message.content.trim().length > 0)
         .map((message) => ({ role: message.role, content: message.content })),
+      ...(draftText ? [{ role: 'user', content: draftText }] : []),
     ],
-    [system, messages],
+    [system, messages, draftText],
   )
 
   /**
@@ -277,14 +298,7 @@ export default function PlaygroundPage() {
 
   const preview = useMemo(() => JSON.stringify(requestBody, null, 2), [requestBody])
 
-  const balance = overview.data?.balance
-  const balanceMicro = balance?.micro
   const insufficient = (balance !== undefined && balance.micro <= 0) || insufficientError
-
-  // A refetch after a recharge must clear the sticky 402 banner.
-  useEffect(() => {
-    if (balanceMicro !== undefined && balanceMicro > 0) setInsufficientError(false)
-  }, [balanceMicro])
 
   const overviewError = overview.isError ? errorMessage(overview.error) : null
   const overviewHint = overview.isError ? errorHint(overview.error) : null
@@ -300,22 +314,29 @@ export default function PlaygroundPage() {
     !insufficient &&
     model.trim() !== ''
 
+  const hasConversation = messages.length > 0
+
+  // Keep the newest turn in view while a stream grows.
+  useEffect(() => {
+    const element = logRef.current
+    if (!element) return
+    element.scrollTop = element.scrollHeight
+  }, [messages, reply, sendError, sendHint])
+
+  // Grow the composer with its content, up to COMPOSER_MAX_HEIGHT.
+  useEffect(() => {
+    const element = composerRef.current
+    if (!element) return
+    element.style.height = 'auto'
+    element.style.height = `${Math.min(element.scrollHeight, COMPOSER_MAX_HEIGHT)}px`
+  }, [draft])
+
   const applyExample = (example: Example) => {
     setSystem(example.system)
-    setMessages([newMessage('user', example.prompt)])
     setTemperature(example.temperature)
     setMaxTokens(example.maxTokens)
-  }
-
-  const updateMessage = (
-    id: string,
-    patch: Partial<Pick<PlaygroundMessage, 'role' | 'content'>>,
-  ) => {
-    setMessages((current) =>
-      current.map((message) =>
-        message.id === id ? { ...message, ...patch } : message,
-      ),
-    )
+    setDraft(example.prompt)
+    composerRef.current?.focus()
   }
 
   const handleStop = () => {
@@ -328,6 +349,19 @@ export default function PlaygroundPage() {
       abortRef.current?.abort()
     }
   }, [])
+
+  const handleClear = () => {
+    if (pending) return
+    setMessages([])
+    setReply(null)
+    setDraft('')
+    setSendError(null)
+    setSendHint(null)
+    setInsufficientError(false)
+    setCreditsUnknown(false)
+    setLastRemaining(null)
+    composerRef.current?.focus()
+  }
 
   const handleSend = async () => {
     if (pending) return
@@ -350,36 +384,37 @@ export default function PlaygroundPage() {
       return
     }
 
-    // Snapshot before appending the placeholder so the outgoing body is the
-    // conversation the user actually wrote.
+    // Snapshot before appending the turn so the outgoing body is exactly the
+    // conversation the user saw when pressing send.
     const body = requestBody
     const key = selectedKey
+    const text = draftText
     const assistantId = newMessage('assistant').id
     const controller = new AbortController()
     abortRef.current = controller
 
     setPending(true)
-    setMessages((current) => [...current, { id: assistantId, role: 'assistant', content: '' }])
-    setReply({ id: assistantId, content: '', state: 'streaming' })
+    setDraft('')
+    setMessages((current) => [
+      ...current,
+      ...(text ? [{ id: newMessage('user').id, role: 'user' as MessageRole, content: text }] : []),
+      { id: assistantId, role: 'assistant' as MessageRole, content: '' },
+    ])
+    setReply({ id: assistantId, state: 'streaming' })
 
     try {
       const result = await playgroundChat({
         keyId: key.id,
         body,
         signal: controller.signal,
-        onDelta: (text) => {
-          if (!text) return
+        onDelta: (delta) => {
+          if (!delta) return
           setMessages((current) =>
             current.map((message) =>
               message.id === assistantId
-                ? { ...message, content: message.content + text }
+                ? { ...message, content: message.content + delta }
                 : message,
             ),
-          )
-          setReply((current) =>
-            current && current.id === assistantId
-              ? { ...current, content: current.content + text }
-              : current,
           )
         },
         onDone: () => {
@@ -388,6 +423,17 @@ export default function PlaygroundPage() {
           )
         },
       })
+
+      // Non-streaming responses deliver the text in the resolved value only.
+      if (result.content) {
+        setMessages((current) =>
+          current.map((message) =>
+            message.id === assistantId && message.content === ''
+              ? { ...message, content: result.content }
+              : message,
+          ),
+        )
+      }
 
       // Balance comes from the response header or the overview endpoint only.
       if (result.creditsRemaining !== null) {
@@ -403,9 +449,7 @@ export default function PlaygroundPage() {
       if (isAbortError(error)) {
         // Keep what already arrived and label the turn instead of discarding it.
         setReply((current) =>
-          current && current.id === assistantId
-            ? { ...current, state: 'aborted' }
-            : current,
+          current && current.id === assistantId ? { ...current, state: 'aborted' } : current,
         )
         return
       }
@@ -438,27 +482,96 @@ export default function PlaygroundPage() {
     }
   }
 
+  const handleComposerKeyDown = (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    // Enter sends, Shift+Enter inserts a newline; never intercept IME commits.
+    if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return
+    event.preventDefault()
+    if (!canSend) return
+    void handleSend()
+  }
+
   const maskedKey = selectedKey?.key_masked ?? 'sk-****'
   const codeSnippet = useMemo(
-    () => buildSnippet(codeLanguage, `${apiBaseUrl()}/v1/chat/completions`, maskedKey, requestBody),
+    () =>
+      buildSnippet(
+        codeLanguage,
+        `${resolveApiBaseUrl()}/v1/chat/completions`,
+        maskedKey,
+        requestBody,
+      ),
     [codeLanguage, maskedKey, requestBody],
   )
 
+  const balanceCard = (
+    <div
+      aria-label="可用余额"
+      className="w-full rounded-xl border border-border bg-surface px-3 py-1 shadow-card sm:w-auto sm:min-w-[12rem] sm:py-2"
+    >
+      {/* 窄屏一行「标签 + 数值」，否则余额块会把输入框挤出首屏。 */}
+      <div className="flex flex-wrap items-baseline gap-x-2 sm:block">
+        <p className="text-xs text-ink-muted">可用余额</p>
+        {overview.isLoading ? (
+          <p className="text-sm text-ink-muted sm:mt-0.5">加载中…</p>
+        ) : overviewError ? (
+          <div className="w-full space-y-1 sm:mt-0.5">
+            <p className="text-sm text-ink">--</p>
+            <p className="text-xs text-danger">{overviewError}</p>
+            {overviewHint ? <p className="text-xs text-ink-secondary">{overviewHint}</p> : null}
+            <Button size="sm" variant="secondary" onClick={() => void overview.refetch()}>
+              重试
+            </Button>
+          </div>
+        ) : balance ? (
+          <p className="text-sm text-ink sm:mt-0.5">
+            {balance.credits} 积分
+            <span className="ml-1 text-xs text-ink-secondary">¥{balance.cny}</span>
+          </p>
+        ) : (
+          <p className="text-sm text-ink sm:mt-0.5">--</p>
+        )}
+      </div>
+
+      {lastRemaining !== null ? (
+        <p className="mt-1 text-xs text-ink-secondary">
+          本次调用后余额：{lastRemaining} 积分（X-Credits-Remaining）
+        </p>
+      ) : null}
+      {creditsUnknown ? (
+        <p className="mt-1 text-xs text-ink-secondary">本次消耗以用量页为准。</p>
+      ) : null}
+
+      {insufficient ? (
+        <p
+          role="alert"
+          className="mt-2 rounded-lg border border-danger bg-danger-soft px-2 py-1 text-xs text-danger"
+        >
+          余额不足，请先
+          <a href="/console/recharge" className="underline">
+            充值
+          </a>
+          后再调试。
+        </p>
+      ) : null}
+    </div>
+  )
+
   return (
-    <div className="space-y-5">
+    <div className="flex min-h-[calc(100dvh-13rem)] flex-col gap-2 sm:gap-3 md:min-h-[calc(100dvh-11rem)]">
       <PageHeader
+        className="pb-4 sm:pb-5"
         title="在线调试台"
-        description="选择密钥与模型，编辑参数后发送；响应按真实扣费链路流式返回。"
+        description="直接对话测试模型；按真实调用扣费。"
+        actions={balanceCard}
       />
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-2">
+      {/* 顶部工具条：密钥 / 模型 / 高级参数。窄屏自动换行堆叠。 */}
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="min-w-[10rem] flex-1 basis-56 space-y-1.5">
           <Select
             label="密钥"
             value={keyId !== null ? String(keyId) : ''}
             onChange={(event) => setKeyId(event.target.value ? Number(event.target.value) : null)}
             options={keyOptions}
-            hint="只显示密钥名称与掩码；完整密钥不会出现在浏览器中。"
           />
           {keysError ? (
             <ErrorState
@@ -479,13 +592,12 @@ export default function PlaygroundPage() {
           ) : null}
         </div>
 
-        <div className="space-y-2">
+        <div className="min-w-[10rem] flex-1 basis-56 space-y-1.5">
           <Select
             label="模型"
             value={model}
             onChange={(event) => setModel(event.target.value)}
             options={modelOptions}
-            hint="仅列出平台在售（LISTED）模型；是否可调用以下游授权为准。"
           />
           {modelsError ? (
             <ErrorState
@@ -497,267 +609,259 @@ export default function PlaygroundPage() {
           ) : null}
         </div>
 
-        <div className="rounded-xl border border-border bg-surface p-4 shadow-card sm:col-span-2">
-          <p className="text-xs text-ink-muted">可用余额</p>
-          {overview.isLoading ? (
-            <p className="mt-1 text-sm text-ink-muted">加载中…</p>
-          ) : overviewError ? (
-            <div className="mt-1 space-y-1">
-              <p className="text-sm text-ink">--</p>
-              <p className="text-xs text-danger">{overviewError}</p>
-              {overviewHint ? (
-                <p className="text-xs text-ink-secondary">{overviewHint}</p>
-              ) : null}
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={() => void overview.refetch()}
-              >
-                重试
-              </Button>
-            </div>
-          ) : balance ? (
-            <div className="mt-1 space-y-0.5">
-              <p className="text-sm text-ink">{balance.credits} 积分</p>
-              <p className="text-xs text-ink-secondary">¥{balance.cny}</p>
-            </div>
-          ) : (
-            <p className="mt-1 text-sm text-ink">--</p>
-          )}
-
-          {lastRemaining !== null ? (
-            <p className="mt-2 text-xs text-ink-secondary">
-              本次调用后余额：{lastRemaining} 积分（X-Credits-Remaining）
-            </p>
-          ) : null}
-          {creditsUnknown ? (
-            <p className="mt-2 text-xs text-ink-secondary">本次消耗以用量页为准。</p>
-          ) : null}
-
-          {insufficient ? (
-            <p
-              role="alert"
-              className="mt-2 rounded-lg border border-danger bg-danger-soft px-2 py-1 text-xs text-danger"
-            >
-              余额不足，请先
-              <a href="/console/recharge" className="underline">
-                充值
-              </a>
-              后再调试。
-            </p>
-          ) : null}
-        </div>
+        <Button
+          variant="secondary"
+          size="sm"
+          className="shrink-0"
+          aria-expanded={advancedOpen}
+          aria-controls="playground-advanced"
+          onClick={() => setAdvancedOpen((open) => !open)}
+        >
+          高级参数
+          <Icon
+            name="chevron-down"
+            className={cn('h-3.5 w-3.5 transition-transform', advancedOpen && 'rotate-180')}
+          />
+        </Button>
       </div>
 
-      <section
-        aria-label="快捷示例"
-        className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-card"
-      >
-        <h2 className="text-sm font-semibold text-ink">快捷示例</h2>
-        <p className="text-xs text-ink-secondary">
-          示例仅为引导用的虚拟 prompt。点击只填入参数，不会发送，也不会计费。
-        </p>
-        <div className="flex flex-wrap gap-2">
-          {EXAMPLES.map((example) => (
-            <Button
-              key={example.id}
-              variant="secondary"
-              size="sm"
-              onClick={() => applyExample(example)}
-            >
-              {example.title}
-            </Button>
-          ))}
-        </div>
-      </section>
+      <p className="text-xs text-ink-muted">
+        费用按实际调用计入当前账号；Enter 发送，Shift+Enter 换行。
+      </p>
 
-      <section
-        aria-label="参数面板"
-        className="space-y-4 rounded-xl border border-border bg-surface p-4 shadow-card"
-      >
-        <h2 className="text-sm font-semibold text-ink">参数</h2>
-
-        <label className="block space-y-1.5">
-          <span className="block text-sm font-medium text-ink">System 提示词</span>
-          <textarea
-            value={system}
-            onChange={(event) => setSystem(event.target.value)}
-            rows={3}
-            className="w-full rounded-lg border border-border-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            placeholder="设定助手角色与回答约束"
-            aria-label="System 提示词"
-          />
-        </label>
-
-        <div className="space-y-2">
-          <p className="text-sm font-medium text-ink">Messages</p>
-          {messages.length === 0 ? (
-            <p className="text-xs text-ink-muted">尚未添加消息。</p>
-          ) : null}
-          {messages.map((message, index) => (
-            <div key={message.id} className="space-y-2 rounded-lg border border-border p-3">
-              <div className="flex flex-wrap items-end gap-2">
-                <div className="w-40">
-                  <Select
-                    label={`消息 ${index + 1} 角色`}
-                    value={message.role}
-                    onChange={(event) =>
-                      updateMessage(message.id, {
-                        role: event.target.value as MessageRole,
-                      })
-                    }
-                    options={[
-                      { value: 'user', label: '用户' },
-                      { value: 'assistant', label: '助手' },
-                    ]}
-                  />
-                </div>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  aria-label={`删除消息 ${index + 1}`}
-                  onClick={() =>
-                    setMessages((current) =>
-                      current.filter((item) => item.id !== message.id),
-                    )
-                  }
-                >
-                  删除
-                </Button>
-              </div>
-              <label className="block space-y-1.5">
-                <span className="block text-xs text-ink-secondary">
-                  消息 {index + 1} 内容
-                </span>
-                <textarea
-                  value={message.content}
-                  onChange={(event) =>
-                    updateMessage(message.id, { content: event.target.value })
-                  }
-                  rows={3}
-                  aria-label={`消息 ${index + 1} 内容`}
-                  className="w-full rounded-lg border border-border-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                  placeholder="输入消息内容"
-                />
-              </label>
-            </div>
-          ))}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setMessages((current) => [...current, newMessage('user')])}
-          >
-            添加消息
-          </Button>
-        </div>
-
-        <div className="grid gap-3 sm:grid-cols-3">
-          <Input
-            label="temperature"
-            type="number"
-            min={0}
-            max={2}
-            step="0.1"
-            value={temperature}
-            onChange={(event) => setTemperature(event.target.value)}
-          />
-          <Input
-            label="max_tokens"
-            type="number"
-            min={1}
-            step={1}
-            value={maxTokens}
-            onChange={(event) => setMaxTokens(event.target.value)}
-          />
-          <label className="flex h-full items-center gap-2 pt-6 text-sm text-ink">
-            <input
-              type="checkbox"
-              checked={stream}
-              onChange={(event) => setStream(event.target.checked)}
-              className="h-4 w-4 rounded border-border-strong text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+      {advancedOpen ? (
+        <section
+          id="playground-advanced"
+          aria-label="高级参数"
+          className="space-y-3 rounded-xl border border-border bg-surface p-4 shadow-card"
+        >
+          <label className="block space-y-1.5">
+            <span className="block text-sm font-medium text-ink">System 提示词</span>
+            <textarea
+              value={system}
+              onChange={(event) => setSystem(event.target.value)}
+              rows={2}
+              className="w-full rounded-lg border border-border-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              placeholder="设定助手角色与回答约束"
+              aria-label="System 提示词"
             />
-            流式输出（stream）
           </label>
-        </div>
-      </section>
 
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Input
+              label="temperature"
+              type="number"
+              min={0}
+              max={2}
+              step="0.1"
+              value={temperature}
+              onChange={(event) => setTemperature(event.target.value)}
+            />
+            <Input
+              label="max_tokens"
+              type="number"
+              min={1}
+              step={1}
+              value={maxTokens}
+              onChange={(event) => setMaxTokens(event.target.value)}
+            />
+            <label className="flex h-full items-center gap-2 pt-6 text-sm text-ink">
+              <input
+                type="checkbox"
+                checked={stream}
+                onChange={(event) => setStream(event.target.checked)}
+                className="h-4 w-4 rounded border-border-strong text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              />
+              流式输出（stream）
+            </label>
+          </div>
+        </section>
+      ) : null}
+
+      {/* 对话区：占满剩余高度，内部滚动，首屏即可见。 */}
       <section
-        aria-label="发送"
-        className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-card"
+        aria-label="对话"
+        className="flex min-h-[12rem] flex-1 flex-col overflow-hidden rounded-xl border border-border bg-surface shadow-card md:min-h-[16rem]"
       >
-        <div className="flex flex-wrap items-center gap-3">
-          <Button onClick={() => void handleSend()} disabled={!canSend}>
-            {pending ? '生成中…' : '发送'}
-          </Button>
-          {pending ? (
-            <Button variant="secondary" onClick={handleStop}>
-              停止
-            </Button>
+        <div
+          ref={logRef}
+          role="log"
+          aria-live="polite"
+          aria-label="对话内容"
+          className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-4 sm:px-4"
+        >
+          {hasConversation ? null : (
+            <div className="m-auto w-full max-w-md space-y-3">
+              <EmptyState
+                title="开始对话"
+                description="发送一条消息，测试模型回复与扣费链路。"
+                icon={<Icon name="terminal" className="h-5 w-5" />}
+              />
+              <div className="space-y-2">
+                <p className="text-center text-xs text-ink-muted">
+                  试试示例：只填入内容，不会发送，也不会计费。
+                </p>
+                <div className="flex flex-wrap justify-center gap-2">
+                  {EXAMPLES.map((example) => (
+                    <Button
+                      key={example.id}
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => applyExample(example)}
+                    >
+                      {example.title}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {messages.map((message) => {
+            const active = reply?.id === message.id
+            const aborted = active && reply?.state === 'aborted'
+            const isUser = message.role === 'user'
+            return (
+              <div
+                key={message.id}
+                className={cn('flex flex-col gap-1', isUser ? 'items-end' : 'items-start')}
+              >
+                <span className="px-1 text-xs text-ink-muted">{isUser ? '你' : '助手'}</span>
+                <div
+                  className={cn(
+                    'max-w-[85%] whitespace-pre-wrap break-words rounded-xl px-3 py-2 text-sm text-ink',
+                    isUser
+                      ? 'bg-primary-soft'
+                      : 'border border-border bg-surface-muted',
+                  )}
+                >
+                  {active ? (
+                    <span data-testid="playground-reply-content">{message.content}</span>
+                  ) : (
+                    <span>{message.content}</span>
+                  )}
+                  {active && reply?.state === 'streaming' ? (
+                    <span aria-hidden="true" className="animate-pulse">
+                      ▍
+                    </span>
+                  ) : null}
+                </div>
+                {aborted ? (
+                  <div className="flex flex-wrap items-center gap-2 px-1">
+                    <Badge variant="neutral">已中止</Badge>
+                    <span className="text-xs text-ink-secondary">已保留中止前收到的内容。</span>
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
+
+          {sendError ? (
+            <div
+              role="alert"
+              className="space-y-1 rounded-xl border border-danger bg-danger-soft px-3 py-2"
+            >
+              <p className="text-sm text-danger">{sendError}</p>
+              {sendHint ? <p className="text-xs text-ink-secondary">{sendHint}</p> : null}
+            </div>
           ) : null}
         </div>
-        <p id="playground-send-note" className="text-xs text-ink-secondary">
-          调试台调用走真实扣费，每次发送按所选密钥的计费规则扣除账户余额。
-        </p>
-        {sendError ? (
-          <p role="alert" className="text-sm text-danger">
-            {sendError}
-          </p>
-        ) : null}
-        {sendHint ? <p className="text-xs text-ink-secondary">{sendHint}</p> : null}
-      </section>
 
-      <section
-        aria-label="响应"
-        className="space-y-2 rounded-xl border border-border bg-surface p-4 shadow-card"
-      >
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-sm font-semibold text-ink">响应</h2>
-          {reply?.state === 'aborted' ? <Badge variant="neutral">已中止</Badge> : null}
-        </div>
-        {reply ? (
-          <p className="whitespace-pre-wrap text-sm text-ink">
-            <span data-testid="playground-reply-content">{reply.content}</span>
-            {reply.state === 'streaming' ? (
-              <span aria-hidden="true" className="animate-pulse">
-                ▍
-              </span>
-            ) : null}
-          </p>
-        ) : (
-          <p className="text-xs text-ink-muted">发送后在此显示模型输出。</p>
-        )}
-        {reply?.state === 'aborted' ? (
-          <p className="text-xs text-ink-secondary">已保留中止前收到的内容。</p>
-        ) : null}
-      </section>
-
-      <section aria-label="请求预览" className="space-y-2">
-        <h2 className="text-sm font-semibold text-ink">请求预览</h2>
-        <p className="text-xs text-ink-secondary">
-          以下为将要发送的请求体，仅用于核对参数。
-        </p>
-        <CopyBlock code={preview} language="json" label="请求预览" />
-      </section>
-
-      <section aria-label="调用代码" className="space-y-2">
-        <h2 className="text-sm font-semibold text-ink">调用代码</h2>
-        <p className="text-xs text-ink-secondary">
-          密钥位置使用掩码占位，复制后请替换为你自己的完整密钥。
-        </p>
-        <div className="w-48">
-          <Select
-            label="调用代码语言"
-            value={codeLanguage}
-            onChange={(event) => setCodeLanguage(event.target.value as CodeLanguage)}
-            options={CODE_LANGUAGE_OPTIONS}
+        {/* 底部输入区：贴底常驻。 */}
+        <form
+          className="border-t border-border bg-surface px-3 py-3 sm:px-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void handleSend()
+          }}
+        >
+          <textarea
+            ref={composerRef}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={handleComposerKeyDown}
+            aria-label="消息输入"
+            rows={2}
+            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+            className="max-h-36 w-full resize-none rounded-lg border border-border-strong bg-surface px-3 py-2 text-sm text-ink placeholder:text-ink-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
           />
-        </div>
-        <CopyBlock
-          code={codeSnippet}
-          language={codeLanguage}
-          label={`调用代码（${codeLanguage}）`}
-        />
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+            <p className="hidden text-xs text-ink-muted sm:block">
+              {pending ? '正在生成，可随时停止并保留已收到的内容。' : '调用按真实用量扣费。'}
+            </p>
+            <div className="ml-auto flex items-center gap-2">
+              {pending ? (
+                <Button variant="secondary" onClick={handleStop}>
+                  停止
+                </Button>
+              ) : (
+                <Button type="submit" disabled={!canSend}>
+                  发送
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                aria-label="清空对话"
+                onClick={handleClear}
+                disabled={pending || (!hasConversation && draft === '' && !sendError)}
+              >
+                清空对话
+              </Button>
+            </div>
+          </div>
+        </form>
       </section>
+
+      {/* 开发者信息：默认收起，避免挤占首屏对话区。 */}
+      <div className="rounded-xl border border-border bg-surface shadow-card">
+        <button
+          type="button"
+          onClick={() => setDevOpen((open) => !open)}
+          aria-expanded={devOpen}
+          aria-controls="playground-dev"
+          className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-sm font-medium text-ink transition-colors duration-fast hover:bg-surface-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          请求预览与调用代码
+          <Icon
+            name="chevron-down"
+            className={cn(
+              'h-4 w-4 text-ink-muted transition-transform',
+              devOpen && 'rotate-180',
+            )}
+          />
+        </button>
+        {devOpen ? (
+          <div id="playground-dev" className="space-y-4 border-t border-border p-4">
+            <section aria-label="请求预览" className="space-y-2">
+              <h2 className="text-sm font-semibold text-ink">请求预览</h2>
+              <p className="text-xs text-ink-secondary">
+                以下为将要发送的请求体，仅用于核对参数。
+              </p>
+              <CopyBlock code={preview} language="json" label="请求预览" />
+            </section>
+
+            <section aria-label="调用代码" className="space-y-2">
+              <h2 className="text-sm font-semibold text-ink">调用代码</h2>
+              <p className="text-xs text-ink-secondary">
+                密钥位置使用掩码占位，复制后请替换为你自己的完整密钥。
+              </p>
+              <div className="w-48">
+                <Select
+                  label="调用代码语言"
+                  value={codeLanguage}
+                  onChange={(event) => setCodeLanguage(event.target.value as CodeLanguage)}
+                  options={CODE_LANGUAGE_OPTIONS}
+                />
+              </div>
+              <CopyBlock
+                code={codeSnippet}
+                language={codeLanguage}
+                label={`调用代码（${codeLanguage}）`}
+              />
+            </section>
+          </div>
+        ) : null}
+      </div>
     </div>
   )
 }

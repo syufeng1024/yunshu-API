@@ -1,4 +1,4 @@
-import { act, cleanup, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApiError, api } from '@/api/client'
@@ -139,6 +139,27 @@ async function waitForReady() {
   await waitFor(() => expect(screen.getByLabelText('密钥')).toHaveValue('31'))
 }
 
+/** The composer and the address bar are the two always-visible affordances. */
+function composer(): HTMLTextAreaElement {
+  return screen.getByLabelText('消息输入') as HTMLTextAreaElement
+}
+
+async function openAdvanced() {
+  const toggle = screen.getByRole('button', { name: /高级参数/ })
+  if (toggle.getAttribute('aria-expanded') !== 'true') {
+    fireEvent.click(toggle)
+  }
+  await screen.findByLabelText('System 提示词')
+}
+
+async function openDeveloperInfo() {
+  const toggle = screen.getByRole('button', { name: /请求预览与调用代码/ })
+  if (toggle.getAttribute('aria-expanded') !== 'true') {
+    fireEvent.click(toggle)
+  }
+  await screen.findByRole('heading', { name: '请求预览' })
+}
+
 beforeEach(() => {
   mockedGet.mockReset()
   mockedChat.mockReset()
@@ -147,7 +168,7 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('PlaygroundPage', () => {
-  it('F12-2: clicking a quick example fills the form without sending or billing', async () => {
+  it('F12-2: clicking a quick example fills the composer without sending or billing', async () => {
     installMock()
     const user = userEvent.setup()
     renderWithProviders(<PlaygroundPage />)
@@ -155,11 +176,11 @@ describe('PlaygroundPage', () => {
     await waitForReady()
     await user.click(screen.getByRole('button', { name: '总结技术文档' }))
 
+    expect(composer()).toHaveValue('请把下面的技术文档总结成三条要点：\n')
+
+    await openAdvanced()
     expect(screen.getByLabelText('System 提示词')).toHaveValue(
       '你是一名技术编辑，回答使用简体中文，先给结论。',
-    )
-    expect(screen.getByLabelText('消息 1 内容')).toHaveValue(
-      '请把下面的技术文档总结成三条要点：\n',
     )
     expect(screen.getByLabelText('temperature')).toHaveValue(0.3)
     expect(screen.getByLabelText('max_tokens')).toHaveValue(512)
@@ -225,6 +246,103 @@ describe('PlaygroundPage', () => {
     })
     expect(request.body).not.toHaveProperty('key_id')
     expect(request.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('shows the draft as a user bubble and appends multiple turns', async () => {
+    installMock()
+    mockedChat.mockResolvedValue({
+      creditsRemaining: 1000,
+      payload: null,
+      content: '收到',
+      streamed: false,
+    })
+
+    const user = userEvent.setup()
+    renderWithProviders(<PlaygroundPage />)
+    await waitForReady()
+
+    await user.type(composer(), '第一轮问题')
+    expect(screen.queryByRole('button', { name: '总结技术文档' })).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    // The composer is cleared and the draft moved into the conversation as a
+    // user bubble.
+    await waitFor(() => expect(composer()).toHaveValue(''))
+    expect(screen.getByText('第一轮问题')).toBeInTheDocument()
+    expect(screen.getByText('收到')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '总结技术文档' })).not.toBeInTheDocument()
+
+    // The request body carries the turn the user actually wrote.
+    expect(mockedChat.mock.calls[0][0].body).toMatchObject({
+      messages: [{ role: 'user', content: '第一轮问题' }],
+    })
+
+    await user.type(composer(), '第二轮问题')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    await waitFor(() => expect(mockedChat).toHaveBeenCalledTimes(2))
+    expect(mockedChat.mock.calls[1][0].body).toMatchObject({
+      messages: [
+        { role: 'user', content: '第一轮问题' },
+        { role: 'assistant', content: '收到' },
+        { role: 'user', content: '第二轮问题' },
+      ],
+    })
+  })
+
+  it('sends on Enter and keeps Shift+Enter as a newline', async () => {
+    installMock()
+    mockedChat.mockResolvedValue({
+      creditsRemaining: 1,
+      payload: null,
+      content: '好',
+      streamed: false,
+    })
+
+    const user = userEvent.setup()
+    renderWithProviders(<PlaygroundPage />)
+    await waitForReady()
+
+    await user.type(composer(), '第一行')
+    await user.keyboard('{Shift>}{Enter}{/Shift}')
+
+    expect(mockedChat).not.toHaveBeenCalled()
+    expect(composer()).toHaveValue('第一行\n')
+
+    await user.keyboard('{Enter}')
+
+    await waitFor(() => expect(mockedChat).toHaveBeenCalledTimes(1))
+    expect(mockedChat.mock.calls[0][0].body).toMatchObject({
+      messages: [{ role: 'user', content: '第一行' }],
+    })
+  })
+
+  it('clears the conversation back to the empty state', async () => {
+    installMock()
+    mockedChat.mockResolvedValue({
+      creditsRemaining: 1,
+      payload: null,
+      content: '好',
+      streamed: false,
+    })
+
+    const user = userEvent.setup()
+    renderWithProviders(<PlaygroundPage />)
+    await waitForReady()
+
+    await user.type(composer(), '清空前的消息')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(screen.getByText('清空前的消息')).toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: '清空对话' }))
+
+    expect(await screen.findByText('开始对话')).toBeInTheDocument()
+    expect(screen.queryByText('清空前的消息')).not.toBeInTheDocument()
+    expect(composer()).toHaveValue('')
+    expect(
+      screen.getByText('发送一条消息，测试模型回复与扣费链路。'),
+    ).toBeInTheDocument()
   })
 
   it('F12-3: a zero balance blocks the request and links to recharge', async () => {
@@ -315,9 +433,7 @@ describe('PlaygroundPage', () => {
 
     await user.click(screen.getByRole('button', { name: '发送' }))
 
-    expect(
-      await screen.findByText('该密钥无权调用此模型。'),
-    ).toBeInTheDocument()
+    expect(await screen.findByText('该密钥无权调用此模型。')).toBeInTheDocument()
     expect(screen.getByText('在密钥详情页调整模型范围。')).toBeInTheDocument()
   })
 
@@ -345,6 +461,8 @@ describe('PlaygroundPage', () => {
       expect(screen.getByTestId('playground-reply-content')).toHaveTextContent('半'),
     )
 
+    // While streaming the primary action is 停止 instead of 发送.
+    expect(screen.queryByRole('button', { name: '发送' })).not.toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '停止' }))
 
     expect(await screen.findByText('已中止')).toBeInTheDocument()
@@ -376,6 +494,8 @@ describe('PlaygroundPage', () => {
     renderWithProviders(<PlaygroundPage />)
     await waitForReady()
 
+    await openDeveloperInfo()
+
     expect(screen.getByText(/Bearer sk-\*\*\*\*abcd/)).toBeInTheDocument()
 
     await user.selectOptions(screen.getByLabelText('调用代码语言'), 'node')
@@ -395,9 +515,7 @@ describe('PlaygroundPage', () => {
     })
     renderWithProviders(<PlaygroundPage />)
 
-    expect(
-      await screen.findByText('网络连接失败，请检查网络后重试。'),
-    ).toBeInTheDocument()
+    expect(await screen.findByText('网络连接失败，请检查网络后重试。')).toBeInTheDocument()
     expect(screen.getByText('确认网络可达后重新加载页面。')).toBeInTheDocument()
     expect(screen.getByText('--')).toBeInTheDocument()
     expect(screen.queryByText('0 积分')).not.toBeInTheDocument()
@@ -407,9 +525,7 @@ describe('PlaygroundPage', () => {
     installMock()
     renderWithProviders(<PlaygroundPage />)
 
-    expect(
-      await screen.findByRole('heading', { name: '请求预览' }),
-    ).toBeInTheDocument()
+    await openDeveloperInfo()
     await waitFor(() => {
       // The model name appears in both the request preview and the generated
       // curl snippet, so assert presence rather than a unique match.
