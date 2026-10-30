@@ -28,6 +28,8 @@
 | G18 | `docs/tasks/acceptance/matrix-nonfunctional.md:7` 记录那批非功能验收的测试库是「原生 MySQL `127.0.0.1:3306`」。实测该端口是 **MySQL 8.4.11**，而 GR-01 钉 8.0（容器 13306 = 8.0.46），故该批证据的版本基线存疑 | 本次端口优先级收口（顺带发现） | **举证有效性（高优先）** | ① ✅ 已完成：在该表新增「版本注记（2026-10-30 补）」行，保留 10-29 原文不改写，注明本机 3306 = 8.4.11 与钉版不一致，并逐类说明影响范围（Go 后端 ✅ 项已于 10-30 在 8.0.46 全量复跑通过 45 包；前端 ✅ 项未复跑、仍沿用旧记录；⚠️/❌ 项判定口径与版本无关）；`matrix-nonfunctional.md:120` 的 3306 事故记录已加「当时」限定。② ⬜ 待定：是否需要在 8.0 容器上**重做整批非功能测量**（含 `TestSoak` 200QPS×10min、备份恢复演练），取决于 §5 门槛 7 是否解挂 | 🟨 部分完成 |
 | G19 | 前端 `npx vitest run` 在**受限沙箱**（本机 WorkBuddy 的 fs shim）下会**静默丢弃 2 个测试文件**：`src/api/console.test.ts`（5 用例）、`src/pages/console/RechargePage.test.tsx`（9 用例）。表现：报告 `46 passed (46)` + 2 个 `EPERM ... AppData\Local\Temp\...` unhandled error、exit 1 —— 看上去像「环境噪音」，实际后果是**少跑了 14 个用例**。把 `TMPDIR/TMP/TEMP` 指向可写目录（如仓库内 `.vitest-tmp`）后恢复 `48 passed / 211 passed`、exit 0（2026-10-30 实测） | 本次收口（前端补测） | 环境陷阱（非代码缺陷；CI 的 Linux runner 不复现） | ① 跑前端单测后**必须核对文件数**：`find web/src -name '*.test.ts*' \| wc -l` 应等于报告里的 `Test Files`，不等即被漏跑——只看「passed」会得到假绿；② 受限沙箱下用 `TMPDIR=<可写目录> npx vitest run`；③ 若要根治，可在 `web/vitest.config.ts` 把 cacheDir/deps 缓存固定到仓库内，但会在仓库里多出缓存目录，需评估 | ⬜ |
 
+| G20 | `npm run check:copy` 在 main 上**恒红**：`web/src/components/ScrollRestorer.test.tsx:74` 的 `sessionStorage.clear()` 命中脚本的 "browser storage reference" 规则（该文件来自 `9d3d9ba`）。已用 `git archive HEAD` 导出 pristine 树复核：pristine 与工作区输出**逐字相同、唯一 1 条**，即非近期改动引入 | 合规占位收口时发现 | 工程守卫（规则过宽） | 二选一：① 给 `src/**/*.test.*` 加豁免（该规则本质是防生产代码裸用 storage，测试里为验证 G10 复位行为调用 `sessionStorage.clear()` 属合理）；② 让该断言改为只观察 `ScrollRestoration` 行为、不直接碰 storage。注意 `npm run verify` 含 `check:copy`，红着等于本地 verify 不可用 | ⬜ |
+
 ## 状态图例
 
 | 标记 | 含义 |
