@@ -409,7 +409,9 @@ export default function LoginPage() {
         </p>
       </header>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      {/* lg:items-start：右侧三张信息卡比表单高，默认 stretch 会把左侧表单
+          卡片拉成同高，底部留出约 110px 的空白，看起来像没排完。 */}
+      <div className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem] lg:items-start">
         <section className="rounded-2xl border border-border bg-surface p-5 shadow-card sm:p-6">
           <Tabs
             ariaLabel="登录或注册"

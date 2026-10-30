@@ -101,10 +101,11 @@ export default function LandingPage() {
   const stats: Stat[] = [
     { label: '已上架模型', value: formatStatValue(listedModels.length) },
     {
-      // Public access points are not implemented in V1.0, so the label says so
-      // instead of implying a live line count.
-      label: hasEndpoints ? '接入线路' : '接入线路（筹备中）',
-      value: formatStatValue(endpoints.length),
+      // V1.0 没有对外接入点。数值位放「筹备中」而不是 formatStatValue(0) 的
+      // 「--」：首页数据条是营销位，一个破折号看起来像没填完，而 0 又会读成
+      // 「这家平台什么都没有」——两者都不该出现在第一屏。
+      label: '接入线路',
+      value: hasEndpoints ? formatStatValue(endpoints.length) : '筹备中',
     },
     { label: '兼容协议', value: formatStatValue(protocolCount) },
   ]
@@ -290,43 +291,58 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section data-section="announcements" className="border-y border-border bg-surface">
-        <div className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6">
+      {/*
+        没有公告时整块不渲染：首页是营销页，一块 400px 高的虚线「暂无」空壳
+        夹在价格表与工具集成之间，会把页面读成「还没做完」。等运营真的发布
+        公告，这一块自己长出来；接口失败同样不渲染（错误由章节内的重试入口
+        承担，不在营销页堆一块红色空态）。
+      */}
+      {announcements.length > 0 ? (
+        <section data-section="announcements" className="border-y border-border bg-surface">
+          <div className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6">
+            <SectionHeader
+              eyebrow="NOTICE"
+              title="调价公告"
+              description="价格或限流规格调整前在此公示，并标明生效时间。"
+            />
+            <div className="mt-8">
+              <AnnouncementRail
+                announcements={announcements}
+                loading={announcementsQuery.isLoading}
+                error={announcementsQuery.isError ? errorMessage(announcementsQuery.error) : null}
+                onRetry={() => {
+                  void announcementsQuery.refetch()
+                }}
+              />
+            </div>
+          </div>
+        </section>
+      ) : null}
+
+      {/*
+        接入点同理：V1.0 没有对外线路，空态是一块 422px 的虚线框。Base URL
+        这件事在下方「快速接入三步」与文档页都有交代，营销页不需要为它留一个
+        空壳占位。
+      */}
+      {hasEndpoints ? (
+        <section data-section="endpoints" className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6">
           <SectionHeader
-            eyebrow="NOTICE"
-            title="调价公告"
-            description="价格或限流规格调整前在此公示，并标明生效时间。"
+            eyebrow="ENDPOINTS"
+            title="接入点与线路"
+            description="Base URL 是唯一需要替换的地址；主接入点与灾备线路由后台维护。"
           />
           <div className="mt-8">
-            <AnnouncementRail
-              announcements={announcements}
-              loading={announcementsQuery.isLoading}
-              error={announcementsQuery.isError ? errorMessage(announcementsQuery.error) : null}
+            <EndpointBlock
+              endpoints={endpoints}
+              loading={endpointsQuery.isLoading}
+              error={endpointsQuery.isError ? errorMessage(endpointsQuery.error) : null}
               onRetry={() => {
-                void announcementsQuery.refetch()
+                void endpointsQuery.refetch()
               }}
             />
           </div>
-        </div>
-      </section>
-
-      <section data-section="endpoints" className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6">
-        <SectionHeader
-          eyebrow="ENDPOINTS"
-          title="接入点与线路"
-          description="Base URL 是唯一需要替换的地址；主接入点与灾备线路由后台维护。"
-        />
-        <div className="mt-8">
-          <EndpointBlock
-            endpoints={endpoints}
-            loading={endpointsQuery.isLoading}
-            error={endpointsQuery.isError ? errorMessage(endpointsQuery.error) : null}
-            onRetry={() => {
-              void endpointsQuery.refetch()
-            }}
-          />
-        </div>
-      </section>
+        </section>
+      ) : null}
 
       <section data-section="tools" className="border-y border-border bg-surface">
         <div className="mx-auto w-full max-w-6xl px-4 py-14 sm:px-6">

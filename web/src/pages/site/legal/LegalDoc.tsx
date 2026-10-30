@@ -58,23 +58,63 @@ export function LegalDoc({ doc, siblings }: LegalDocProps) {
       <div className="mt-8 grid gap-8 lg:grid-cols-[16rem_minmax(0,1fr)]">
         {/* min-w-0 + overflow-x-auto：与 DocsPage 同款，章节条在手机端横向
             滑动，不会把整页视口撑破（G19）。 */}
-        <nav aria-label={`${doc.title}章节`} className="min-w-0 lg:sticky lg:top-24 lg:self-start">
-          <ol className="flex min-w-0 gap-1 overflow-x-auto pb-2 lg:flex-col lg:overflow-visible lg:pb-0">
-            {doc.sections.map((section, index) => (
-              <li key={section.id} className="shrink-0 lg:shrink">
-                <a
-                  href={`#${section.id}`}
-                  className="flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm text-ink-secondary transition-colors duration-fast hover:bg-surface-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                >
-                  <span className="font-mono text-xs text-ink-muted">
-                    {String(index + 1).padStart(2, '0')}
-                  </span>
-                  {section.title}
-                </a>
-              </li>
-            ))}
-          </ol>
-        </nav>
+        <div className="min-w-0 lg:sticky lg:top-24 lg:self-start">
+          <nav aria-label={`${doc.title}章节`} className="min-w-0">
+            <ol className="flex min-w-0 gap-1 overflow-x-auto pb-2 lg:flex-col lg:overflow-visible lg:pb-0">
+              {doc.sections.map((section, index) => (
+                <li key={section.id} className="shrink-0 lg:shrink">
+                  <a
+                    href={`#${section.id}`}
+                    className="flex w-full items-center gap-2 whitespace-nowrap rounded-lg px-3 py-2 text-sm text-ink-secondary transition-colors duration-fast hover:bg-surface-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                  >
+                    <span className="font-mono text-xs text-ink-muted">
+                      {String(index + 1).padStart(2, '0')}
+                    </span>
+                    {section.title}
+                  </a>
+                </li>
+              ))}
+            </ol>
+          </nav>
+
+          {/* 占位阶段正文很短，左栏只有 7 行目录，右侧卡片却有 590px 高，
+              整页重心偏右。补一张「文档信息」卡把左栏填实，既是常见文档页
+              版式，也让相关链接有了固定落点（正文卡内只在窄屏保留一条）。 */}
+          <div className="mt-6 hidden rounded-xl border border-border bg-surface p-4 lg:block">
+            <p className="text-xs font-medium text-ink">文档信息</p>
+            <dl className="mt-3 space-y-2 text-xs">
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-ink-muted">状态</dt>
+                <dd className="text-ink">待法务定稿</dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-ink-muted">章节</dt>
+                <dd className="tabular-nums text-ink">{doc.sections.length} 节</dd>
+              </div>
+              <div className="flex items-baseline justify-between gap-3">
+                <dt className="text-ink-muted">适用平台</dt>
+                <dd className="text-ink">云枢 API</dd>
+              </div>
+            </dl>
+            <div className="mt-4 border-t border-border pt-3">
+              <p className="text-xs text-ink-muted">相关文档</p>
+              <ul className="mt-2 space-y-1.5">
+                {siblings.map((item) => (
+                  <li key={item.to}>
+                    <Link to={item.to} className="text-xs font-medium text-primary hover:text-primary-hover">
+                      {item.label}
+                    </Link>
+                  </li>
+                ))}
+                <li>
+                  <Link to={ROUTES.docs} className="text-xs font-medium text-primary hover:text-primary-hover">
+                    开发者文档
+                  </Link>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
 
         <article className="min-w-0">
           <div className="rounded-2xl border border-border bg-surface p-5 shadow-card sm:p-7">
@@ -91,7 +131,8 @@ export function LegalDoc({ doc, siblings }: LegalDocProps) {
             </div>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs">
+          {/* 宽屏的相关链接已收进左栏「文档信息」卡，这里只保留窄屏入口。 */}
+          <div className="mt-4 flex flex-wrap items-center gap-3 text-xs lg:hidden">
             {siblings.map((item) => (
               <Link
                 key={item.to}

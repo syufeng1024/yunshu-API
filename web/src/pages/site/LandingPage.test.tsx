@@ -98,7 +98,7 @@ describe('LandingPage', () => {
   // D-24: /api/public/endpoints is a deliberate empty stub in V1.0 (there is no
   // t_endpoint table). The hero must not advertise a literal 0, and the same
   // applies to the model and protocol counts when their data is empty.
-  it('D-24: empty endpoints render -- and 筹备中, never a literal 0', () => {
+  it('D-24: empty endpoints render 筹备中, empty counts render --, never a literal 0', () => {
     mockedEndpoints.mockReturnValue(result([]) as ReturnType<typeof usePublicEndpoints>)
     mockedModels.mockReturnValue(result([]) as ReturnType<typeof usePublicModels>)
 
@@ -109,7 +109,10 @@ describe('LandingPage', () => {
     )
 
     const stats = screen.getByTestId('hero-stats')
-    expect(stats.textContent).toContain('接入线路（筹备中）')
+    // 接入线路的数值位写「筹备中」而不是「--」：首页数据条是营销位，破折号
+    // 读起来像没填完，而 0 会读成「这家平台什么都没有」。
+    expect(stats.textContent).toContain('接入线路')
+    expect(stats.textContent).toContain('筹备中')
     expect(stats.textContent).toContain('--')
     expect(stats.textContent ?? '').not.toMatch(/(^|\D)0(\D|$)/)
   })
